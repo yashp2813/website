@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+#ENVIRONMENT VARIABLES (This hides your secrets!)
+
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
