@@ -10,15 +10,17 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
+import './index.css' // Or whatever your CSS file is named
+import './App.css' // Or whatever your CSS file is named
 // Initialize Firebase (Hybrid setup for both local VS Code and Canvas)
 const firebaseConfig = {
-  apiKey: "AIzaSyChTvUfu0R-D0RZ8ckIoN-drrbWsshN4-8",
-  authDomain: "mahapack-erp.firebaseapp.com",
-  projectId: "mahapack-erp",
-  storageBucket: "mahapack-erp.firebasestorage.app",
-  messagingSenderId: "732056634345",
-  appId: "1:732056634345:web:ed3a78fb58141b04040178"
-};
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
