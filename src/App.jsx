@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+\import React, { useState, useEffect, useRef } from 'react';
 import { 
   Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, Loader2
 } from 'lucide-react';
@@ -373,14 +373,14 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
 
     switch (type) {
       case 'Box':
-        boardLength = (L + W) * 2 + 65; 
-        boardWidth = W + H + 25;
+        boardLength = (L + W) * 2 + 50; 
+        boardWidth = W + H + 20;
         break;
       case 'Tray':
-        boardLength = (L * 2) + (W * 2) + 100;
-        boardWidth = W * 2 + H + 50;
+        boardLength = (L + W * 2) + 10;
+        boardWidth = (W + 2 * H) + 10;
         break;
-      case 'Corrugated Sheet':
+      case 'Sheet':
         boardLength = L;
         boardWidth = W;
         break;
@@ -389,13 +389,25 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
         boardWidth = W;
         break;
       default:
-        boardLength = (L + W) * 2 + 65;
-        boardWidth = W + H + 25;
+        boardLength = (L + W) * 2 + 50;
+        boardWidth = W + H + 20;
     }
 
     const sqMetersPerBox = (boardLength * boardWidth) / 1000000;
     const totalSqMeters = sqMetersPerBox * qty;
-    const paperRequiredKg = (totalSqMeters * ply * gsm) / 1000; 
+    
+    // --- FLUTING CALCULATION ---
+    // Count how many liners and how many flutes are in the ply
+    const numFlutes = Math.floor(ply / 2);
+    const numLiners = Math.ceil(ply / 2);
+    
+    // Apply 40% extra (1.40 multiplier) only to the flute layers
+    const flutingFactor = 1.40; 
+    
+    const linerSqMeters = totalSqMeters * numLiners;
+    const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
+    
+    const paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
 
     setResult({
       boardLength: boardLength.toFixed(2),
@@ -518,8 +530,8 @@ function CostingView() {
   const L = dimensions[0] || 0;
   const W = dimensions[1] || 0;
   const H = dimensions[2] || 0;
-  const boardLength = L && W ? (L + W) * 2 + 65 : 0;
-  const boardWidth = W && H ? W + H + 25 : 0;
+  const boardLength = L && W ? (L + W) * 2 + 50 : 0;
+  const boardWidth = W && H ? W + H + 20 : 0;
   const boardAreaSqM = (boardLength * boardWidth) / 1000000;
 
   let totalWeightKg = 0;
