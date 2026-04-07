@@ -1,4 +1,4 @@
-\import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, Loader2
 } from 'lucide-react';
@@ -11,6 +11,9 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
 // Keys are hidden and pulled securely from your local .env file or Vercel Environment Variables
+import './index.css' // Or whatever your CSS file is named
+import './App.css' // Or whatever your CSS file is named
+// Initialize Firebase (Hybrid setup for both local VS Code and Canvas)
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
