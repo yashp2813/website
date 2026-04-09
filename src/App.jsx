@@ -11,9 +11,9 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
 // Keys are hidden and pulled securely from your local .env file or Vercel Environment Variables
-import './index.css' // Or whatever your CSS file is named
-import './App.css' // Or whatever your CSS file is named
-// Initialize Firebase (Hybrid setup for both local VS Code and Canvas)
+import './index.css' 
+import './App.css' 
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -177,24 +177,31 @@ export default function App() {
 
   useEffect(() => {
     if (!firebaseUser) return;
-    const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-    const logError = (err) => console.error("Snapshot error:", err);
+    
+    // UPDATED TO ROOT PATH
+    const getColRefRoot = (colName) => collection(db, colName);
+    
+    const logError = (err) => {
+      console.error("Snapshot error:", err);
+      setError(err.message);
+    };
 
-    const unsubUsers = onSnapshot(getColRef('erp_users'), (snap) => setErpUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubCompanies = onSnapshot(getColRef('companies'), (snap) => setCompanies(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubItems = onSnapshot(getColRef('items'), (snap) => setItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubProduction = onSnapshot(getColRef('production'), (snap) => setProduction(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubOrders = onSnapshot(getColRef('orders'), (snap) => setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubWastage = onSnapshot(getColRef('wastage'), (snap) => setWastageLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubInventory = onSnapshot(getColRef('inventory'), (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
-    const unsubLogs = onSnapshot(getColRef('logs'), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubUsers = onSnapshot(getColRefRoot('erp_users'), (snap) => setErpUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubCompanies = onSnapshot(getColRefRoot('companies'), (snap) => setCompanies(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubItems = onSnapshot(getColRefRoot('items'), (snap) => setItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubProduction = onSnapshot(getColRefRoot('production'), (snap) => setProduction(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubOrders = onSnapshot(getColRefRoot('orders'), (snap) => setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubWastage = onSnapshot(getColRefRoot('wastage'), (snap) => setWastageLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubInventory = onSnapshot(getColRefRoot('inventory'), (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubLogs = onSnapshot(getColRefRoot('logs'), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
 
     setIsDbReady(true);
     return () => { unsubUsers(); unsubCompanies(); unsubItems(); unsubProduction(); unsubOrders(); unsubWastage(); unsubInventory(); unsubLogs(); };
   }, [firebaseUser]);
 
-  const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-  const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+  // UPDATED TO ROOT PATH FOR SAVING DATA
+  const getColRef = (colName) => collection(db, colName);
+  const getDocRef = (colName, docId) => doc(db, colName, docId);
 
   const addLog = async (action, specificUser = null) => {
     if (!firebaseUser) return;
@@ -320,7 +327,7 @@ export default function App() {
         {activeTab === 'production' && <ProductionView production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} />}
-        {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} />}
+        {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} />}
         {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'companies' && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'users' && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} />}
@@ -400,16 +407,12 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
     const totalSqMeters = sqMetersPerBox * qty;
     
     // --- FLUTING CALCULATION ---
-    // Count how many liners and how many flutes are in the ply
     const numFlutes = Math.floor(ply / 2);
     const numLiners = Math.ceil(ply / 2);
-    
-    // Apply 40% extra (1.40 multiplier) only to the flute layers
     const flutingFactor = 1.40; 
     
     const linerSqMeters = totalSqMeters * numLiners;
     const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
-    
     const paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
 
     setResult({
@@ -688,8 +691,12 @@ function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
             <tr><th className="p-4">Date</th><th className="p-4">Total Issued</th><th className="p-4">Core/Balance</th><th className="p-4">Prod (Gross/Good)</th><th className="p-4">Wastage (Pap/Sht)</th><th className="p-4 bg-stone-200">Net Paper</th><th className="p-4 bg-green-100 text-green-800">Gum Usage & Cost</th><th className="p-4 bg-red-100 text-red-800">Wastage %</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
           </thead>
           <tbody className="divide-y divide-stone-200">
-            {wastageLogs.length === 0 && <tr><td colSpan="9" className="p-4 text-center text-stone-500">No wastage records found.</td></tr>}
-            {[...wastageLogs].sort((a,b) => new Date(b.date) - new Date(a.date)).map(record => (
+            {wastageLogs.length === 0 && <tr><td colSpan="9" className="p-4 text-center text-stone-500">No records found.</td></tr>}
+            {[...wastageLogs].sort((a,b) => {
+               const dateA = new Date(a.date).getTime();
+               const dateB = new Date(b.date).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(record => (
               <tr key={record.id} className="hover:bg-stone-50">
                 <td className="p-4 font-medium">{record.date}</td>
                 <td className="p-4">{record.totalReelsKg} kg</td>
@@ -740,9 +747,10 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
       </div>
+      <p className="text-sm text-stone-500 mb-6">Total Records: {visibleOrders.length}</p>
 
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
         <table className="w-full text-left min-w-[1200px]">
@@ -848,12 +856,16 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
 }
 
 // --- INVENTORY VIEW ---
-function InventoryView({ inventory, production, addLog, role, getColRef, getDocRef }) {
+function InventoryView({ inventory, production, addLog, role, getColRef, getDocRef, currentUser, companies }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+
   const [editingId, setEditingId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [newReel, setNewReel] = useState({
-    date: new Date().toISOString().split('T')[0], millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', ratePerKg: ''
+    date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: ''
   });
-  const [filters, setFilters] = useState({ searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
+  const [filters, setFilters] = useState({ company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
@@ -865,22 +877,56 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
       await addDoc(getColRef('inventory'), newReel);
       addLog(`Added inventory reel: ${newReel.reelNo} from ${newReel.millName}`);
     }
-    setNewReel({ date: new Date().toISOString().split('T')[0], millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', ratePerKg: '' });
+    setNewReel({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' });
   };
 
   const handleEdit = (reel) => { setEditingId(reel.id); setNewReel(reel); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const handleDelete = async (id, reelNo) => { if(window.confirm(`Delete inventory record for Reel ${reelNo}?`)) { await deleteDoc(getDocRef('inventory', id)); addLog(`Deleted inventory reel: ${reelNo}`); } };
-  const cancelEdit = () => { setEditingId(null); setNewReel({ date: new Date().toISOString().split('T')[0], millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', ratePerKg: '' }); };
+  const cancelEdit = () => { setEditingId(null); setNewReel({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' }); };
+
+  const handleBulkDelete = async () => {
+    if (role !== 'admin') return;
+    if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected records?`)) {
+        await Promise.all(Array.from(selectedIds).map(id => deleteDoc(getDocRef('inventory', id))));
+        addLog(`Bulk deleted ${selectedIds.size} inventory records`);
+        setSelectedIds(new Set());
+    }
+  };
+
+  const handleWipeDatabase = async () => {
+    if (role !== 'admin') return;
+    const pwd = window.prompt("WARNING: You are about to permanently delete ALL records in this inventory database.\n\nTo confirm, please enter your admin password:");
+    if (pwd === null) return; 
+    if (pwd !== currentUser.password) {
+        alert("Incorrect password. Operation cancelled.");
+        return;
+    }
+    if (window.confirm("FINAL WARNING: Are you absolutely sure you want to wipe the entire inventory database? This cannot be undone.")) {
+        await Promise.all(inventory.map(reel => deleteDoc(getDocRef('inventory', reel.id))));
+        addLog("WIPED entire inventory database");
+        alert("Inventory database completely wiped.");
+        setSelectedIds(new Set());
+    }
+  };
 
   const balances = {};
   const usageStats = {}; 
   inventory.forEach(reel => {
     const rNo = String(reel.reelNo || '').trim().toLowerCase();
-    balances[rNo] = parseFloat(reel.receivedQty || 0);
+    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+    balances[rNo] = parseFloat(reel.receivedQty || 0) - initialIssued;
     usageStats[rNo] = { issued: 0, log: [] };
+    if (initialIssued > 0) {
+        usageStats[rNo].log.push({ date: reel.date, usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
+    }
   });
 
-  const sortedProd = [...production].sort((a,b) => new Date(a.date) - new Date(b.date));
+  const sortedProd = [...production].sort((a,b) => {
+      const dateA = new Date(a.date).getTime();
+      const dateB = new Date(b.date).getTime();
+      return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+  });
+  
   sortedProd.forEach(p => {
     if (!p.reelNos || !p.useKg) return;
     const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
@@ -907,7 +953,8 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
   const inventoryWithUsage = inventory.map(reel => {
     const rNo = String(reel.reelNo || '').trim().toLowerCase();
     const stats = usageStats[rNo] || { issued: 0, log: [] };
-    const issuedQty = stats.issued;
+    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+    const issuedQty = stats.issued + initialIssued;
     const received = parseFloat(reel.receivedQty || 0);
     const balanceQty = Math.max(0, received - issuedQty);
     const rate = parseFloat(reel.ratePerKg || 0);
@@ -916,6 +963,9 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
   });
 
   const filteredInventory = inventoryWithUsage.filter(reel => {
+    if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
+    if (filters.company && !(companies.find(c => c.id === reel.companyId)?.name || '').toLowerCase().includes(filters.company.toLowerCase())) return false;
+    if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
     if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
     if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
     if (filters.gsm && String(reel.gsm || '') !== String(filters.gsm)) return false;
@@ -926,75 +976,166 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     return true;
   });
 
+  const toggleSelection = (id) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  const toggleAll = () => {
+    if (selectedIds.size === filteredInventory.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredInventory.map(r => r.id)));
+    }
+  };
+
   const handleExport = () => {
     const exportData = filteredInventory.map(reel => ({
-      Date: reel.date || '', Mill_Name: reel.millName || '', Invoice_No: reel.invoiceNo || '', Vehicle_No: reel.vehicleNo || '', Reel_No: reel.reelNo || '', Size: reel.size || '', GSM: reel.gsm || '', BF: reel.bf || '', Colour: reel.colour || '', Received_Qty: reel.receivedQty || '', Issued_Qty: reel.issuedQty.toFixed(2), Balance_Qty: reel.balanceQty.toFixed(2), Rate_per_KG: reel.ratePerKg, Current_Value: reel.value.toFixed(2), Used_For_History: reel.usageLog.map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
+      Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown', Date: reel.date || '', Mill_Name: reel.millName || '', Invoice_No: reel.invoiceNo || '', Vehicle_No: reel.vehicleNo || '', Reel_No: reel.reelNo || '', Size: reel.size || '', GSM: reel.gsm || '', BF: reel.bf || '', Colour: reel.colour || '', Received_Qty: reel.receivedQty || '', Initial_Issued: reel.initialIssuedQty || '0', Total_Issued_Qty: reel.issuedQty.toFixed(2), Balance_Qty: reel.balanceQty.toFixed(2), Rate_per_KG: reel.ratePerKg, Current_Value: reel.value.toFixed(2), Used_For_History: reel.usageLog.map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
     }));
     downloadCSV(exportData, 'stock_inventory');
   };
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Stock Inventory (Raw Materials)</h2>
+      <div className="flex justify-between items-center mb-2 flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-2xl font-bold">Stock Inventory (Raw Materials)</h2>
+          {role === 'admin' && (
+            <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button onClick={handleBulkDelete} className="bg-red-100 text-red-700 px-3 py-1.5 rounded text-sm font-bold hover:bg-red-200 transition">
+                  Delete Selected ({selectedIds.size})
+                </button>
+              )}
+              <button onClick={handleWipeDatabase} className="bg-red-600 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-red-700 transition flex items-center gap-1 shadow-sm">
+                <Trash2 className="w-4 h-4" /> Wipe All
+              </button>
+            </div>
+          )}
+        </div>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
             <Upload className="w-4 h-4" /> Import CSV
-            <input type="file" accept=".csv" className="hidden" onChange={(e) => handleCSVImport(e, 'inventory', getColRef, addLog, (row, getVal) => ({
-                date: getVal(row, 'Date', 'date', 'Date / Ref') || new Date().toISOString().split('T')[0], millName: getVal(row, 'Mill Name', 'Mill_Name', 'millName') || '', invoiceNo: getVal(row, 'Invoice No', 'Invoice_No', 'invoiceNo') || '', vehicleNo: getVal(row, 'Vehicle No', 'Vehicle_No', 'vehicleNo') || '', reelNo: getVal(row, 'Reel No', 'Reel_No', 'reelNo') || '', size: getVal(row, 'Size', 'size', 'Specs') || '', gsm: getVal(row, 'GSM', 'gsm') || '', bf: getVal(row, 'BF', 'bf') || '', colour: getVal(row, 'Colour', 'Color', 'colour') || 'Kraft', receivedQty: getVal(row, 'Received Qty', 'Received_Qty', 'receivedQty', 'Received') || '', ratePerKg: getVal(row, 'Rate per KG', 'Rate_per_KG', 'ratePerKg', 'Rate') || ''
-            }))} />
+            <input type="file" accept=".csv" className="hidden" onChange={(e) => handleCSVImport(e, 'inventory', getColRef, addLog, (row, getVal) => {
+                const compName = getVal(row, 'Company name', 'Company', 'Client', 'Customer', 'Brand') || '';
+                const comp = companies.find(c => c?.name?.toLowerCase().trim() === compName.toLowerCase().trim());
+                const rowCompanyId = comp ? comp.id : (allowedCompanyId !== 'all' ? allowedCompanyId : '');
+
+                let rawDate = getVal(row, 'Date', 'date', 'Date / Ref', 'Receipt Date');
+                let formattedDate = new Date().toISOString().split('T')[0];
+                if (rawDate) {
+                    const d = new Date(rawDate);
+                    if (!isNaN(d.getTime())) {
+                        formattedDate = d.toISOString().split('T')[0];
+                    } else {
+                        formattedDate = rawDate; 
+                    }
+                }
+                return {
+                    companyId: rowCompanyId,
+                    date: formattedDate,
+                    millName: getVal(row, 'Party Name', 'Mill Name', 'Mill_Name', 'millName', 'Vendor', 'Supplier', 'millname', 'partyname') || '',
+                    invoiceNo: getVal(row, 'Invoice No', 'Invoice_No', 'invoiceNo', 'Bill No') || '',
+                    vehicleNo: getVal(row, 'Vehicle No', 'Vehicle_No', 'vehicleNo', 'Lorry No') || '',
+                    reelNo: getVal(row, 'Reel No', 'Reel_No', 'reelNo', 'Batch No') || '',
+                    size: getVal(row, 'Size', 'size', 'Specs', 'Width') || '',
+                    gsm: getVal(row, 'GSM', 'gsm') || '',
+                    bf: getVal(row, 'BF', 'bf') || '',
+                    colour: getVal(row, 'Colour', 'Color', 'colour', 'Shade') || 'Kraft',
+                    receivedQty: getVal(row, 'Received Qty', 'Received_Qty', 'receivedQty', 'Received', 'Net Wt', 'Qty') || '',
+                    initialIssuedQty: getVal(row, 'Issue Qty', 'Issued Qty', 'Issue_Qty', 'Issued_Qty', 'issuedQty', 'Issue', 'Consumption') || '',
+                    ratePerKg: getVal(row, 'Rate/Kg', 'Rate per KG', 'Rate_per_KG', 'ratePerKg', 'Rate', 'Price', 'Amount', 'Cost', 'ratekg', 'rateperkg') || ''
+                };
+            })} />
           </label>
           <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition"><Download className="w-4 h-4" /> Export</button>
         </div>
       </div>
+      
+      {/* 🔴 LIVE DATABASE METRIC */}
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">
+        Database Link: Showing {filteredInventory.length} of {inventory.length} total records downloaded
+      </p>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
         <h3 className="font-bold mb-4 flex items-center gap-2"><Archive className="w-5 h-5 text-stone-500" /> {editingId ? 'Edit Reel Entry' : 'Receive New Reel'}</h3>
-        <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+        <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={newReel.date} onChange={e => setNewReel({...newReel, date: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Mill Name</label><input required type="text" className="w-full p-2 border rounded" value={newReel.millName} onChange={e => setNewReel({...newReel, millName: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-1"><label className="block text-xs text-stone-500 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" value={newReel.invoiceNo} onChange={e => setNewReel({...newReel, invoiceNo: e.target.value})} /></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company</label><select required className="w-full p-2 border rounded" value={newReel.companyId} onChange={e => setNewReel({...newReel, companyId: e.target.value})} disabled={allowedCompanyId !== 'all'}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" value={newReel.millName} onChange={e => setNewReel({...newReel, millName: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" value={newReel.invoiceNo} onChange={e => setNewReel({...newReel, invoiceNo: e.target.value})} /></div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" value={newReel.vehicleNo} onChange={e => setNewReel({...newReel, vehicleNo: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold text-blue-700 mb-1">Reel No. (Must be unique)</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-stone-900" placeholder="e.g. 101" value={newReel.reelNo} onChange={e => setNewReel({...newReel, reelNo: e.target.value})} /></div>
+          
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold text-blue-700 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-stone-900" placeholder="e.g. 101" value={newReel.reelNo} onChange={e => setNewReel({...newReel, reelNo: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Size (mm/in)</label><input required type="text" className="w-full p-2 border rounded" value={newReel.size} onChange={e => setNewReel({...newReel, size: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newReel.gsm} onChange={e => setNewReel({...newReel, gsm: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newReel.bf} onChange={e => setNewReel({...newReel, bf: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded" value={newReel.colour} onChange={e => setNewReel({...newReel, colour: e.target.value})}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Received Qty (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50" value={newReel.receivedQty} onChange={e => setNewReel({...newReel, receivedQty: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Received (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50" value={newReel.receivedQty} onChange={e => setNewReel({...newReel, receivedQty: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50" value={newReel.initialIssuedQty || ''} onChange={e => setNewReel({...newReel, initialIssuedQty: e.target.value})} placeholder="Optional" /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate / KG (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded" value={newReel.ratePerKg} onChange={e => setNewReel({...newReel, ratePerKg: e.target.value})} /></div>
-          <div className="col-span-1 lg:col-span-4 flex gap-2 mt-2"><button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? <><Edit2 className="w-4 h-4" /> Update Reel</> : <><Plus className="w-4 h-4" /> Save to Inventory</>}</button>{editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6">Cancel</button>}</div>
+          
+          <div className="col-span-1 lg:col-span-8 flex gap-2 mt-2"><button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? <><Edit2 className="w-4 h-4" /> Update Reel</> : <><Plus className="w-4 h-4" /> Save to Inventory</>}</button>{editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6">Cancel</button>}</div>
         </form>
       </div>
 
       <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-2 text-stone-500 mr-2"><Search className="w-4 h-4"/> Filter:</div>
-        <input type="text" placeholder="Reel No" className="p-2 border rounded text-sm w-24" value={filters.searchReel} onChange={e => setFilters({...filters, searchReel: e.target.value})} />
-        <input type="text" placeholder="Size" className="p-2 border rounded text-sm w-20" value={filters.size} onChange={e => setFilters({...filters, size: e.target.value})} />
-        <input type="text" placeholder="GSM" className="p-2 border rounded text-sm w-16" value={filters.gsm} onChange={e => setFilters({...filters, gsm: e.target.value})} />
-        <input type="text" placeholder="BF" className="p-2 border rounded text-sm w-16" value={filters.bf} onChange={e => setFilters({...filters, bf: e.target.value})} />
+        {allowedCompanyId === 'all' && (
+           <input type="text" placeholder="Company..." className="p-2 border rounded text-sm w-32 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
+        )}
+        <input type="text" placeholder="Mill / Party" className="p-2 border rounded text-sm w-28 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.millName} onChange={e => setFilters({...filters, millName: e.target.value})} />
+        <input type="text" placeholder="Reel No" className="p-2 border rounded text-sm w-24 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.searchReel} onChange={e => setFilters({...filters, searchReel: e.target.value})} />
+        <input type="text" placeholder="Size" className="p-2 border rounded text-sm w-20 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.size} onChange={e => setFilters({...filters, size: e.target.value})} />
+        <input type="text" placeholder="GSM" className="p-2 border rounded text-sm w-16 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.gsm} onChange={e => setFilters({...filters, gsm: e.target.value})} />
+        <input type="text" placeholder="BF" className="p-2 border rounded text-sm w-16 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.bf} onChange={e => setFilters({...filters, bf: e.target.value})} />
         <select className="p-2 border rounded text-sm" value={filters.colour} onChange={e => setFilters({...filters, colour: e.target.value})}><option value="">All Colours</option><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select>
-        <select className="p-2 border rounded text-sm font-bold bg-stone-50" value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}><option value="All">All Statuses</option><option value="Available">Only Available (Balance &gt; 0)</option><option value="Used">Used / Empty (Balance = 0)</option></select>
-        <button onClick={() => setFilters({searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})} className="text-xs text-blue-500 underline ml-2">Clear</button>
+        <select className="p-2 border rounded text-sm font-bold bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}><option value="All">All Statuses</option><option value="Available">Only Available (Balance &gt; 0)</option><option value="Used">Used / Empty (Balance = 0)</option></select>
+        <button onClick={() => setFilters({company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-2 transition">Clear</button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
         <table className="w-full text-left min-w-[1200px]">
           <thead className="bg-stone-100 text-stone-600 text-sm">
-            <tr><th className="p-4">Date / Ref</th><th className="p-4">Reel No</th><th className="p-4">Specs</th><th className="p-4">Received</th><th className="p-4 bg-orange-50 text-orange-800">Issued (Auto)</th><th className="p-4 bg-green-50 text-green-800">Balance</th><th className="p-4">Rate & Value (₹)</th><th className="p-4">Used For (Production Link)</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
+            <tr>
+              {role === 'admin' && <th className="p-4 w-10"><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === filteredInventory.length && filteredInventory.length > 0}/></th>}
+              <th className="p-4">Company</th>
+              <th className="p-4">Date / Ref</th>
+              <th className="p-4">Mill / Party</th>
+              <th className="p-4">Reel No</th>
+              <th className="p-4">Specs</th>
+              <th className="p-4">Received</th>
+              <th className="p-4 bg-orange-50 text-orange-800">Issued (Auto)</th>
+              <th className="p-4 bg-green-50 text-green-800">Balance</th>
+              <th className="p-4">Rate & Value (₹)</th>
+              <th className="p-4">Used For (Production Link)</th>
+              {role === 'admin' && <th className="p-4 text-right">Actions</th>}
+            </tr>
           </thead>
           <tbody className="divide-y divide-stone-200 text-sm">
-            {filteredInventory.length === 0 && <tr><td colSpan="9" className="p-4 text-center text-stone-500">No inventory records found.</td></tr>}
-            {[...filteredInventory].sort((a,b) => new Date(b.date) - new Date(a.date)).map(reel => {
+            {filteredInventory.length === 0 && <tr><td colSpan="12" className="p-4 text-center text-stone-500">No inventory records found.</td></tr>}
+            {[...filteredInventory].sort((a,b) => {
+               const dateA = new Date(a.date).getTime();
+               const dateB = new Date(b.date).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(reel => {
               const isAvailable = reel.balanceQty > 0;
+              const compName = companies.find(c => c.id === reel.companyId)?.name || 'Unassigned';
               return (
               <tr key={reel.id} className={`hover:bg-stone-50 ${!isAvailable ? 'opacity-60 bg-stone-50' : ''}`}>
-                <td className="p-4"><div className="font-medium">{reel.date}</div><div className="text-xs text-stone-500">{reel.millName}</div><div className="text-[10px] text-stone-400">Veh: {reel.vehicleNo || '-'}</div></td>
+                {role === 'admin' && <td className="p-4"><input type="checkbox" checked={selectedIds.has(reel.id)} onChange={() => toggleSelection(reel.id)} /></td>}
+                <td className="p-4 font-bold text-stone-900">{compName}</td>
+                <td className="p-4"><div className="font-medium">{reel.date}</div><div className="text-[10px] text-stone-400">Veh: {reel.vehicleNo || '-'}</div></td>
+                <td className="p-4 font-medium text-stone-800">{reel.millName || '-'}</td>
                 <td className="p-4"><span className={`font-mono font-bold text-lg ${isAvailable ? 'text-blue-700' : 'text-stone-500'}`}>{reel.reelNo}</span>{!isAvailable && <span className="ml-2 text-[10px] bg-stone-300 px-1 py-0.5 rounded text-stone-700 font-bold">EMPTY</span>}</td>
                 <td className="p-4 text-stone-600"><div>{reel.size}</div><div className="text-xs">{reel.gsm} GSM | {reel.bf} BF</div><div className="text-xs">{reel.colour}</div></td>
                 <td className="p-4 font-semibold">{reel.receivedQty} kg</td>
                 <td className="p-4 font-semibold text-orange-600 bg-orange-50/30">{reel.issuedQty > 0 ? reel.issuedQty.toFixed(1) : '-'} kg</td>
                 <td className="p-4 bg-green-50/30"><span className={`font-bold text-lg ${isAvailable ? 'text-green-700' : 'text-stone-500'}`}>{reel.balanceQty.toFixed(1)} kg</span></td>
-                <td className="p-4"><div className="text-xs text-stone-500 mb-1">Rate: ₹{reel.ratePerKg.toFixed(2)}/kg</div><div className="font-bold text-stone-800 text-base">₹{reel.value.toFixed(2)}</div></td>
+                <td className="p-4"><div className="text-xs text-stone-500 mb-1">Rate: ₹{parseFloat(reel.ratePerKg || 0).toFixed(2)}/kg</div><div className="font-bold text-stone-800 text-base">₹{parseFloat(reel.value || 0).toFixed(2)}</div></td>
                 <td className="p-4">{reel.usageLog.length === 0 ? <span className="text-stone-400 italic text-xs">Not used yet</span> : (<ul className="text-xs space-y-1">{reel.usageLog.map((log, idx) => (<li key={idx} className="flex gap-2"><span className="text-stone-400">{log.date}</span><span className="font-medium text-stone-700">{log.usedFor}</span><span className="text-orange-600 font-mono">({log.kg}kg)</span></li>))}</ul>)}</td>
                 {role === 'admin' && <td className="p-4 text-right whitespace-nowrap"><button onClick={() => handleEdit(reel)} className="text-blue-500 hover:text-blue-700 mr-3" title="Edit"><Edit2 className="w-5 h-5 inline" /></button><button onClick={() => handleDelete(reel.id, reel.reelNo)} className="text-red-500 hover:text-red-700" title="Delete"><Trash2 className="w-5 h-5 inline" /></button></td>}
               </tr>
@@ -1074,7 +1215,7 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Production Log</h2>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
@@ -1105,6 +1246,7 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
           </button>
         </div>
       </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleProduction.length} total records downloaded</p>
       
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
         <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
@@ -1190,7 +1332,11 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
           </thead>
           <tbody className="divide-y divide-stone-200">
             {visibleProduction.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No production records found.</td></tr>}
-            {[...visibleProduction].sort((a,b) => new Date(b.date) - new Date(a.date)).map(record => {
+            {[...visibleProduction].sort((a,b) => {
+               const dateA = new Date(a.date).getTime();
+               const dateB = new Date(b.date).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(record => {
               let itemWeightStr = '-';
               let sheetWeightStr = '-';
               if (record.useKg && record.linerQty && record.numberOfUps) {
@@ -1270,7 +1416,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Order Management</h2>
         <div className="flex gap-2">
           <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
@@ -1278,6 +1424,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
           </button>
         </div>
       </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
         <h3 className="font-bold mb-4">Add New Order</h3>
@@ -1310,7 +1457,11 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
           </thead>
           <tbody className="divide-y divide-stone-200">
             {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
-            {[...visibleOrders].sort((a,b) => new Date(b.orderDate) - new Date(a.orderDate)).map(order => {
+            {[...visibleOrders].sort((a,b) => {
+               const dateA = new Date(a.orderDate).getTime();
+               const dateB = new Date(b.orderDate).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(order => {
               const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
               const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
 
@@ -1416,7 +1567,7 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Box Specifications Database</h2>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
@@ -1441,10 +1592,11 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
             })} />
           </label>
           <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-            <Download className="w-4 h-4" /> Export to Excel
+            <Download className="w-4 h-4" /> Export
           </button>
         </div>
       </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {filteredItems.length} total records downloaded</p>
       
       {role === 'admin' && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
@@ -1536,12 +1688,14 @@ function CompaniesView({ companies, addLog, getColRef, getDocRef }) {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Manage Client Companies</h2>
         <button onClick={() => downloadCSV(companies, 'client_companies')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
           <Download className="w-4 h-4" /> Export to Excel
         </button>
       </div>
+      <p className="text-sm text-stone-500 mb-6">Total Records: {companies.length}</p>
+
       <form onSubmit={handleAdd} className="flex gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm">
         <input required type="text" placeholder="New Company Name" className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newCompany} onChange={e => setNewCompany(e.target.value)} />
         <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 flex items-center gap-2"><Plus className="w-5 h-5"/> Add Client</button>
@@ -1589,12 +1743,14 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">User Management</h2>
         <button onClick={() => downloadCSV(users, 'erp_users')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
           <Download className="w-4 h-4" /> Export to Excel
         </button>
       </div>
+      <p className="text-sm text-stone-500 mb-6">Total Records: {users.length}</p>
+
       <form onSubmit={handleAdd} className="flex flex-col md:flex-row gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm items-center flex-wrap">
         <input required type="text" placeholder="User Full Name" className="flex-1 min-w-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newName} onChange={e => setNewName(e.target.value)} />
         <input required type="text" placeholder="Set Password" className="flex-1 min-w-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
@@ -1635,15 +1791,21 @@ function LogsView({ logs }) {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">System Activity Logs</h2>
         <button onClick={() => downloadCSV(logs, 'activity_logs')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
           <Download className="w-4 h-4" /> Export to Excel
         </button>
       </div>
+      <p className="text-sm text-stone-500 mb-6">Total Records: {logs.length}</p>
+
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-4 space-y-3">
         {logs.length === 0 && <p className="text-stone-500 text-center py-4">No activity recorded yet.</p>}
-        {[...logs].sort((a,b) => new Date(b.time) - new Date(a.time)).map(log => (
+        {[...logs].sort((a,b) => {
+               const dateA = new Date(a.time).getTime();
+               const dateB = new Date(b.time).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(log => (
           <div key={log.id} className="flex justify-between items-center text-sm border-b pb-3 last:border-0 hover:bg-stone-50 p-2 rounded">
             <div><span className="font-semibold text-stone-900 mr-2">{log.userName}:</span><span className="text-stone-700">{log.action}</span></div>
             <span className="text-stone-400 whitespace-nowrap ml-4">{formatDate(log.time)}</span>
