@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, Loader2
+  Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee
 } from 'lucide-react';
 
 // ==========================================
@@ -8,11 +8,10 @@ import {
 // ==========================================
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
 
-// Keys are hidden and pulled securely from your local .env file or Vercel Environment Variables
-import './index.css' 
-import './App.css' 
+import './index.css'; 
+import './App.css'; 
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -26,8 +25,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-const appId = 'mahapack-erp';
 
 // ==========================================
 // 2. HELPER FUNCTIONS (CSV)
@@ -82,7 +79,6 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
       let headers = [];
       let headerRowIndex = -1;
 
-      // Smart Scan: Find the first row that actually has text (skips leading blank rows)
       for (let i = 0; i < rawRows.length; i++) {
         if (!rawRows[i].trim()) continue;
         const cols = parseCSVLine(rawRows[i]);
@@ -108,7 +104,6 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
         if (!rawRows[i].trim()) continue;
         const values = parseCSVLine(rawRows[i]);
         
-        // Skip rows that are completely empty commas (e.g. ,,,,,,)
         if (values.every(v => v.trim() === '')) continue;
 
         let obj = {};
@@ -178,7 +173,7 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser) return;
     
-    // UPDATED TO ROOT PATH
+    // ROOT PATH 
     const getColRefRoot = (colName) => collection(db, colName);
     
     const logError = (err) => {
@@ -199,7 +194,6 @@ export default function App() {
     return () => { unsubUsers(); unsubCompanies(); unsubItems(); unsubProduction(); unsubOrders(); unsubWastage(); unsubInventory(); unsubLogs(); };
   }, [firebaseUser]);
 
-  // UPDATED TO ROOT PATH FOR SAVING DATA
   const getColRef = (colName) => collection(db, colName);
   const getDocRef = (colName, docId) => doc(db, colName, docId);
 
@@ -324,9 +318,12 @@ export default function App() {
         {activeTab === 'calculator' && <CalculatorView companies={companies} items={items} addLog={addLog} currentUser={currentErpUser} />}
         {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView />}
         {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        {activeTab === 'production' && <ProductionView production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
+        {activeTab === 'production' && <ProductionView inventory={inventory} production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} />}
+        
+        {/* NEW PROPS FOR WASTAGE VIEW AUTO-LINKING */}
+        {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} orders={orders} companies={companies} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
+        
         {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} />}
         {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'companies' && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
@@ -354,6 +351,15 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
   const [selectedCompany, setSelectedCompany] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : '');
   const [selectedItem, setSelectedItem] = useState('');
   const [quantity, setQuantity] = useState('');
+  
+  // PPC Specific States (Segregated)
+  const [commonPerSet, setCommonPerSet] = useState(5);
+  const [smallPerSet, setSmallPerSet] = useState(4);
+  const [baseCommonUps, setBaseCommonUps] = useState(2); 
+  const [baseSmallUps, setBaseSmallUps] = useState(6);   
+  const [plannedUpsCommon, setPlannedUpsCommon] = useState(7); 
+  const [plannedUpsSmall, setPlannedUpsSmall] = useState(7);   
+  
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -372,61 +378,121 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
     const dimensions = sizeString.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
     const L = dimensions[0] || 0;
     const W = dimensions[1] || 0;
-    const H = dimensions[2] || 0;
+    const H = dimensions[2] || 0; 
     
     const ply = parseInt(item.ply || item.Ply || 3);
     const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120); 
     const type = item.itemType || item.Item_Type || 'Box';
 
-    let boardLength = 0;
-    let boardWidth = 0;
+    let totalSqMeters = 0;
+    let paperRequiredKg = 0;
 
-    switch (type) {
-      case 'Box':
-        boardLength = (L + W) * 2 + 50; 
-        boardWidth = W + H + 20;
-        break;
-      case 'Tray':
-        boardLength = (L + W * 2) + 10;
-        boardWidth = (W + 2 * H) + 10;
-        break;
-      case 'Sheet':
-        boardLength = L;
-        boardWidth = W;
-        break;
-      case 'Partition':
-        boardLength = L * 1.5;
-        boardWidth = W;
-        break;
-      default:
-        boardLength = (L + W) * 2 + 50;
-        boardWidth = W + H + 20;
-    }
-
-    const sqMetersPerBox = (boardLength * boardWidth) / 1000000;
-    const totalSqMeters = sqMetersPerBox * qty;
-    
-    // --- FLUTING CALCULATION ---
     const numFlutes = Math.floor(ply / 2);
     const numLiners = Math.ceil(ply / 2);
-    const flutingFactor = 1.40; 
-    
-    const linerSqMeters = totalSqMeters * numLiners;
-    const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
-    const paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
+    const flutingFactor = 1.40;
 
-    setResult({
-      boardLength: boardLength.toFixed(2),
-      boardWidth: boardWidth.toFixed(2),
-      totalArea: totalSqMeters.toFixed(2),
-      paperRequired: paperRequiredKg.toFixed(2),
-      itemDetails: item
-    });
+    if (type === 'PPC') {
+      // 1. Calculate Required Pieces (Notice inverted logic as per prompt: Common Pieces = (Small Pockets - 1) * Qty)
+      const cNeeded = (parseInt(smallPerSet) - 1) * qty;
+      const sNeeded = (parseInt(commonPerSet) - 1) * qty;
+      
+      const baseC = parseInt(baseCommonUps) || 1;
+      const baseS = parseInt(baseSmallUps) || 1;
+      const pUpsC = parseInt(plannedUpsCommon) || 1;
+      const pUpsS = parseInt(plannedUpsSmall) || 1;
+
+      // 2. Yield per sheet
+      const commonPiecesPerCommonSheet = baseC * pUpsC;
+      const smallPiecesPerCommonSheet = baseC * pUpsC; 
+      const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
+
+      // 3. Segregate Sheets Needed
+      const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
+      const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+      const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
+      const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+      
+      const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
+
+      // 4. Calculate Exact Board Dimensions
+      const boardWidthCommon = H * baseC;
+      const boardLengthCommon = ((L + W) * pUpsC) + 10;
+      
+      const boardWidthSmall = boardWidthCommon; 
+      const boardLengthSmall = (W * 2 * pUpsS) + 10;
+      
+      // 5. Area & Weight Calculation
+      const areaCommon = (boardWidthCommon * boardLengthCommon) / 1000000;
+      const areaSmall = (boardWidthSmall * boardLengthSmall) / 1000000;
+      totalSqMeters = (commonSheetsNeeded * areaCommon) + (smallSheetsNeeded * areaSmall);
+      
+      const linerSqMeters = totalSqMeters * numLiners;
+      const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
+      paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
+
+      setResult({
+        isPpc: true, 
+        targetSheets, 
+        commonSheetsNeeded,
+        smallSheetsNeeded,
+        boardWidthCommon: boardWidthCommon.toFixed(2),
+        boardLengthCommon: boardLengthCommon.toFixed(2),
+        boardWidthSmall: boardWidthSmall.toFixed(2),
+        boardLengthSmall: boardLengthSmall.toFixed(2),
+        totalArea: totalSqMeters.toFixed(2), 
+        paperRequired: paperRequiredKg.toFixed(2), 
+        itemDetails: item,
+        cNeeded, 
+        sNeeded
+      });
+
+    } else {
+      let boardLength = 0;
+      let boardWidth = 0;
+
+      switch (type) {
+        case 'Box':
+          boardLength = (L + W) * 2 + 50; 
+          boardWidth = W + H + 20;
+          break;
+        case 'Tray':
+        case 'Lid':
+          boardLength = (L + W * 2) + 10;
+          boardWidth = (W + 2 * H) + 10;
+          break;
+        case 'Sheet':
+        case 'Plate':
+          boardLength = L;
+          boardWidth = W;
+          break;
+        default:
+          boardLength = L; 
+          boardWidth = W;
+      }
+
+      const sqMetersPerBox = (boardLength * boardWidth) / 1000000;
+      totalSqMeters = sqMetersPerBox * qty;
+      
+      const linerSqMeters = totalSqMeters * numLiners;
+      const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
+      paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
+
+      setResult({
+        isPpc: false, 
+        boardLength: boardLength.toFixed(2), 
+        boardWidth: boardWidth.toFixed(2), 
+        totalArea: totalSqMeters.toFixed(2), 
+        paperRequired: paperRequiredKg.toFixed(2), 
+        itemDetails: item 
+      });
+    }
 
     addLog(`Calculated materials for ${qty}x ${item.name || item.Item_Name} (${type})`);
   };
 
   const filteredItems = items.filter(i => i.companyId === selectedCompany);
+  const currentItemObj = items.find(i => i.id === selectedItem);
+  const isPPC = currentItemObj?.itemType === 'PPC' || currentItemObj?.Item_Type === 'PPC';
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -449,8 +515,25 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
                 {[...filteredItems].sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.itemType || i.Item_Type})</option>)}
               </select>
             </div>
+
+            {isPPC && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
+                <p className="text-xs font-bold text-blue-800 uppercase tracking-wider mb-2">PPC Die & Set Requirements</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-[10px] text-blue-700 mb-1">Common Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={commonPerSet} onChange={e => setCommonPerSet(e.target.value)} /></div>
+                  <div><label className="block text-[10px] text-blue-700 mb-1">Small Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={smallPerSet} onChange={e => setSmallPerSet(e.target.value)} /></div>
+                  
+                  <div><label className="block text-[10px] text-blue-700 mb-1">Base Common Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseCommonUps} onChange={e => setBaseCommonUps(e.target.value)} /></div>
+                  <div><label className="block text-[10px] text-blue-700 mb-1">Base Small Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseSmallUps} onChange={e => setBaseSmallUps(e.target.value)} /></div>
+                  
+                  <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Common Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsCommon} onChange={e => setPlannedUpsCommon(e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Small Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsSmall} onChange={e => setPlannedUpsSmall(e.target.value)} /></div>
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-sm font-medium text-stone-700 mb-1">Order Quantity</label>
+              <label className="block text-sm font-medium text-stone-700 mb-1">{isPPC ? 'Order Quantity (Sets)' : 'Order Quantity'}</label>
               <input type="number" min="1" className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 5000" required />
             </div>
             <button type="submit" className="w-full bg-stone-900 text-white py-3 rounded-md hover:bg-stone-800 transition font-medium">Calculate Raw Material</button>
@@ -476,10 +559,37 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
                 </div>
                 <p className="text-sm mt-2">Dimensions: {result.itemDetails.size || result.itemDetails.Size_mm} mm ({result.itemDetails.ply || result.itemDetails.Ply}-ply)</p>
               </div>
-              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
-                <div><p className="text-stone-400 text-sm">Board Size Needed</p><p className="font-mono text-lg">{result.boardLength} mm x {result.boardWidth} mm</p></div>
-                <div><p className="text-stone-400 text-sm">Total Area (sq.m)</p><p className="font-mono text-lg">{result.totalArea}</p></div>
-              </div>
+
+              {result.isPpc ? (
+                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
+                  <div>
+                    <p className="text-stone-400 text-sm">Pieces Needed</p>
+                    <p className="font-mono text-sm">{result.cNeeded} Common<br/>{result.sNeeded} Small</p>
+                  </div>
+                  <div>
+                    <p className="text-stone-400 text-sm">Segregated Sheets</p>
+                    <p className="font-mono text-sm text-blue-400 font-bold">{result.commonSheetsNeeded} Common<br/>{result.smallSheetsNeeded} Small</p>
+                  </div>
+                  <div>
+                    <p className="text-stone-400 text-sm">Common Board Size</p>
+                    <p className="font-mono text-sm">{result.boardLengthCommon} x {result.boardWidthCommon} mm</p>
+                  </div>
+                  <div>
+                    <p className="text-stone-400 text-sm">Small Board Size</p>
+                    <p className="font-mono text-sm">{result.boardLengthSmall} x {result.boardWidthSmall} mm</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-stone-400 text-sm">Total Combined Area (sq.m)</p>
+                    <p className="font-mono text-lg">{result.totalArea}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
+                  <div><p className="text-stone-400 text-sm">Board Size Needed</p><p className="font-mono text-lg">{result.boardLength} mm x {result.boardWidth} mm</p></div>
+                  <div><p className="text-stone-400 text-sm">Total Area (sq.m)</p><p className="font-mono text-lg">{result.totalArea}</p></div>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-stone-700">
                 <p className="text-stone-400 text-sm">Estimated Paper Required</p>
                 <p className="text-3xl font-bold text-white">{result.paperRequired} <span className="text-lg font-normal text-stone-400">kg</span></p>
@@ -615,12 +725,31 @@ function CostingView() {
   );
 }
 
-// --- WASTAGE VIEW ---
-function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
-  const [newLog, setNewLog] = useState({ date: new Date().toISOString().split('T')[0], totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
+// --- WASTAGE VIEW (LINKED TO PRODUCTION) ---
+function WastageView({ wastageLogs, orders, companies, production, addLog, role, getColRef, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [newLog, setNewLog] = useState({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
+
+  const handleOrderLink = (orderId) => {
+    if (!orderId) { 
+      setNewLog({...newLog, orderId: '', companyId: '', totalReelsKg: ''}); 
+      return; 
+    }
+    const ord = orders.find(o => o.id === orderId);
+    
+    // AUTO-PULL TOTAL ISSUED KG FROM PRODUCTION LOGS
+    const orderProdLogs = production.filter(p => p.orderId === orderId);
+    const totalIssuedKg = orderProdLogs.reduce((sum, p) => sum + parseFloat(p.useKg || 0), 0);
+
+    if (ord) {
+      setNewLog({...newLog, orderId: orderId, companyId: ord.companyId, totalReelsKg: totalIssuedKg > 0 ? totalIssuedKg.toFixed(1) : ''});
+    }
+  };
 
   const tReels = parseFloat(newLog.totalReelsKg) || 0;
-  const pKg = parseFloat(newLog.productionKg) || 0; // Gross production
+  const pKg = parseFloat(newLog.productionKg) || 0; 
   const pWastage = parseFloat(newLog.paperWastage) || 0;
   const sWastage = parseFloat(newLog.sheetWastage) || 0;
   const cPipe = parseFloat(newLog.corePipe) || 0;
@@ -639,7 +768,7 @@ function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
     e.preventDefault();
     await addDoc(getColRef('wastage'), { ...newLog, calculatedNetPaper: netPaperConsumed.toFixed(2), goodProductionKg: goodProductionKg.toFixed(2), totalWastageKg: totalWastageKg.toFixed(2), calculatedWastagePercent: wastagePercent.toFixed(2), totalGumCost: totalGumCost.toFixed(2), gumCostPerKgPaper: gumCostPerKgPaper.toFixed(2) });
     addLog(`Added Wastage & Gum record for ${newLog.date}`);
-    setNewLog({ date: new Date().toISOString().split('T')[0], totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
+    setNewLog({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
   };
 
   const handleDelete = async (id, date) => {
@@ -649,19 +778,33 @@ function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
     }
   };
 
+  const visibleWastage = allowedCompanyId === 'all' ? wastageLogs : wastageLogs.filter(w => w.companyId === allowedCompanyId || !w.companyId);
+
   return (
     <div className="max-w-6xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Wastage & Gum Calculator</h2>
-        <button onClick={() => downloadCSV(wastageLogs, 'wastage_logs')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition"><Download className="w-4 h-4" /> Export to Excel</button>
+        <h2 className="text-2xl font-bold">Wastage & Gum Calculator (Order-Wise)</h2>
+        <button onClick={() => downloadCSV(visibleWastage, 'wastage_logs')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition"><Download className="w-4 h-4" /> Export to Excel</button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
         <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-          <h3 className="font-bold mb-4 border-b pb-2">Daily Input Data</h3>
+          <h3 className="font-bold mb-4 border-b pb-2">Input Data</h3>
+          
+          <div className="col-span-1 md:col-span-2 bg-blue-50 p-4 rounded-lg border border-blue-100 mb-4">
+            <label className="block text-xs font-bold text-blue-800 mb-1">Link to Order / Job</label>
+            <select className="w-full p-2 border border-blue-200 rounded text-blue-900 bg-white" value={newLog.orderId || ''} onChange={e => handleOrderLink(e.target.value)}>
+              <option value="">-- General / Daily Wastage (Not Linked) --</option>
+              {visibleOrders.map(o => {
+                const comp = companies.find(c => c.id === o.companyId)?.name || 'Unknown';
+                return <option key={o.id} value={o.id}>{comp} - {o.itemName || o.Item_Name} ({o.orderQty} pcs) [{o.status}]</option>;
+              })}
+            </select>
+          </div>
+
           <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="col-span-1 md:col-span-2"><label className="block text-xs font-medium text-stone-500 mb-1">Date</label><input required type="date" className="w-full p-2 border border-stone-300 rounded bg-stone-50" value={newLog.date} onChange={e => setNewLog({...newLog, date: e.target.value})} /></div>
-            <div className="col-span-1"><label className="block text-xs font-medium text-stone-500 mb-1">Total Reels Issued (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.totalReelsKg} onChange={e => setNewLog({...newLog, totalReelsKg: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs font-bold text-blue-600 mb-1">Total Reels Issued (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-blue-300 rounded bg-blue-50" value={newLog.totalReelsKg} onChange={e => setNewLog({...newLog, totalReelsKg: e.target.value})} /></div>
             <div className="col-span-1"><label className="block text-xs font-medium text-stone-500 mb-1">Gross Production (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.productionKg} onChange={e => setNewLog({...newLog, productionKg: e.target.value})} /></div>
             <div className="col-span-1"><label className="block text-xs font-medium text-stone-500 mb-1">Paper Wastage (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.paperWastage} onChange={e => setNewLog({...newLog, paperWastage: e.target.value})} /></div>
             <div className="col-span-1"><label className="block text-xs font-medium text-stone-500 mb-1">Sheet Wastage (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.sheetWastage} onChange={e => setNewLog({...newLog, sheetWastage: e.target.value})} /></div>
@@ -669,7 +812,7 @@ function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
             <div className="col-span-1 md:col-span-2"><label className="block text-xs font-medium text-stone-500 mb-1">Balance Reel Return (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.balanceReel} onChange={e => setNewLog({...newLog, balanceReel: e.target.value})} /></div>
             <div className="col-span-1 border-t pt-4"><label className="block text-xs font-medium text-stone-500 mb-1">Actual Gum Used (KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.gumUsed} onChange={e => setNewLog({...newLog, gumUsed: e.target.value})} /></div>
             <div className="col-span-1 border-t pt-4"><label className="block text-xs font-medium text-stone-500 mb-1">Gum Price (per KG)</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-stone-800" value={newLog.gumPrice} onChange={e => setNewLog({...newLog, gumPrice: e.target.value})} /></div>
-            <div className="col-span-1 md:col-span-2 mt-2"><button type="submit" className="w-full bg-stone-900 text-white p-3 rounded-lg flex items-center justify-center gap-2 hover:bg-stone-800"><Plus className="w-5 h-5" /> Save Daily Log</button></div>
+            <div className="col-span-1 md:col-span-2 mt-2"><button type="submit" className="w-full bg-stone-900 text-white p-3 rounded-lg flex items-center justify-center gap-2 hover:bg-stone-800"><Plus className="w-5 h-5" /> Save Job Log</button></div>
           </form>
         </div>
         <div className="lg:col-span-1 space-y-4">
@@ -688,165 +831,38 @@ function WastageView({ wastageLogs, addLog, role, getColRef, getDocRef }) {
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
         <table className="w-full text-left min-w-[1100px]">
           <thead className="bg-stone-100 text-stone-600 text-sm">
-            <tr><th className="p-4">Date</th><th className="p-4">Total Issued</th><th className="p-4">Core/Balance</th><th className="p-4">Prod (Gross/Good)</th><th className="p-4">Wastage (Pap/Sht)</th><th className="p-4 bg-stone-200">Net Paper</th><th className="p-4 bg-green-100 text-green-800">Gum Usage & Cost</th><th className="p-4 bg-red-100 text-red-800">Wastage %</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
+            <tr><th className="p-4">Date / Order</th><th className="p-4">Total Issued</th><th className="p-4">Core/Balance</th><th className="p-4">Prod (Gross/Good)</th><th className="p-4">Wastage (Pap/Sht)</th><th className="p-4 bg-stone-200">Net Paper</th><th className="p-4 bg-green-100 text-green-800">Gum Usage & Cost</th><th className="p-4 bg-red-100 text-red-800">Wastage %</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
           </thead>
           <tbody className="divide-y divide-stone-200">
-            {wastageLogs.length === 0 && <tr><td colSpan="9" className="p-4 text-center text-stone-500">No records found.</td></tr>}
-            {[...wastageLogs].sort((a,b) => {
+            {visibleWastage.length === 0 && <tr><td colSpan="9" className="p-4 text-center text-stone-500">No records found.</td></tr>}
+            {[...visibleWastage].sort((a,b) => {
                const dateA = new Date(a.date).getTime();
                const dateB = new Date(b.date).getTime();
                return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-            }).map(record => (
+            }).map(record => {
+              const orderObj = orders.find(o => o.id === record.orderId);
+              const compObj = companies.find(c => c.id === record.companyId);
+              return (
               <tr key={record.id} className="hover:bg-stone-50">
-                <td className="p-4 font-medium">{record.date}</td>
+                <td className="p-4">
+                  <div className="font-bold text-stone-900">{record.date}</div>
+                  {record.orderId ? (
+                    <div className="text-xs mt-1">
+                      <span className="text-blue-700 font-bold block">{compObj?.name || 'Unknown'}</span>
+                      <span className="text-stone-500">{orderObj?.itemName || 'Unknown Job'}</span>
+                    </div>
+                  ) : <span className="text-[10px] text-stone-400 font-bold bg-stone-200 px-1 py-0.5 rounded">Not Linked</span>}
+                </td>
                 <td className="p-4">{record.totalReelsKg} kg</td>
                 <td className="p-4 text-xs text-stone-500">Core: {record.corePipe}kg<br/>Bal: {record.balanceReel}kg</td>
                 <td className="p-4"><p className="text-stone-500 text-xs">Gross: {record.productionKg} kg</p><p className="font-bold text-stone-800">Good: {record.goodProductionKg || (record.productionKg - record.sheetWastage).toFixed(2)} kg</p></td>
                 <td className="p-4 text-sm text-red-600"><p>Pap: {record.paperWastage || 0} kg</p><p>Sht: {record.sheetWastage} kg</p></td>
                 <td className="p-4 font-mono font-semibold bg-stone-50">{record.calculatedNetPaper} kg</td>
-                <td className="p-4 bg-green-50/30"><p className="font-bold text-green-800 font-mono">{record.gumUsed || 0} <span className="text-xs font-normal text-green-700">kg</span></p><p className="text-xs font-medium text-stone-700 mt-1">{record.gumCostPerKgPaper} /kg paper</p></td>
+                <td className="p-4 bg-green-50/30"><p className="font-bold text-green-800 font-mono">{record.gumUsed || 0} <span className="text-xs font-normal text-green-700">kg</span></p><p className="text-xs font-medium text-stone-700 mt-1">₹{record.gumCostPerKgPaper} /kg</p></td>
                 <td className="p-4 font-mono font-bold text-red-700 bg-red-50/30">{record.calculatedWastagePercent}%</td>
                 {role === 'admin' && <td className="p-4 text-right"><button onClick={() => handleDelete(record.id, record.date)} className="text-red-500 hover:text-red-700"><Trash2 className="w-5 h-5 inline" /></button></td>}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// --- FINISHED GOODS VIEW ---
-function FinishedGoodsView({ orders, production, items, companies, addLog, getDocRef, currentUser }) {
-  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
-  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
-
-  const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
-
-  const handleDispatch = async (e, order, inStock, qtyToDispatch = null) => {
-    if (e) e.preventDefault();
-    const qty = qtyToDispatch || parseInt(e.target.dispatchQty.value);
-    if (!qty || qty <= 0 || qty > inStock) return;
-    
-    const currentDispatched = parseInt(order.dispatchedQty || 0);
-    const newDispatched = currentDispatched + qty;
-
-    const newHistory = [...(order.dispatchHistory || []), {
-      date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-      qty: qty
-    }];
-
-    await updateDoc(getDocRef('orders', order.id), { 
-      dispatchedQty: newDispatched,
-      dispatchHistory: newHistory
-    });
-    
-    addLog(`Dispatched ${qty} boxes for Order: ${order.itemName}`);
-    if (e) e.target.reset(); 
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
-        <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
-      </div>
-      <p className="text-sm text-stone-500 mb-6">Total Records: {visibleOrders.length}</p>
-
-      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
-        <table className="w-full text-left min-w-[1200px]">
-          <thead className="bg-stone-100 text-stone-600 text-sm">
-            <tr>
-              <th className="p-4">Order Ref / Client</th>
-              <th className="p-4">Item Details</th>
-              <th className="p-4 bg-blue-50">Produced (Qty & Wt)</th>
-              <th className="p-4 bg-orange-50">Dispatched (Qty, Val, Wt)</th>
-              <th className="p-4 bg-green-50 text-green-800">In Stock (Qty, Val, Wt)</th>
-              <th className="p-4 text-right">Dispatch Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stone-200">
-            {visibleOrders.map(order => {
-              const pLogs = production.filter(p => p.orderId === order.id);
-              const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
-              
-              const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              
-              const item = items.find(i => i.id === order.itemId);
-              const ply = parseInt(item?.ply || item?.Ply || 3);
-              
-              let effectiveBase = 0;
-              if (ply <= 2) { effectiveBase = sumBoard + sumLiner; } 
-              else { effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); }
-              
-              const producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
-              const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
-              const avgWeightKg = producedQty > 0 ? (totalKgUsed / producedQty) : 0;
-              
-              const dispatchedQty = parseInt(order.dispatchedQty || 0);
-              const rate = parseFloat(order.rate || 0);
-              
-              const dispatchedWeight = dispatchedQty * avgWeightKg;
-              const dispatchedValue = dispatchedQty * rate;
-
-              const inStock = Math.max(0, producedQty - dispatchedQty);
-              const stockWeight = inStock * avgWeightKg;
-              const stockValue = inStock * rate;
-
-              if (producedQty <= 0 && dispatchedQty <= 0) return null; 
-
-              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
-
-              return (
-                <tr key={order.id} className={`hover:bg-stone-50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/50' : ''}`}>
-                  <td className="p-4">
-                    <p className="font-bold text-stone-900">{compName}</p>
-                    <p className="text-xs text-stone-500">Ordered: {order.orderDate}</p>
-                  </td>
-                  <td className="p-4">
-                    <p className="font-medium text-stone-800">{order.itemName || order.Item_Name}</p>
-                    <p className="text-xs text-stone-500">{item?.weight || item?.Weight_g ? `${item.weight || item.Weight_g}g` : '-'} | ₹{rate.toFixed(2)}/box</p>
-                  </td>
-                  <td className="p-4 bg-blue-50/30">
-                    <p className="font-bold text-lg text-blue-700">{producedQty}</p>
-                    <p className="text-xs font-medium text-blue-600">{totalKgUsed.toFixed(1)} kg total</p>
-                  </td>
-                  <td className="p-4 bg-orange-50/30">
-                    <p className="font-bold text-lg text-orange-600">{dispatchedQty}</p>
-                    <p className="text-xs font-bold text-stone-800">₹{dispatchedValue.toFixed(2)}</p>
-                    <p className="text-xs font-medium text-orange-600 mb-1">{dispatchedWeight.toFixed(1)} kg</p>
-                    {order.dispatchHistory && order.dispatchHistory.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-orange-200">
-                        <p className="text-[10px] font-bold text-orange-800 mb-1">Dispatch History:</p>
-                        <ul className="text-[10px] space-y-0.5 text-orange-700">
-                          {order.dispatchHistory.map((h, i) => (
-                            <li key={i}>{h.date}: <span className="font-bold">{h.qty} pcs</span></li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-4 bg-green-50/30">
-                    <p className="font-bold text-xl text-green-700">{inStock}</p>
-                    <p className="text-sm font-bold text-stone-800">₹{stockValue.toFixed(2)}</p>
-                    <p className="text-xs font-medium text-green-600">{stockWeight.toFixed(1)} kg</p>
-                  </td>
-                  <td className="p-4 text-right">
-                    {inStock > 0 ? (
-                      <form onSubmit={(e) => handleDispatch(e, order, inStock)} className="flex items-center justify-end gap-2">
-                        <input required type="number" min="1" max={inStock} name="dispatchQty" className={`w-24 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
-                        <button type="submit" className="bg-stone-900 text-white px-4 py-2 rounded text-xs font-bold hover:bg-stone-800">
-                          Dispatch
-                        </button>
-                        {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
-                      </form>
-                    ) : (
-                      <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
-                    )}
-                  </td>
-                </tr>
-              )
+              );
             })}
           </tbody>
         </table>
@@ -854,7 +870,6 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
     </div>
   );
 }
-
 // --- INVENTORY VIEW ---
 function InventoryView({ inventory, production, addLog, role, getColRef, getDocRef, currentUser, companies }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -862,27 +877,61 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
 
   const [editingId, setEditingId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [newReel, setNewReel] = useState({
-    date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: ''
-  });
+  
+  // Generic Invoice Details
+  const [commonData, setCommonData] = useState({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '' });
+  
+  // Multiple Reels Array
+  const emptyReel = { reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
+  const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
+
   const [filters, setFilters] = useState({ company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
     if (editingId) {
-      await updateDoc(getDocRef('inventory', editingId), newReel);
-      addLog(`Updated inventory reel: ${newReel.reelNo}`);
+      const singleReel = reelsInput[0];
+      await updateDoc(getDocRef('inventory', editingId), { ...commonData, ...singleReel });
+      addLog(`Updated inventory reel: ${singleReel.reelNo}`);
       setEditingId(null);
+      setReelsInput([{...emptyReel}]);
     } else {
-      await addDoc(getColRef('inventory'), newReel);
-      addLog(`Added inventory reel: ${newReel.reelNo} from ${newReel.millName}`);
+      const batch = writeBatch(db);
+      let count = 0;
+      reelsInput.forEach(reel => {
+        if (!reel.reelNo) return;
+        const newDocRef = doc(getColRef('inventory'));
+        batch.set(newDocRef, { ...commonData, ...reel });
+        count++;
+      });
+      await batch.commit();
+      addLog(`Added ${count} inventory reels from ${commonData.millName}`);
+      setReelsInput([{...emptyReel}]); 
     }
-    setNewReel({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' });
   };
 
-  const handleEdit = (reel) => { setEditingId(reel.id); setNewReel(reel); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const handleEdit = (reel) => { 
+    setEditingId(reel.id); 
+    setCommonData({ date: reel.date, companyId: reel.companyId, millName: reel.millName, invoiceNo: reel.invoiceNo, vehicleNo: reel.vehicleNo });
+    setReelsInput([{ reelNo: reel.reelNo, size: reel.size, gsm: reel.gsm, bf: reel.bf, colour: reel.colour, receivedQty: reel.receivedQty, initialIssuedQty: reel.initialIssuedQty, ratePerKg: reel.ratePerKg }]);
+    window.scrollTo({ top: 0, behavior: 'smooth' }); 
+  };
+  
   const handleDelete = async (id, reelNo) => { if(window.confirm(`Delete inventory record for Reel ${reelNo}?`)) { await deleteDoc(getDocRef('inventory', id)); addLog(`Deleted inventory reel: ${reelNo}`); } };
-  const cancelEdit = () => { setEditingId(null); setNewReel({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' }); };
+  
+  const cancelEdit = () => { 
+    setEditingId(null); 
+    setCommonData({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '' });
+    setReelsInput([{...emptyReel}]);
+  };
+
+  const addReelRow = () => setReelsInput([...reelsInput, {...emptyReel}]);
+  const removeReelRow = (idx) => setReelsInput(reelsInput.filter((_, i) => i !== idx));
+  const handleReelChange = (idx, field, val) => {
+    const updated = [...reelsInput];
+    updated[idx][field] = val;
+    setReelsInput(updated);
+  };
 
   const handleBulkDelete = async () => {
     if (role !== 'admin') return;
@@ -998,9 +1047,15 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     downloadCSV(exportData, 'stock_inventory');
   };
 
+  const totalReels = filteredInventory.length;
+  const emptyReels = filteredInventory.filter(r => r.balanceQty <= 0).length;
+  const activeReels = totalReels - emptyReels;
+  const totalKgAvailable = filteredInventory.reduce((sum, r) => sum + r.balanceQty, 0);
+  const totalValueAvailable = filteredInventory.reduce((sum, r) => sum + r.value, 0);
+
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2 flex-wrap gap-4">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <div className="flex items-center gap-4">
           <h2 className="text-2xl font-bold">Stock Inventory (Raw Materials)</h2>
           {role === 'admin' && (
@@ -1054,31 +1109,64 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
           <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition"><Download className="w-4 h-4" /> Export</button>
         </div>
       </div>
-      
-      {/* 🔴 LIVE DATABASE METRIC */}
-      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">
-        Database Link: Showing {filteredInventory.length} of {inventory.length} total records downloaded
-      </p>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Archive className="w-6 h-6" /></div>
+          <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Reels (Active / Empty)</p><p className="text-2xl font-bold text-stone-900">{activeReels} <span className="text-stone-300">/</span> <span className="text-stone-400">{emptyReels}</span></p></div>
+        </div>
+        <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-green-50 text-green-600 rounded-lg"><ScanLine className="w-6 h-6" /></div>
+          <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Available (KG)</p><p className="text-2xl font-bold text-stone-900">{totalKgAvailable.toFixed(1)} kg</p></div>
+        </div>
+        <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-yellow-50 text-yellow-600 rounded-lg"><IndianRupee className="w-6 h-6" /></div>
+          <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Available Stock Value</p><p className="text-2xl font-bold text-stone-900">₹{totalValueAvailable.toLocaleString('en-IN', {maximumFractionDigits:0})}</p></div>
+        </div>
+      </div>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
-        <h3 className="font-bold mb-4 flex items-center gap-2"><Archive className="w-5 h-5 text-stone-500" /> {editingId ? 'Edit Reel Entry' : 'Receive New Reel'}</h3>
-        <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={newReel.date} onChange={e => setNewReel({...newReel, date: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company</label><select required className="w-full p-2 border rounded" value={newReel.companyId} onChange={e => setNewReel({...newReel, companyId: e.target.value})} disabled={allowedCompanyId !== 'all'}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" value={newReel.millName} onChange={e => setNewReel({...newReel, millName: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" value={newReel.invoiceNo} onChange={e => setNewReel({...newReel, invoiceNo: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" value={newReel.vehicleNo} onChange={e => setNewReel({...newReel, vehicleNo: e.target.value})} /></div>
-          
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold text-blue-700 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-stone-900" placeholder="e.g. 101" value={newReel.reelNo} onChange={e => setNewReel({...newReel, reelNo: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Size (mm/in)</label><input required type="text" className="w-full p-2 border rounded" value={newReel.size} onChange={e => setNewReel({...newReel, size: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newReel.gsm} onChange={e => setNewReel({...newReel, gsm: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newReel.bf} onChange={e => setNewReel({...newReel, bf: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded" value={newReel.colour} onChange={e => setNewReel({...newReel, colour: e.target.value})}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Received (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50" value={newReel.receivedQty} onChange={e => setNewReel({...newReel, receivedQty: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50" value={newReel.initialIssuedQty || ''} onChange={e => setNewReel({...newReel, initialIssuedQty: e.target.value})} placeholder="Optional" /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate / KG (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded" value={newReel.ratePerKg} onChange={e => setNewReel({...newReel, ratePerKg: e.target.value})} /></div>
-          
-          <div className="col-span-1 lg:col-span-8 flex gap-2 mt-2"><button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? <><Edit2 className="w-4 h-4" /> Update Reel</> : <><Plus className="w-4 h-4" /> Save to Inventory</>}</button>{editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6">Cancel</button>}</div>
+        <h3 className="font-bold mb-4 flex items-center gap-2"><Archive className="w-5 h-5 text-stone-500" /> {editingId ? 'Edit Reel Entry' : 'Receive New Invoice'}</h3>
+        <form onSubmit={handleAddOrUpdate} className="space-y-4">
+          {/* Top Common Invoice Details */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end bg-stone-50 p-4 rounded-lg border border-stone-200">
+            <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={commonData.date} onChange={e => setCommonData({...commonData, date: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Company</label><select required className="w-full p-2 border rounded" value={commonData.companyId} onChange={e => setCommonData({...commonData, companyId: e.target.value})} disabled={allowedCompanyId !== 'all'}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" value={commonData.invoiceNo} onChange={e => setCommonData({...commonData, invoiceNo: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" value={commonData.vehicleNo} onChange={e => setCommonData({...commonData, vehicleNo: e.target.value})} /></div>
+          </div>
+
+          {/* Multiple Reel Input Rows */}
+          <div className="space-y-3">
+            {reelsInput.map((reel, idx) => (
+              <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end">
+                <div className="flex-1 min-w-[100px]"><label className="block text-[10px] text-stone-500 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-sm" value={reel.reelNo} onChange={e => handleReelChange(idx, 'reelNo', e.target.value)} /></div>
+                <div className="w-20"><label className="block text-[10px] text-stone-500 mb-1">Size</label><input required type="text" className="w-full p-2 border rounded text-sm" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} /></div>
+                <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} /></div>
+                <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} /></div>
+                <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded text-sm" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
+                <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Recv (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50 text-sm" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} /></div>
+                <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50 text-sm" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} /></div>
+                <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Rate (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded text-sm" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} /></div>
+                {!editingId && reelsInput.length > 1 && (
+                  <button type="button" onClick={() => removeReelRow(idx)} className="p-2 mb-1 text-red-500 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2 pt-4 border-t border-stone-200">
+            {!editingId && (
+              <button type="button" onClick={addReelRow} className="bg-stone-100 text-stone-700 px-4 py-2 rounded text-sm font-bold hover:bg-stone-200 flex items-center gap-2">
+                <Plus className="w-4 h-4"/> Add Another Reel
+              </button>
+            )}
+            <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">
+              {editingId ? <><Edit2 className="w-4 h-4" /> Update Reel</> : <><Archive className="w-4 h-4" /> Save {reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'} to Inventory</>}
+            </button>
+            {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6 font-bold">Cancel</button>}
+          </div>
         </form>
       </div>
 
@@ -1147,9 +1235,419 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     </div>
   );
 }
+// --- ORDERS VIEW ---
+function OrdersView({ orders, production, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [newOrder, setNewOrder] = useState({
+    orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0,
+    commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: ''
+  });
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    const item = items.find(i => i.id === newOrder.itemId);
+    const orderData = { ...newOrder, itemName: item?.name || item?.Item_Name || 'Unknown Item' };
+    
+    if (item?.itemType !== 'PPC' && item?.Item_Type !== 'PPC') {
+        delete orderData.commonPerSet;
+        delete orderData.smallPerSet;
+        delete orderData.commonUps;
+        delete orderData.smallUps;
+        delete orderData.plannedUpsCommon;
+        delete orderData.plannedUpsSmall;
+    }
+
+    await addDoc(getColRef('orders'), orderData);
+    addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
+    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '' });
+  };
+
+  const handleDelete = async (id, itemName) => {
+    if(window.confirm(`Delete order for ${itemName}?`)) {
+      await deleteDoc(getDocRef('orders', id));
+      addLog(`Deleted order for ${itemName}`);
+    }
+  };
+
+  const toggleStatus = async (id, currentStatus) => {
+    const nextStatus = currentStatus === 'Pending' ? 'In Production' : (currentStatus === 'In Production' ? 'Completed' : 'Pending');
+    await updateDoc(getDocRef('orders', id), { status: nextStatus });
+    addLog(`Updated order status to ${nextStatus}`);
+  };
+
+  const handleExport = () => {
+    const exportData = visibleOrders.map(order => ({
+      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
+    }));
+    downloadCSV(exportData, 'orders');
+  };
+
+  const selectedItemObj = items.find(i => i.id === newOrder.itemId);
+  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.Item_Type === 'PPC';
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-2xl font-bold">Order Management</h2>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
+            <Download className="w-4 h-4" /> Export
+          </button>
+        </div>
+      </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
+
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
+        <h3 className="font-bold mb-4">Add New Order</h3>
+        <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Order Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.orderDate} onChange={e => setNewOrder({...newOrder, orderDate: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Client Company</label><select required className="w-full p-2 border rounded" value={newOrder.companyId} onChange={e => setNewOrder({...newOrder, companyId: e.target.value, itemId: ''})}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Select Item</label><select required className="w-full p-2 border rounded" value={newOrder.itemId} onChange={e => setNewOrder({...newOrder, itemId: e.target.value})} disabled={!newOrder.companyId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newOrder.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}</select></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">{isPPC ? 'Order Qty (Sets)' : 'Order Quantity'}</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.orderQty} onChange={e => setNewOrder({...newOrder, orderQty: e.target.value})} /></div>
+          
+          {isPPC ? (
+              <div className="col-span-1 md:col-span-4 grid grid-cols-6 gap-2 p-3 bg-blue-50 border border-blue-200 rounded">
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonPerSet} onChange={e => setNewOrder({...newOrder, commonPerSet: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallPerSet} onChange={e => setNewOrder({...newOrder, smallPerSet: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Com. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonUps} onChange={e => setNewOrder({...newOrder, commonUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Sml. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallUps} onChange={e => setNewOrder({...newOrder, smallUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (C)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsCommon} onChange={e => setNewOrder({...newOrder, plannedUpsCommon: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (S)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsSmall} onChange={e => setNewOrder({...newOrder, plannedUpsSmall: e.target.value})} /></div>
+              </div>
+          ) : (
+              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Planned Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.plannedUps} onChange={e => setNewOrder({...newOrder, plannedUps: e.target.value})} /></div>
+          )}
+          
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate (₹) per {isPPC ? 'Set' : 'Box'}</label><input required type="number" step="0.01" className="w-full p-2 border rounded bg-green-50" value={newOrder.rate} onChange={e => setNewOrder({...newOrder, rate: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Target Delivery Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.deliveryDate} onChange={e => setNewOrder({...newOrder, deliveryDate: e.target.value})} /></div>
+          <div className="col-span-1 lg:col-span-3"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800"><Plus className="w-4 h-4" /> Save Order</button></div>
+        </form>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[1200px]">
+          <thead className="bg-stone-100 text-stone-600 text-sm">
+            <tr>
+              <th className="p-4">Order Date</th>
+              <th className="p-4">Client</th>
+              <th className="p-4">Item Ordered</th>
+              <th className="p-4">Target Qty</th>
+              <th className="p-4">Rate & Value (₹)</th>
+              <th className="p-4 bg-green-50 text-green-800">Ready Qty</th>
+              <th className="p-4 bg-red-50 text-red-800">Pending Qty</th>
+              <th className="p-4">Status</th>
+              {role === 'admin' && <th className="p-4 text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
+            {[...visibleOrders].sort((a,b) => {
+               const dateA = new Date(a.orderDate).getTime();
+               const dateB = new Date(b.orderDate).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(order => {
+              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
+              const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
+
+              const pLogs = production.filter(p => p.orderId === order.id);
+              const item = items.find(i => i.id === order.itemId);
+              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+              
+              let producedQty = 0;
+              let targetSheetsDisplay = null;
+
+              if (isPpcOrder) {
+                  // Mathematical relationship: Pieces Needed vs Pockets
+                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+
+                  let totalCommonPieces = 0;
+                  let totalSmallPieces = 0;
+                  
+                  pLogs.forEach(p => {
+                      const sheets = parseFloat(p.linerQty || 0);
+                      const cUps = parseInt(p.commonUps || order.commonUps || 0);
+                      const sUps = parseInt(p.smallUps || order.smallUps || 0);
+                      totalCommonPieces += sheets * cUps;
+                      totalSmallPieces += sheets * sUps;
+                  });
+
+                  const possibleFromCommon = Math.floor(totalCommonPieces / cPiecesPerSet);
+                  const possibleFromSmall = Math.floor(totalSmallPieces / sPiecesPerSet);
+                  producedQty = Math.min(possibleFromCommon, possibleFromSmall);
+                  if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+
+                  // Target sheets calculation (Segregated)
+                  const orderQty = parseInt(order.orderQty || 0);
+                  const totalCNeeded = cPiecesPerSet * orderQty;
+                  const totalSNeeded = sPiecesPerSet * orderQty;
+
+                  const baseC = parseInt(order.commonUps || 1);
+                  const baseS = parseInt(order.smallUps || 1);
+                  const pUpsC = parseInt(order.plannedUpsCommon || 1);
+                  const pUpsS = parseInt(order.plannedUpsSmall || 1);
+
+                  const commonPiecesPerCommonSheet = Math.max(1, baseC * pUpsC);
+                  const smallPiecesPerCommonSheet = Math.max(1, baseC * pUpsC); 
+                  const smallPiecesPerDedicatedSheet = Math.max(1, baseS * pUpsS * 2);
+
+                  const commonSheetsNeeded = Math.ceil(totalCNeeded / commonPiecesPerCommonSheet);
+                  const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+                  const remainingSmallNeeded = Math.max(0, totalSNeeded - smallPiecesAcquired);
+                  const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+
+                  const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
+
+                  targetSheetsDisplay = (
+                      <span className="text-[10px] text-blue-600 font-bold block mt-1 leading-tight">
+                          Needs ~{targetSheets} Shts<br/>
+                          ({commonSheetsNeeded}C + {smallSheetsNeeded}S)
+                      </span>
+                  );
+              } else {
+                  // STRICT PLY LOGIC FOR BOXES
+                  const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+                  const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  
+                  const ply = parseInt(item?.ply || item?.Ply || 3);
+                  let effectiveBase = 0;
+
+                  if (ply <= 2) {
+                       effectiveBase = sumBoard + sumPaper; 
+                  } else if (ply === 3) { 
+                       effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+                  } else if (ply === 5) {
+                       effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+                  } else if (ply === 7) {
+                       effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+                  } else {
+                       effectiveBase = sumBoard + sumPaper;
+                  }
+                  
+                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+              }
+              
+              const pendingQty = Math.max(0, order.orderQty - producedQty);
+              const rate = parseFloat(order.rate || 0);
+              const totalValue = rate * parseInt(order.orderQty || 0);
+
+              return (
+                <tr key={order.id} className="hover:bg-stone-50">
+                  <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
+                  <td className="p-4 font-bold text-stone-900">{compName}</td>
+                  <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
+                  <td className="p-4">
+                      <p className="font-bold text-lg">{order.orderQty}</p>
+                      {targetSheetsDisplay}
+                  </td>
+                  <td className="p-4">
+                     <p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p>
+                     <p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p>
+                  </td>
+                  <td className="p-4 bg-green-50/30 font-bold text-green-600 text-lg">{producedQty}</td>
+                  <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
+                  <td className="p-4">
+                    <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
+                  </td>
+                  {role === 'admin' && (
+                    <td className="p-4 text-right">
+                      <button onClick={() => handleDelete(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:text-red-700"><Trash2 className="w-5 h-5 inline" /></button>
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+// --- FINISHED GOODS VIEW ---
+function FinishedGoodsView({ orders, production, items, companies, addLog, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
+
+  const handleDispatch = async (e, order, inStock, qtyToDispatch = null) => {
+    if (e) e.preventDefault();
+    const qty = qtyToDispatch || parseInt(e.target.dispatchQty.value);
+    if (!qty || qty <= 0 || qty > inStock) return;
+    
+    const currentDispatched = parseInt(order.dispatchedQty || 0);
+    const newDispatched = currentDispatched + qty;
+
+    const newHistory = [...(order.dispatchHistory || []), {
+      date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      qty: qty
+    }];
+
+    await updateDoc(getDocRef('orders', order.id), { 
+      dispatchedQty: newDispatched,
+      dispatchHistory: newHistory
+    });
+    
+    addLog(`Dispatched ${qty} boxes for Order: ${order.itemName}`);
+    if (e) e.target.reset(); 
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
+      </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">
+        Database Link: Showing {visibleOrders.length} total records downloaded
+      </p>
+
+      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[1200px]">
+          <thead className="bg-stone-100 text-stone-600 text-sm">
+            <tr>
+              <th className="p-4">Order Ref / Client</th>
+              <th className="p-4">Item Details</th>
+              <th className="p-4 bg-blue-50">Produced (Qty & Wt)</th>
+              <th className="p-4 bg-orange-50">Dispatched (Qty, Val, Wt)</th>
+              <th className="p-4 bg-green-50 text-green-800">In Stock (Qty, Val, Wt)</th>
+              <th className="p-4 text-right">Dispatch Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {visibleOrders.map(order => {
+              const pLogs = production.filter(p => p.orderId === order.id);
+              const item = items.find(i => i.id === order.itemId);
+              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+              
+              let producedQty = 0;
+
+              if (isPpcOrder) {
+                  // Mathematical relationship: Pieces Needed vs Pockets
+                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+
+                  let totalCommonPieces = 0;
+                  let totalSmallPieces = 0;
+                  
+                  pLogs.forEach(p => {
+                      const sheets = parseFloat(p.linerQty || 0);
+                      const cUps = parseInt(p.commonUps || order.commonUps || 0);
+                      const sUps = parseInt(p.smallUps || order.smallUps || 0);
+                      totalCommonPieces += sheets * cUps;
+                      totalSmallPieces += sheets * sUps;
+                  });
+
+                  const possibleFromCommon = Math.floor(totalCommonPieces / cPiecesPerSet);
+                  const possibleFromSmall = Math.floor(totalSmallPieces / sPiecesPerSet);
+                  producedQty = Math.min(possibleFromCommon, possibleFromSmall);
+                  if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+              } else {
+                  // STRICT PLY LOGIC FOR BOXES
+                  const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+                  const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  
+                  const ply = parseInt(item?.ply || item?.Ply || 3);
+                  let effectiveBase = 0;
+
+                  if (ply <= 2) {
+                       effectiveBase = sumBoard + sumPaper; 
+                  } else if (ply === 3) { 
+                       effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+                  } else if (ply === 5) {
+                       effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+                  } else if (ply === 7) {
+                       effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+                  } else {
+                       effectiveBase = sumBoard + sumPaper;
+                  }
+                  
+                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+              }
+
+              const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
+              const avgWeightKg = producedQty > 0 ? (totalKgUsed / producedQty) : 0;
+              
+              const dispatchedQty = parseInt(order.dispatchedQty || 0);
+              const rate = parseFloat(order.rate || 0);
+              
+              const dispatchedWeight = dispatchedQty * avgWeightKg;
+              const dispatchedValue = dispatchedQty * rate;
+
+              const inStock = Math.max(0, producedQty - dispatchedQty);
+              const stockWeight = inStock * avgWeightKg;
+              const stockValue = inStock * rate;
+
+              if (producedQty <= 0 && dispatchedQty <= 0) return null; 
+
+              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
+
+              return (
+                <tr key={order.id} className={`hover:bg-stone-50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/50' : ''}`}>
+                  <td className="p-4">
+                    <p className="font-bold text-stone-900">{compName}</p>
+                    <p className="text-xs text-stone-500">Ordered: {order.orderDate}</p>
+                  </td>
+                  <td className="p-4">
+                    <p className="font-medium text-stone-800">{order.itemName || order.Item_Name}</p>
+                    <p className="text-xs text-stone-500">{item?.weight || item?.Weight_g ? `${item.weight || item.Weight_g}g` : '-'} | ₹{rate.toFixed(2)}/{isPpcOrder?'set':'box'}</p>
+                  </td>
+                  <td className="p-4 bg-blue-50/30">
+                    <p className="font-bold text-lg text-blue-700">{producedQty}</p>
+                    <p className="text-xs font-medium text-blue-600">{totalKgUsed.toFixed(1)} kg total</p>
+                  </td>
+                  <td className="p-4 bg-orange-50/30">
+                    <p className="font-bold text-lg text-orange-600">{dispatchedQty}</p>
+                    <p className="text-xs font-bold text-stone-800">₹{dispatchedValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-orange-600 mb-1">{dispatchedWeight.toFixed(1)} kg</p>
+                    {order.dispatchHistory && order.dispatchHistory.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-orange-200">
+                        <p className="text-[10px] font-bold text-orange-800 mb-1">Dispatch History:</p>
+                        <ul className="text-[10px] space-y-0.5 text-orange-700">
+                          {order.dispatchHistory.map((h, i) => (
+                            <li key={i}>{h.date}: <span className="font-bold">{h.qty}</span></li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-4 bg-green-50/30">
+                    <p className="font-bold text-xl text-green-700">{inStock}</p>
+                    <p className="text-sm font-bold text-stone-800">₹{stockValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-green-600">{stockWeight.toFixed(1)} kg</p>
+                  </td>
+                  <td className="p-4 text-right">
+                    {inStock > 0 ? (
+                      <form onSubmit={(e) => handleDispatch(e, order, inStock)} className="flex items-center justify-end gap-2">
+                        <input required type="number" min="1" max={inStock} name="dispatchQty" className={`w-24 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
+                        <button type="submit" className="bg-stone-900 text-white px-4 py-2 rounded text-xs font-bold hover:bg-stone-800">
+                          Dispatch
+                        </button>
+                        {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
+                      </form>
+                    ) : (
+                      <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 // --- PRODUCTION VIEW ---
-function ProductionView({ production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
   const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
@@ -1159,8 +1657,10 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
   const [editingId, setEditingId] = useState(null);
   const [newRecord, setNewRecord] = useState({ 
     date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', 
-    size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1' 
+    size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
   });
+
+  const availableMills = [...new Set(inventory.filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId)).map(i => i.millName).filter(Boolean))];
 
   const handleOrderLink = (orderId) => {
     if (!orderId) {
@@ -1169,7 +1669,7 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
     }
     const ord = orders.find(o => o.id === orderId);
     if (ord) {
-      setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1' });
+      setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
     }
   };
 
@@ -1183,7 +1683,7 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
       await addDoc(getColRef('production'), newRecord);
       addLog(`Added production record: Reels ${newRecord.reelNos}`);
     }
-    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1' });
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
   };
 
   const handleEdit = (record) => {
@@ -1194,7 +1694,7 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
 
   const cancelEdit = () => {
     setEditingId(null);
-    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1' });
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
   };
 
   const handleDelete = async (id, reelNos) => {
@@ -1208,14 +1708,17 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
     const exportData = visibleProduction.map(record => {
       const compName = companies.find(c => c.id === record.companyId)?.name || 'Unknown';
       const orderInfo = record.orderId ? (() => { const o = orders.find(o => o.id === record.orderId); return o ? `Order: ${o.orderQty}x ${o.itemName || o.Item_Name}` : 'Unknown Order'; })() : 'Standalone Production';
-      return { Date: record.date || '', Company: compName, Linked_Order: orderInfo, MillName: record.millName || '', Reels: record.reelNos || record.reelNo || '', PaperUsedFor: record.paperUsedFor || '', UsedForItem: record.usedForItem || '', Size_mm: record.size || '', GSM: record.gsm || '', BF: record.bf || '', UseKG: record.useKg || '', Good_Sheets_Qty: record.linerQty || '', Waste_Sheets_KG: record.wasteSheetsKg || '', Ups: record.numberOfUps || '' };
+      return { Date: record.date || '', Company: compName, Linked_Order: orderInfo, MillName: record.millName || '', Reels: record.reelNos || record.reelNo || '', PaperUsedFor: record.paperUsedFor || '', UsedForItem: record.usedForItem || '', Size_mm: record.size || '', GSM: record.gsm || '', BF: record.bf || '', UseKG: record.useKg || '', Good_Sheets_Qty: record.linerQty || '', Waste_Sheets_KG: record.wasteSheetsKg || '', Ups: record.numberOfUps || '', Common_Ups: record.commonUps || '', Small_Ups: record.smallUps || '' };
     });
     downloadCSV(exportData, 'production_records');
   };
 
+  const selectedItemObj = items.find(i => (i.name === newRecord.usedForItem) || (i.Item_Name === newRecord.usedForItem));
+  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.Item_Type === 'PPC';
+
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Production Log</h2>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
@@ -1237,7 +1740,9 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
                 useKg: getVal(row, 'Use KG', 'UseKG', 'useKg') || '',
                 linerQty: getVal(row, 'Good Sheets Qty', 'Good_Sheets_Qty', 'linerQty', 'Qty') || '',
                 wasteSheetsKg: getVal(row, 'Waste Sheets KG', 'Waste_Sheets_KG', 'wasteSheetsKg', 'Waste') || '',
-                numberOfUps: getVal(row, 'Ups', 'numberOfUps') || '1'
+                numberOfUps: getVal(row, 'Ups', 'numberOfUps') || '1',
+                commonUps: getVal(row, 'Common Ups', 'Common_Ups', 'commonUps') || '',
+                smallUps: getVal(row, 'Small Ups', 'Small_Ups', 'smallUps') || ''
               };
             })} />
           </label>
@@ -1246,7 +1751,6 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
           </button>
         </div>
       </div>
-      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleProduction.length} total records downloaded</p>
       
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
         <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
@@ -1268,7 +1772,15 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
         <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date</label><input required type="date" className="w-full p-2 border rounded" value={newRecord.date} onChange={e => setNewRecord({...newRecord, date: e.target.value})} /></div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company (For Report)</label><select required className="w-full p-2 border rounded" value={newRecord.companyId} onChange={e => setNewRecord({...newRecord, companyId: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Mill Name</label><input required type="text" className="w-full p-2 border rounded" value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} /></div>
+          
+          <div className="col-span-1 md:col-span-3">
+            <label className="block text-xs text-stone-500 mb-1">Mill Name</label>
+            <input required list="mill-options" className="w-full p-2 border rounded bg-white" placeholder="Type or select mill..." value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} />
+            <datalist id="mill-options">
+               {availableMills.map((m, i) => <option key={i} value={m} />)}
+            </datalist>
+          </div>
+
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Reel No(s) (Comma separated)</label><input required type="text" placeholder="e.g. 101, 102, 105" className="w-full p-2 border rounded" value={newRecord.reelNos} onChange={e => setNewRecord({...newRecord, reelNos: e.target.value})} /></div>
           
           <div className="col-span-1 md:col-span-2">
@@ -1276,18 +1788,24 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
             <select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}>
               <option value="Paper">Paper (1-Ply)</option>
               <option value="Liner">Liner (2-Ply)</option>
-              <option value="Board">Board (3, 5, 7-Ply)</option>
+              <option value="Board">Board (Combined)</option>
             </select>
           </div>
 
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Size (mm)</label><input required type="text" className="w-full p-2 border rounded" value={newRecord.size} onChange={e => setNewRecord({...newRecord, size: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.gsm} onChange={e => setNewRecord({...newRecord, gsm: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.bf} onChange={e => setNewRecord({...newRecord, bf: e.target.value})} /></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Use KG (Gross Total)</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.useKg} onChange={e => setNewRecord({...newRecord, useKg: e.target.value})} /></div>
+          
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Use KG</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.useKg} onChange={e => setNewRecord({...newRecord, useKg: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Good Qty (Sheets)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-blue-50" value={newRecord.linerQty} onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Waste Sheets (KG)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-red-50" value={newRecord.wasteSheetsKg} onChange={e => setNewRecord({...newRecord, wasteSheetsKg: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Number of Ups</label><select required className="w-full p-2 border rounded" value={newRecord.numberOfUps} onChange={e => setNewRecord({...newRecord, numberOfUps: e.target.value})}>{[1, 2, 3, 4, 5, 6, 7, 8].map(num => <option key={num} value={num}>{num}</option>)}</select></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Waste (KG)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-red-50" value={newRecord.wasteSheetsKg} onChange={e => setNewRecord({...newRecord, wasteSheetsKg: e.target.value})} /></div>
+          
+          {isPPC ? (
+              <div className="col-span-1 md:col-span-3 grid grid-cols-2 gap-2 p-2 bg-blue-50 border border-blue-200 rounded">
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.commonUps} onChange={e => setNewRecord({...newRecord, commonUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.smallUps} onChange={e => setNewRecord({...newRecord, smallUps: e.target.value})} /></div>
+              </div>
+          ) : (
+              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Number of Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newRecord.numberOfUps} onChange={e => setNewRecord({...newRecord, numberOfUps: e.target.value})} /></div>
+          )}
 
           <div className="col-span-1 lg:col-span-6 flex gap-2 mt-2">
             <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? <><Edit2 className="w-4 h-4" /> Update Record</> : <><Plus className="w-4 h-4" /> Save Production Record</>}</button>
@@ -1322,33 +1840,27 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
               <th className="p-4">Client / Item</th>
               <th className="p-4">Mill Name & Reel No(s)</th>
               <th className="p-4">Used For</th>
-              <th className="p-4">Size (mm)</th>
-              <th className="p-4">GSM / BF</th>
               <th className="p-4">Use KG</th>
               <th className="p-4">Qty & Ups</th>
-              <th className="p-4">Item & Sheet Wt</th>
               <th className="p-4 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-200">
-            {visibleProduction.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No production records found.</td></tr>}
+            {visibleProduction.length === 0 && <tr><td colSpan="7" className="p-4 text-center text-stone-500">No production records found.</td></tr>}
             {[...visibleProduction].sort((a,b) => {
                const dateA = new Date(a.date).getTime();
                const dateB = new Date(b.date).getTime();
                return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
             }).map(record => {
-              let itemWeightStr = '-';
-              let sheetWeightStr = '-';
-              if (record.useKg && record.linerQty && record.numberOfUps) {
-                const goodSheets = parseFloat(record.linerQty);
-                const netPaperKg = Math.max(0, parseFloat(record.useKg) - parseFloat(record.wasteSheetsKg || 0));
-                if (goodSheets > 0) {
-                  const sheetWt = (netPaperKg / goodSheets) * 1000;
-                  sheetWeightStr = sheetWt.toFixed(1) + ' g';
-                  const itemWt = sheetWt / parseFloat(record.numberOfUps);
-                  itemWeightStr = itemWt.toFixed(1) + ' g';
-                }
+              
+              const itemObj = items.find(i => (i.name === record.usedForItem) || (i.Item_Name === record.usedForItem));
+              const isRecordPpc = itemObj?.itemType === 'PPC' || itemObj?.Item_Type === 'PPC';
+
+              let upsDisplay = `${record.numberOfUps || 1} Ups`;
+              if (isRecordPpc) {
+                  upsDisplay = `Ups: ${record.commonUps || '-'}C / ${record.smallUps || '-'}S`;
               }
+
               const compName = companies.find(c => c.id === record.companyId)?.name || 'Unknown';
               return (
               <tr key={record.id} className="hover:bg-stone-50">
@@ -1356,155 +1868,18 @@ function ProductionView({ production, orders, items, companies, addLog, role, ge
                 <td className="p-4"><p className="font-bold text-stone-900">{compName}</p><p className="text-xs text-stone-500">{record.usedForItem || '-'}</p>{record.orderId && <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Order Linked</span>}</td>
                 <td className="p-4"><p className="font-medium text-stone-800">{record.millName}</p><p className="text-xs text-stone-500">Reels: {record.reelNos || record.reelNo}</p></td>
                 <td className="p-4 font-bold text-blue-700">{record.paperUsedFor}</td>
-                <td className="p-4">{record.size}</td>
-                <td className="p-4">{record.gsm} <span className="text-stone-400 text-xs">GSM</span> / {record.bf} <span className="text-stone-400 text-xs">BF</span></td>
                 <td className="p-4 font-semibold">{record.useKg} KG</td>
-                <td className="p-4"><p className="font-bold text-stone-800">{record.linerQty || '-'} <span className="text-[10px] font-normal text-stone-500">Good Qty</span></p>{record.wasteSheetsKg > 0 && <p className="text-xs text-red-500">-{record.wasteSheetsKg}kg Waste</p>}<p className="text-[10px] text-stone-500 mt-1">{record.numberOfUps || 1} Ups</p></td>
-                <td className="p-4 bg-stone-50"><div className="font-mono font-bold text-stone-800">{itemWeightStr} <span className="text-[10px] font-normal text-stone-500">/item</span></div><div className="font-mono text-stone-500 text-[10px] mt-1">{sheetWeightStr} <span className="text-[8px]">/sheet</span></div></td>
+                <td className="p-4">
+                  <p className="font-bold text-stone-800">{record.linerQty || '-'} <span className="text-[10px] font-normal text-stone-500">Good Qty</span></p>
+                  {record.wasteSheetsKg > 0 && <p className="text-xs text-red-500">-{record.wasteSheetsKg}kg Waste</p>}
+                  <p className="text-[10px] text-stone-500 mt-1 font-bold bg-stone-200 px-1 py-0.5 rounded inline-block">{upsDisplay}</p>
+                </td>
                 <td className="p-4 text-right whitespace-nowrap">
                   <button onClick={() => handleEdit(record)} className="text-blue-500 hover:text-blue-700 mr-3" title="Edit"><Edit2 className="w-5 h-5 inline" /></button>
                   {role === 'admin' && <button onClick={() => handleDelete(record.id, record.reelNos || record.reelNo)} className="text-red-500 hover:text-red-700" title="Delete"><Trash2 className="w-5 h-5 inline" /></button>}
                 </td>
               </tr>
               );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// --- ORDERS VIEW ---
-function OrdersView({ orders, production, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
-  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
-  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
-  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
-  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
-
-  const [newOrder, setNewOrder] = useState({
-    orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0
-  });
-
-  const handleAdd = async (e) => {
-    e.preventDefault();
-    const item = items.find(i => i.id === newOrder.itemId);
-    await addDoc(getColRef('orders'), { ...newOrder, itemName: item?.name || item?.Item_Name || 'Unknown Item' });
-    addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
-    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0 });
-  };
-
-  const handleDelete = async (id, itemName) => {
-    if(window.confirm(`Delete order for ${itemName}?`)) {
-      await deleteDoc(getDocRef('orders', id));
-      addLog(`Deleted order for ${itemName}`);
-    }
-  };
-
-  const toggleStatus = async (id, currentStatus) => {
-    const nextStatus = currentStatus === 'Pending' ? 'In Production' : (currentStatus === 'In Production' ? 'Completed' : 'Pending');
-    await updateDoc(getDocRef('orders', id), { status: nextStatus });
-    addLog(`Updated order status to ${nextStatus}`);
-  };
-
-  const handleExport = () => {
-    const exportData = visibleOrders.map(order => ({
-      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
-    }));
-    downloadCSV(exportData, 'orders');
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
-        <h2 className="text-2xl font-bold">Order Management</h2>
-        <div className="flex gap-2">
-          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-            <Download className="w-4 h-4" /> Export to Excel
-          </button>
-        </div>
-      </div>
-      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
-
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
-        <h3 className="font-bold mb-4">Add New Order</h3>
-        <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Order Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.orderDate} onChange={e => setNewOrder({...newOrder, orderDate: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Client Company</label><select required className="w-full p-2 border rounded" value={newOrder.companyId} onChange={e => setNewOrder({...newOrder, companyId: e.target.value, itemId: ''})}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Select Item</label><select required className="w-full p-2 border rounded" value={newOrder.itemId} onChange={e => setNewOrder({...newOrder, itemId: e.target.value})} disabled={!newOrder.companyId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newOrder.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}</select></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Order Quantity</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.orderQty} onChange={e => setNewOrder({...newOrder, orderQty: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate (₹) per Box</label><input required type="number" step="0.01" className="w-full p-2 border rounded bg-green-50" value={newOrder.rate} onChange={e => setNewOrder({...newOrder, rate: e.target.value})} /></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Planned Ups</label><select required className="w-full p-2 border rounded" value={newOrder.plannedUps} onChange={e => setNewOrder({...newOrder, plannedUps: e.target.value})}>{[1, 2, 3, 4, 5, 6, 7, 8].map(num => <option key={num} value={num}>{num}</option>)}</select></div>
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Target Delivery Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.deliveryDate} onChange={e => setNewOrder({...newOrder, deliveryDate: e.target.value})} /></div>
-          <div className="col-span-1 lg:col-span-2"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800"><Plus className="w-4 h-4" /> Save Order</button></div>
-        </form>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
-        <table className="w-full text-left min-w-[1200px]">
-          <thead className="bg-stone-100 text-stone-600 text-sm">
-            <tr>
-              <th className="p-4">Order Date</th>
-              <th className="p-4">Client</th>
-              <th className="p-4">Item Ordered</th>
-              <th className="p-4">Target Qty</th>
-              <th className="p-4">Rate & Value (₹)</th>
-              <th className="p-4 bg-green-50 text-green-800">Ready Qty</th>
-              <th className="p-4 bg-red-50 text-red-800">Pending Qty</th>
-              <th className="p-4">Status</th>
-              {role === 'admin' && <th className="p-4 text-right">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stone-200">
-            {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
-            {[...visibleOrders].sort((a,b) => {
-               const dateA = new Date(a.orderDate).getTime();
-               const dateB = new Date(b.orderDate).getTime();
-               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-            }).map(order => {
-              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
-              const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
-
-              const pLogs = production.filter(p => p.orderId === order.id);
-              const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
-              const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
-              
-              const item = items.find(i => i.id === order.itemId);
-              const ply = parseInt(item?.ply || item?.Ply || 3);
-              
-              let effectiveBase = 0;
-              if (ply <= 2) { effectiveBase = sumBoard + sumLiner; } 
-              else { effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); }
-              
-              const producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
-              const pendingQty = Math.max(0, order.orderQty - producedQty);
-              const rate = parseFloat(order.rate || 0);
-              const totalValue = rate * parseInt(order.orderQty || 0);
-
-              return (
-                <tr key={order.id} className="hover:bg-stone-50">
-                  <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
-                  <td className="p-4 font-bold text-stone-900">{compName}</td>
-                  <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
-                  <td className="p-4"><p className="font-bold text-lg">{order.orderQty}</p></td>
-                  <td className="p-4">
-                     <p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /box</p>
-                     <p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p>
-                  </td>
-                  <td className="p-4 bg-green-50/30 font-bold text-green-600 text-lg">{producedQty}</td>
-                  <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
-                  <td className="p-4">
-                    <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
-                  </td>
-                  {role === 'admin' && (
-                    <td className="p-4 text-right">
-                      <button onClick={() => handleDelete(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:text-red-700"><Trash2 className="w-5 h-5 inline" /></button>
-                    </td>
-                  )}
-                </tr>
-              )
             })}
           </tbody>
         </table>
@@ -1567,17 +1942,14 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Box Specifications Database</h2>
         <div className="flex gap-2">
           <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
             <Upload className="w-4 h-4" /> Import CSV
             <input type="file" accept=".csv" className="hidden" onChange={(e) => handleCSVImport(e, 'items', getColRef, addLog, (row, getVal) => {
-              // 1. Aggressive company matching including 'Company name'
               const compName = getVal(row, 'Company name', 'Company', 'Client', 'Customer', 'Brand') || '';
               const comp = companies.find(c => c?.name?.toLowerCase().trim() === compName.toLowerCase().trim());
-              
-              // 2. Exact matches for your CSV headers
               return {
                 companyId: comp ? comp.id : '',
                 itemType: getVal(row, 'Type', 'Item Type', 'Style', 'Category') || 'Box',
@@ -1596,14 +1968,13 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
           </button>
         </div>
       </div>
-      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {filteredItems.length} total records downloaded</p>
       
       {role === 'admin' && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
           <h3 className="font-bold mb-4">Add New Item</h3>
           <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
             <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company</label><select required className="w-full p-2 border rounded" value={newItem.companyId} onChange={e => setNewItem({...newItem, companyId: e.target.value})}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Item Type</label><select required className="w-full p-2 border rounded" value={newItem.itemType} onChange={e => setNewItem({...newItem, itemType: e.target.value})}><option value="Box">Box</option><option value="Tray">Tray</option><option value="Corrugated Sheet">Corrugated Sheet</option><option value="Partition">Partition</option></select></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Item Type</label><select required className="w-full p-2 border rounded" value={newItem.itemType} onChange={e => setNewItem({...newItem, itemType: e.target.value})}><option value="Box">Box</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC</option><option value="Lid">Lid</option><option value="Plate">Plate</option></select></div>
             <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Item Name / Code</label><input required type="text" className="w-full p-2 border rounded" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} /></div>
             <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Size (L x W x H) in mm</label><input required type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border rounded" value={newItem.size} onChange={e => setNewItem({...newItem, size: e.target.value})} /></div>
             <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Ply</label><select required className="w-full p-2 border rounded" value={newItem.ply} onChange={e => setNewItem({...newItem, ply: e.target.value})}><option value="">-</option><option value="2">2 Ply</option><option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option></select></div>
@@ -1624,8 +1995,10 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
           <option value="">All Types</option>
           <option value="Box">Box</option>
           <option value="Tray">Tray</option>
-          <option value="Corrugated Sheet">Corrugated Sheet</option>
-          <option value="Partition">Partition</option>
+          <option value="Sheet">Sheet</option>
+          <option value="PPC">PPC</option>
+          <option value="Lid">Lid</option>
+          <option value="Plate">Plate</option>
         </select>
         <select className="p-2 border rounded text-sm w-24 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.ply} onChange={e => setFilters({...filters, ply: e.target.value})}>
           <option value="">All Plies</option>
@@ -1688,14 +2061,9 @@ function CompaniesView({ companies, addLog, getColRef, getDocRef }) {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Manage Client Companies</h2>
-        <button onClick={() => downloadCSV(companies, 'client_companies')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-          <Download className="w-4 h-4" /> Export to Excel
-        </button>
       </div>
-      <p className="text-sm text-stone-500 mb-6">Total Records: {companies.length}</p>
-
       <form onSubmit={handleAdd} className="flex gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm">
         <input required type="text" placeholder="New Company Name" className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newCompany} onChange={e => setNewCompany(e.target.value)} />
         <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 flex items-center gap-2"><Plus className="w-5 h-5"/> Add Client</button>
@@ -1736,6 +2104,15 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
     }
   };
 
+  const handleChangePassword = async (id, name) => {
+    const newPwd = window.prompt(`Enter a new password for ${name}:`);
+    if (newPwd !== null && newPwd.trim() !== '') {
+      await updateDoc(getDocRef('erp_users', id), { password: newPwd.trim() });
+      addLog(`Changed password for user: ${name}`);
+      alert(`Password for ${name} has been successfully updated!`);
+    }
+  };
+
   const formatDate = (dateString) => {
     if(!dateString) return 'Never';
     return new Date(dateString).toLocaleString();
@@ -1743,14 +2120,9 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">User Management</h2>
-        <button onClick={() => downloadCSV(users, 'erp_users')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-          <Download className="w-4 h-4" /> Export to Excel
-        </button>
       </div>
-      <p className="text-sm text-stone-500 mb-6">Total Records: {users.length}</p>
-
       <form onSubmit={handleAdd} className="flex flex-col md:flex-row gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm items-center flex-wrap">
         <input required type="text" placeholder="User Full Name" className="flex-1 min-w-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newName} onChange={e => setNewName(e.target.value)} />
         <input required type="text" placeholder="Set Password" className="flex-1 min-w-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
@@ -1770,7 +2142,10 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
                 <td className="p-4"><span className={`px-2 py-1 rounded text-xs uppercase font-bold ${u.role === 'admin' ? 'bg-stone-800 text-white' : 'bg-stone-200 text-stone-700'}`}>{u.role}</span></td>
                 <td className="p-4 text-stone-600 text-sm">{assignedCompany}</td>
                 <td className="p-4 text-stone-500 text-sm">{formatDate(u.lastAccess)}</td>
-                <td className="p-4 text-right"><button onClick={() => handleDelete(u.id, u.name)} className="text-red-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-red-400" disabled={u.id === currentUserId}><Trash2 className="w-5 h-5 inline" /></button></td>
+                <td className="p-4 text-right whitespace-nowrap">
+                  <button onClick={() => handleChangePassword(u.id, u.name)} className="text-blue-500 hover:text-blue-700 mr-3" title="Change Password"><Edit2 className="w-5 h-5 inline" /></button>
+                  <button onClick={() => handleDelete(u.id, u.name)} className="text-red-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-red-400" disabled={u.id === currentUserId} title="Delete User"><Trash2 className="w-5 h-5 inline" /></button>
+                </td>
               </tr>
               );
             })}
@@ -1791,14 +2166,9 @@ function LogsView({ logs }) {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">System Activity Logs</h2>
-        <button onClick={() => downloadCSV(logs, 'activity_logs')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-          <Download className="w-4 h-4" /> Export to Excel
-        </button>
       </div>
-      <p className="text-sm text-stone-500 mb-6">Total Records: {logs.length}</p>
-
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-4 space-y-3">
         {logs.length === 0 && <p className="text-stone-500 text-center py-4">No activity recorded yet.</p>}
         {[...logs].sort((a,b) => {
