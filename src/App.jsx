@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee
+  Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp
 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // ==========================================
 // 1. FIREBASE SETUP & API KEYS (SECURED)
@@ -29,7 +30,6 @@ const db = getFirestore(app);
 // ==========================================
 // 2. HELPER FUNCTIONS (CSV)
 // ==========================================
-
 const downloadCSV = (data, filename) => {
   if (!data || data.length === 0) return alert("No data available to export.");
   const headers = Object.keys(data[0]);
@@ -154,7 +154,7 @@ export default function App() {
   const [selectedUserForLogin, setSelectedUserForLogin] = useState(null);
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [activeTab, setActiveTab] = useState('calculator');
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   useEffect(() => {
     const initAuth = async () => {
@@ -210,7 +210,7 @@ export default function App() {
 
   const login = async (userProfile) => {
     setCurrentErpUser(userProfile);
-    setActiveTab('calculator');
+    setActiveTab('dashboard');
     await updateDoc(getDocRef('erp_users', userProfile.id), { lastAccess: new Date().toISOString() });
     await addLog(`Logged in`, userProfile);
   };
@@ -292,6 +292,7 @@ export default function App() {
           <p className="text-xs text-stone-500 mt-1">Logged in as: {currentErpUser.name}</p>
         </div>
         <nav className="flex-1 px-4 space-y-2">
+          <NavButton icon={<LayoutDashboard />} label="Dashboard" isActive={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           <NavButton icon={<Calculator />} label="Calculator" isActive={activeTab === 'calculator'} onClick={() => setActiveTab('calculator')} />
           {currentErpUser.role === 'admin' && <NavButton icon={<Coins />} label="Cost Calculator" isActive={activeTab === 'costing'} onClick={() => setActiveTab('costing')} />}
           <NavButton icon={<ShoppingCart />} label="Orders" isActive={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
@@ -306,7 +307,6 @@ export default function App() {
               <NavButton icon={<Building2 />} label="Companies" isActive={activeTab === 'companies'} onClick={() => setActiveTab('companies')} />
               <NavButton icon={<Users />} label="Users & Access" isActive={activeTab === 'users'} onClick={() => setActiveTab('users')} />
               <NavButton icon={<History />} label="Activity Logs" isActive={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
-              <NavButton icon={<PieChart />} label="Admin Dashboard" isActive={activeTab === 'admin_dashboard'} onClick={() => setActiveTab('admin_dashboard')} />
             </>
           )}
         </nav>
@@ -316,30 +316,13 @@ export default function App() {
       </aside>
 
       <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen">
+        {activeTab === 'dashboard' && <DashboardView inventory={inventory} production={production} orders={orders} items={items} companies={companies} currentUser={currentErpUser} />}
         {activeTab === 'calculator' && <CalculatorView companies={companies} items={items} addLog={addLog} currentUser={currentErpUser} />}
         {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView />}
         {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'production' && <ProductionView inventory={inventory} production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        
-        {/* NEW PROPS FOR WASTAGE VIEW AUTO-LINKING */}
         {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} orders={orders} companies={companies} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        
-        {activeTab === 'admin_dashboard' && currentErpUser.role === 'admin' && (
-          <AdminDashboard
-            inventory={inventory}
-            production={production}
-            orders={orders}
-            wastageLogs={wastageLogs}
-            companies={companies}
-            items={items}
-            addLog={addLog}
-            getColRef={getColRef}
-            getDocRef={getDocRef}
-            currentUser={currentErpUser}
-          />
-        )}
-        
         {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} />}
         {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'companies' && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
@@ -358,6 +341,458 @@ function NavButton({ icon, label, isActive, onClick }) {
     </button>
   );
 }
+// --- DASHBOARD VIEW ---
+function DashboardView({ inventory, production, orders, items, companies, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  
+  const now = new Date();
+  const currentFYStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+
+  const [viewMode, setViewMode] = useState('month'); 
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedFY, setSelectedFY] = useState(currentFYStart);
+
+  const yearOptions = [];
+  for (let y = 2023; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
+
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+  let startDate, endDate;
+  if (viewMode === 'month') {
+    startDate = new Date(selectedYear, selectedMonth, 1, 0, 0, 0);
+    endDate = new Date(selectedYear, parseInt(selectedMonth) + 1, 0, 23, 59, 59);
+  } else {
+    startDate = new Date(selectedFY, 3, 1, 0, 0, 0); 
+    endDate = new Date(parseInt(selectedFY) + 1, 2, 31, 23, 59, 59); 
+  }
+
+  const getInventoryAtDate = (targetDate) => {
+    const balances = {};
+    const usageStats = {}; 
+    
+    inventory.forEach(reel => {
+      if (new Date(reel.date) > targetDate) return; 
+      const rNo = String(reel.reelNo || '').trim().toLowerCase();
+      const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+      balances[rNo] = parseFloat(reel.receivedQty || 0) - initialIssued;
+      usageStats[rNo] = { issued: 0 };
+    });
+
+    const sortedProd = [...production]
+        .filter(p => new Date(p.date) <= targetDate)
+        .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    sortedProd.forEach(p => {
+      if (!p.reelNos || !p.useKg) return;
+      const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+      if (pReels.length === 0) return;
+      
+      let remainingUse = parseFloat(p.useKg || 0);
+      pReels.forEach((rNo, index) => {
+        if (remainingUse <= 0) return;
+        let deduct = 0;
+        if (index === pReels.length - 1) { 
+            deduct = remainingUse; 
+        } else { 
+            deduct = Math.min(Math.max(balances[rNo] || 0, 0), remainingUse); 
+        }
+        if (deduct > 0) {
+          balances[rNo] = (balances[rNo] || 0) - deduct;
+          if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
+          usageStats[rNo].issued += deduct;
+          remainingUse -= deduct;
+        }
+      });
+    });
+
+    return inventory
+      .filter(reel => new Date(reel.date) <= targetDate)
+      .map(reel => {
+        const rNo = String(reel.reelNo || '').trim().toLowerCase();
+        const stats = usageStats[rNo] || { issued: 0 };
+        const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+        const issuedQty = stats.issued + initialIssued;
+        const received = parseFloat(reel.receivedQty || 0);
+        const balanceQty = Math.max(0, received - issuedQty);
+        const rate = parseFloat(reel.ratePerKg || 0);
+        const value = balanceQty * rate;
+        return { ...reel, balanceQty, value, companyId: reel.companyId || 'unassigned' };
+    });
+  };
+
+  const getRmStockAtDate = (targetDate, compId) => {
+    const inv = getInventoryAtDate(targetDate);
+    let kg = 0, val = 0;
+    inv.forEach(reel => {
+        const rCompId = reel.companyId || 'unassigned';
+        if (compId !== 'all' && rCompId !== compId) return;
+        kg += reel.balanceQty;
+        val += reel.value;
+    });
+    return { kg, val };
+  };
+
+  const getRmInward = (start, end, compId) => {
+    let kg = 0, val = 0;
+    inventory.forEach(reel => {
+        const cId = reel.companyId || 'unassigned';
+        if (compId !== 'all' && cId !== compId) return;
+        const rDate = new Date(reel.date);
+        if (rDate >= start && rDate <= end) {
+            const qty = parseFloat(reel.receivedQty || 0);
+            kg += qty;
+            val += qty * parseFloat(reel.ratePerKg || 0);
+        }
+    });
+    return { kg, val };
+  };
+
+  const getRmConsumedInPeriod = (start, end, compId) => {
+    const reelLedger = {};
+    inventory.forEach(r => {
+      const rNo = String(r.reelNo || '').trim().toLowerCase();
+      reelLedger[rNo] = { rate: parseFloat(r.ratePerKg || 0), companyId: r.companyId || 'unassigned' };
+    });
+
+    let kg = 0, val = 0;
+    production.forEach(p => {
+        const pDate = new Date(p.date);
+        if (pDate >= start && pDate <= end) {
+            const cId = p.companyId || 'unassigned';
+            if (compId !== 'all' && cId !== compId) return;
+            
+            const used = parseFloat(p.useKg || 0);
+            kg += used;
+
+            const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+            let avgRate = 0;
+            if (pReels.length > 0 && reelLedger[pReels[0]]) {
+                avgRate = reelLedger[pReels[0]].rate;
+            }
+            val += (used * avgRate);
+        }
+    });
+    return { kg, val };
+  };
+
+  const getOrderStatsAtDate = (order, targetDate) => {
+    const item = items.find(i => i.id === order.itemId);
+    const pLogsToDate = production.filter(p => p.orderId === order.id && new Date(p.date) <= targetDate);
+    
+    let producedQty = 0;
+    const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+
+    if (isPpcOrder) {
+        const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+        const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+        let totalCommonPieces = 0, totalSmallPieces = 0;
+        pLogsToDate.forEach(p => {
+            const sheets = parseFloat(p.linerQty || 0);
+            totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
+            totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
+        });
+        producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
+        if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+    } else {
+        const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+        const sumBoard = pLogsToDate.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        const sumLiner = pLogsToDate.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        const sumPaper = pLogsToDate.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        
+        const ply = parseInt(item?.ply || item?.Ply || 3);
+        let effectiveBase = 0;
+        if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
+        else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+        else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+        else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+        else effectiveBase = sumBoard + sumPaper;
+        
+        producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+    }
+
+    let dispatchedToDate = 0;
+    if (order.dispatchHistory) {
+      order.dispatchHistory.forEach(h => {
+        const hDate = new Date(h.date);
+        if (!isNaN(hDate) && hDate <= targetDate) dispatchedToDate += parseFloat(h.qty || 0);
+      });
+    }
+
+    const specWeightKg = item?.weight || item?.Weight_g ? (parseFloat(item.weight || item.Weight_g) / 1000) : 0;
+    const totalKgUsed = pLogsToDate.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
+    const dynamicAvgWeightKg = producedQty > 0 ? (totalKgUsed / producedQty) : 0;
+    const finalWeightPerBox = specWeightKg > 0 ? specWeightKg : dynamicAvgWeightKg;
+
+    return { producedQty, inStock: Math.max(0, producedQty - dispatchedToDate), finalWeightPerBox, rate: parseFloat(order.rate || 0) };
+  };
+
+  const getFgStockAtDate = (targetDate, compId) => {
+    let kg = 0, val = 0;
+    orders.forEach(order => {
+      if (compId !== 'all' && order.companyId !== compId) return;
+      if (new Date(order.orderDate) > targetDate) return;
+      const stats = getOrderStatsAtDate(order, targetDate);
+      kg += stats.inStock * stats.finalWeightPerBox;
+      val += stats.inStock * stats.rate;
+    });
+    return { kg, val };
+  };
+
+  const getSalesInPeriod = (start, end, compId) => {
+    let kg = 0, val = 0;
+    orders.forEach(order => {
+      if (compId !== 'all' && order.companyId !== compId) return;
+      let periodDispatchQty = 0;
+      if (order.dispatchHistory) {
+        order.dispatchHistory.forEach(h => {
+          const hDate = new Date(h.date);
+          if (!isNaN(hDate) && hDate >= start && hDate <= end) periodDispatchQty += parseFloat(h.qty || 0);
+        });
+      }
+      if (periodDispatchQty > 0) {
+        const stats = getOrderStatsAtDate(order, end);
+        kg += periodDispatchQty * stats.finalWeightPerBox;
+        val += periodDispatchQty * stats.rate;
+      }
+    });
+    return { kg, val };
+  };
+
+  const companyMetrics = {};
+  let grandTotalOpeningValue = 0;
+  let grandTotalClosingValue = 0;
+  let grandTotalSalesValue = 0;
+  let grandTotalProdKg = 0;
+
+  companies.forEach(comp => {
+    if (allowedCompanyId !== 'all' && comp.id !== allowedCompanyId) return;
+    
+    const openingDate = new Date(startDate.getTime() - 1); 
+    
+    const rmOpen = getRmStockAtDate(openingDate, comp.id);
+    const rmClose = getRmStockAtDate(endDate, comp.id);
+    const rmInward = getRmInward(startDate, endDate, comp.id);
+    const rmOutward = getRmConsumedInPeriod(startDate, endDate, comp.id);
+
+    const fgOpen = getFgStockAtDate(openingDate, comp.id);
+    const fgClose = getFgStockAtDate(endDate, comp.id);
+    const fgSales = getSalesInPeriod(startDate, endDate, comp.id);
+    
+    const fgProduced = {
+        kg: Math.max(0, fgClose.kg + fgSales.kg - fgOpen.kg),
+        val: Math.max(0, fgClose.val + fgSales.val - fgOpen.val)
+    };
+
+    const totalOpeningVal = rmOpen.val + fgOpen.val;
+    const totalClosingVal = rmClose.val + fgClose.val;
+
+    if (totalOpeningVal > 0 || totalClosingVal > 0 || rmInward.val > 0 || fgSales.val > 0 || rmOutward.val > 0) {
+      companyMetrics[comp.id] = {
+        name: comp.name,
+        rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose },
+        fg: { opening: fgOpen, produced: fgProduced, sales: fgSales, closing: fgClose }
+      };
+      grandTotalOpeningValue += totalOpeningVal;
+      grandTotalClosingValue += totalClosingVal;
+      grandTotalSalesValue += fgSales.val;
+      grandTotalProdKg += rmOutward.kg;
+    }
+  });
+
+  if (allowedCompanyId === 'all') {
+    const openingDate = new Date(startDate.getTime() - 1); 
+    const rmOpen = getRmStockAtDate(openingDate, 'unassigned');
+    const rmClose = getRmStockAtDate(endDate, 'unassigned');
+    const rmInward = getRmInward(startDate, endDate, 'unassigned');
+    const rmOutward = getRmConsumedInPeriod(startDate, endDate, 'unassigned');
+    
+    if (rmOpen.val > 0 || rmClose.val > 0 || rmInward.val > 0 || rmOutward.val > 0) {
+       companyMetrics['unassigned'] = {
+          name: 'Unassigned Client (Raw Material Only)',
+          rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose },
+          fg: { opening: {kg:0,val:0}, produced: {kg:0,val:0}, sales: {kg:0,val:0}, closing: {kg:0,val:0} }
+       };
+       grandTotalOpeningValue += rmOpen.val;
+       grandTotalClosingValue += rmClose.val;
+       grandTotalProdKg += rmOutward.kg;
+    }
+  }
+
+  const sortedCompanyIds = Object.keys(companyMetrics).sort((a, b) => companyMetrics[a].name.localeCompare(companyMetrics[b].name));
+  const displayPeriodName = viewMode === 'month' ? `${months[selectedMonth]} ${selectedYear}` : `FY ${selectedFY}-${parseInt(selectedFY) + 1}`;
+
+  const chartData = sortedCompanyIds.map(id => {
+    const m = companyMetrics[id];
+    const totalClosing = m.rm.closing.val + m.fg.closing.val;
+    const shortName = m.name.length > 12 ? m.name.substring(0, 12) + '...' : m.name;
+    return {
+      name: shortName,
+      fullName: m.name,
+      Sales: m.fg.sales.val,
+      ClosingValue: totalClosing,
+      ProductionKg: m.rm.outward.kg
+    };
+  }).filter(d => d.Sales > 0 || d.ClosingValue > 0 || d.ProductionKg > 0);
+
+  return (
+    <div className="max-w-7xl mx-auto pb-12">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="p-3 bg-stone-900 text-white rounded-lg"><BarChart3 className="w-6 h-6" /></div>
+        <h2 className="text-2xl font-bold">Executive Reconciliation Dashboard</h2>
+      </div>
+
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-4 items-center">
+        <div className="flex items-center gap-2 text-stone-500 mr-2 border-r pr-4 border-stone-200">
+          <CalendarDays className="w-5 h-5"/> <span className="font-bold">Period:</span>
+        </div>
+        <select className="p-2 border rounded-lg bg-stone-50 font-bold focus:ring-2 focus:ring-stone-800" value={viewMode} onChange={e => setViewMode(e.target.value)}>
+          <option value="month">Monthly View</option>
+          <option value="year">Financial Year View</option>
+        </select>
+        {viewMode === 'month' ? (
+          <div className="flex gap-2">
+            <select className="p-2 border rounded-lg" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
+              {months.map((m, idx) => <option key={idx} value={idx}>{m}</option>)}
+            </select>
+            <select className="p-2 border rounded-lg" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        ) : (
+          <select className="p-2 border rounded-lg font-bold text-blue-800 bg-blue-50" value={selectedFY} onChange={e => setSelectedFY(e.target.value)}>
+            {yearOptions.map(y => <option key={y} value={y}>FY {y}-{y + 1}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6">
+        <h3 className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-4 xl:mb-0">
+          Operational Summary: {displayPeriodName}
+        </h3>
+        {sortedCompanyIds.length > 0 && (
+          <div className="flex flex-wrap gap-3">
+             <div className="bg-stone-100 text-stone-800 px-3 py-2 rounded-lg text-xs font-bold border border-stone-200 shadow-sm">
+                Opening: ₹{grandTotalOpeningValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+             </div>
+             <div className="bg-orange-50 text-orange-800 px-3 py-2 rounded-lg text-xs font-bold border border-orange-200 shadow-sm">
+                Prod Consumed: {grandTotalProdKg.toFixed(0)} kg
+             </div>
+             <div className="bg-blue-50 text-blue-800 px-3 py-2 rounded-lg text-xs font-bold border border-blue-200 shadow-sm">
+                Sales: ₹{grandTotalSalesValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+             </div>
+             <div className="bg-green-50 text-green-800 px-3 py-2 rounded-lg text-xs font-bold border border-green-200 shadow-sm">
+                Closing: ₹{grandTotalClosingValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+             </div>
+          </div>
+        )}
+      </div>
+
+      {chartData.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 h-80">
+            <h3 className="text-sm font-bold text-stone-800 mb-4">Sales vs. Closing Stock Valuation (₹)</h3>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 25 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="name" tick={{fontSize: 10}} interval={0} angle={-45} textAnchor="end" />
+                <YAxis tickFormatter={(val) => `₹${val >= 1000 ? (val/1000).toFixed(0)+'k' : val}`} tick={{fontSize: 12}} />
+                <RechartsTooltip formatter={(value) => `₹${value.toLocaleString()}`} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px'}} />
+                <Bar dataKey="Sales" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Sales (Dispatched)" />
+                <Bar dataKey="ClosingValue" fill="#22c55e" radius={[4, 4, 0, 0]} name="Closing Stock Value" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 h-80">
+            <h3 className="text-sm font-bold text-stone-800 mb-4">Paper Consumed During Production (KG)</h3>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 25 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="name" tick={{fontSize: 10}} interval={0} angle={-45} textAnchor="end" />
+                <YAxis tickFormatter={(val) => `${val >= 1000 ? (val/1000).toFixed(1)+'k' : val}`} tick={{fontSize: 12}} />
+                <RechartsTooltip formatter={(value) => `${value.toLocaleString()} kg`} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px'}} />
+                <Bar dataKey="ProductionKg" fill="#f97316" radius={[4, 4, 0, 0]} name="Paper Consumed" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {sortedCompanyIds.length === 0 ? (
+        <div className="bg-white p-8 rounded-xl shadow-sm border border-stone-200 text-center text-stone-500 flex flex-col items-center">
+          <CalendarDays className="w-12 h-12 text-stone-300 mb-3" />
+          <p>No ledger activity found for <strong>{displayPeriodName}</strong>.</p>
+        </div>
+      ) : (
+        sortedCompanyIds.map(compId => {
+          const m = companyMetrics[compId];
+
+          return (
+            <div key={compId} className="mb-10 bg-white rounded-xl shadow-sm border border-stone-300 overflow-hidden">
+              <div className="bg-stone-900 px-6 py-4 text-white">
+                <h4 className="text-xl font-bold">{m.name}</h4>
+              </div>
+              
+              <div className="bg-stone-100 px-6 py-2 border-b border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2">
+                <Archive className="w-4 h-4"/> Raw Material Ledger (Paper Reels)
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
+                <div className="p-4 bg-white">
+                  <p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-stone-500">{m.rm.opening.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-blue-50/30">
+                  <p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowDown className="w-3 h-3"/> 2. Received (+)</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.inward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-blue-700">{m.rm.inward.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-orange-50/30">
+                  <p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowUp className="w-3 h-3"/> 3. Consumed (-)</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.outward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-orange-700">{m.rm.outward.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-green-50/30">
+                  <p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p>
+                  <p className="text-3xl font-bold text-green-700">₹{m.rm.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-bold text-stone-600">{m.rm.closing.kg.toFixed(1)} kg</p>
+                </div>
+              </div>
+
+              <div className="bg-stone-100 px-6 py-2 border-y border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2">
+                <Package className="w-4 h-4"/> Finished Goods Ledger (Boxes & PPC)
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
+                <div className="p-4 bg-white">
+                  <p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-stone-500">{m.fg.opening.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-blue-50/30">
+                  <p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Factory className="w-3 h-3"/> 2. Produced (+)</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.produced.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-blue-700">{m.fg.produced.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-orange-50/30">
+                  <p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Truck className="w-3 h-3"/> 3. Sales/Disp (-)</p>
+                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.sales.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-medium text-orange-700">{m.fg.sales.kg.toFixed(1)} kg</p>
+                </div>
+                <div className="p-4 bg-green-50/30">
+                  <p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p>
+                  <p className="text-3xl font-bold text-green-700">₹{m.fg.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
+                  <p className="text-sm font-bold text-stone-600">{m.fg.closing.kg.toFixed(1)} kg</p>
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
 
 // --- CALCULATOR VIEW ---
 function CalculatorView({ companies, items, addLog, currentUser }) {
@@ -368,7 +803,6 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
   const [selectedItem, setSelectedItem] = useState('');
   const [quantity, setQuantity] = useState('');
   
-  // PPC Specific States (Segregated)
   const [commonPerSet, setCommonPerSet] = useState(5);
   const [smallPerSet, setSmallPerSet] = useState(4);
   const [baseCommonUps, setBaseCommonUps] = useState(2); 
@@ -408,7 +842,6 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
     const flutingFactor = 1.40;
 
     if (type === 'PPC') {
-      // 1. Calculate Required Pieces (Notice inverted logic as per prompt: Common Pieces = (Small Pockets - 1) * Qty)
       const cNeeded = (parseInt(smallPerSet) - 1) * qty;
       const sNeeded = (parseInt(commonPerSet) - 1) * qty;
       
@@ -417,12 +850,10 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       const pUpsC = parseInt(plannedUpsCommon) || 1;
       const pUpsS = parseInt(plannedUpsSmall) || 1;
 
-      // 2. Yield per sheet
       const commonPiecesPerCommonSheet = baseC * pUpsC;
       const smallPiecesPerCommonSheet = baseC * pUpsC; 
       const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
 
-      // 3. Segregate Sheets Needed
       const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
       const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
       const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
@@ -430,14 +861,12 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       
       const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
 
-      // 4. Calculate Exact Board Dimensions
       const boardWidthCommon = H * baseC;
       const boardLengthCommon = ((L + W) * pUpsC) + 10;
       
       const boardWidthSmall = boardWidthCommon; 
       const boardLengthSmall = (W * 2 * pUpsS) + 10;
       
-      // 5. Area & Weight Calculation
       const areaCommon = (boardWidthCommon * boardLengthCommon) / 1000000;
       const areaSmall = (boardWidthSmall * boardLengthSmall) / 1000000;
       totalSqMeters = (commonSheetsNeeded * areaCommon) + (smallSheetsNeeded * areaSmall);
@@ -472,17 +901,11 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
           boardWidth = W + H + 20;
           break;
         case 'Tray':
-          boardLength = (W + H + H + 10);
-          boardWidth = (L + H + H + 10);
-          break;
         case 'Lid':
-          boardLength = (W + H + H + 10);
-          boardWidth = (L + H + H + 10);
+          boardLength = (L + W * 2) + 10;
+          boardWidth = (W + 2 * H) + 10;
           break;
         case 'Sheet':
-          boardLength = L;
-          boardWidth = W;
-          break;
         case 'Plate':
           boardLength = L;
           boardWidth = W;
@@ -490,7 +913,6 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
         default:
           boardLength = L; 
           boardWidth = W;
-          break;
       }
 
       const sqMetersPerBox = (boardLength * boardWidth) / 1000000;
@@ -762,7 +1184,6 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
     }
     const ord = orders.find(o => o.id === orderId);
     
-    // AUTO-PULL TOTAL ISSUED KG FROM PRODUCTION LOGS
     const orderProdLogs = production.filter(p => p.orderId === orderId);
     const totalIssuedKg = orderProdLogs.reduce((sum, p) => sum + parseFloat(p.useKg || 0), 0);
 
@@ -844,7 +1265,7 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
               <div className="space-y-4">
                 <div><p className="text-stone-400 text-xs mb-1">Net Paper Consumed</p><p className="text-2xl font-bold font-mono text-white">{netPaperConsumed > 0 ? netPaperConsumed.toFixed(2) : '0.00'} <span className="text-sm font-normal text-stone-500">kg</span></p></div>
                 <div><p className="text-stone-400 text-xs mb-1">Actual Gum Used</p><p className="text-2xl font-bold font-mono text-white">{gUsed > 0 ? gUsed.toFixed(2) : '0.00'} <span className="text-sm font-normal text-stone-500">kg</span></p></div>
-                <div className="bg-stone-800 p-4 rounded-lg border border-stone-700 mt-2"><p className="text-stone-300 text-xs uppercase mb-1 font-bold">Gum Cost / KG Paper</p><p className="text-3xl font-bold font-mono text-green-400">{gumCostPerKgPaper > 0 ? gumCostPerKgPaper.toFixed(2) : '0.00'}</p><p className="text-xs text-stone-400 mt-1">Total Gum Cost: {totalGumCost > 0 ? totalGumCost.toFixed(2) : '0.00'}</p></div>
+                <div className="bg-stone-800 p-4 rounded-lg border border-stone-700 mt-2"><p className="text-stone-300 text-xs uppercase mb-1">Gum Cost / KG Paper</p><p className="text-3xl font-bold font-mono text-green-400">{gumCostPerKgPaper > 0 ? gumCostPerKgPaper.toFixed(2) : '0.00'}</p><p className="text-xs text-stone-400 mt-1">Total Gum Cost: {totalGumCost > 0 ? totalGumCost.toFixed(2) : '0.00'}</p></div>
                 <div className="bg-stone-800 p-4 rounded-lg border border-stone-700"><p className="text-stone-300 text-xs uppercase mb-1">Total Wastage</p><p className="text-3xl font-bold font-mono text-red-400">{wastagePercent > 0 ? wastagePercent.toFixed(2) : '0.00'} <span className="text-lg">%</span></p><p className="text-xs text-stone-400 mt-1">Weight: {totalWastageKg > 0 ? totalWastageKg.toFixed(2) : '0.00'} kg</p></div>
               </div>
            </div>
@@ -894,28 +1315,33 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
   );
 }
 // --- INVENTORY VIEW ---
-function InventoryView({ inventory, production, addLog, role, getColRef, getDocRef, currentUser, companies }) {
+function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [] }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
+  // --- SUB-TAB STATE ---
+  const [activeSubTab, setActiveSubTab] = useState('Paper'); 
+
+  // --- PAPER STATE ---
   const [editingId, setEditingId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  
-  // Generic Invoice Details
   const [commonData, setCommonData] = useState({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '' });
-  
-  // Multiple Reels Array
   const emptyReel = { reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
-
   const [filters, setFilters] = useState({ company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
+
+  // --- CONSUMABLES STATE ---
+  const [consumableData, setConsumableData] = useState({ 
+      date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
+  });
+  const [consumableFilters, setConsumableFilters] = useState({ itemName: '', vendorName: '', status: 'All' });
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
     if (editingId) {
       const singleReel = reelsInput[0];
-      await updateDoc(getDocRef('inventory', editingId), { ...commonData, ...singleReel });
-      addLog(`Updated inventory reel: ${singleReel.reelNo}`);
+      await updateDoc(getDocRef('inventory', editingId), { ...commonData, ...singleReel, category: 'Paper' });
+      if(addLog) addLog(`Updated inventory reel: ${singleReel.reelNo}`);
       setEditingId(null);
       setReelsInput([{...emptyReel}]);
     } else {
@@ -924,23 +1350,28 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
       reelsInput.forEach(reel => {
         if (!reel.reelNo) return;
         const newDocRef = doc(getColRef('inventory'));
-        batch.set(newDocRef, { ...commonData, ...reel });
+        batch.set(newDocRef, { ...commonData, ...reel, category: 'Paper' });
         count++;
       });
       await batch.commit();
-      addLog(`Added ${count} inventory reels from ${commonData.millName}`);
+      if(addLog) addLog(`Added ${count} inventory reels from ${commonData.millName}`);
       setReelsInput([{...emptyReel}]); 
     }
   };
 
   const handleEdit = (reel) => { 
     setEditingId(reel.id); 
-    setCommonData({ date: reel.date, companyId: reel.companyId, millName: reel.millName, invoiceNo: reel.invoiceNo, vehicleNo: reel.vehicleNo });
-    setReelsInput([{ reelNo: reel.reelNo, size: reel.size, gsm: reel.gsm, bf: reel.bf, colour: reel.colour, receivedQty: reel.receivedQty, initialIssuedQty: reel.initialIssuedQty, ratePerKg: reel.ratePerKg }]);
+    setCommonData({ date: reel.date || '', companyId: reel.companyId || '', millName: reel.millName || '', invoiceNo: reel.invoiceNo || '', vehicleNo: reel.vehicleNo || '' });
+    setReelsInput([{ reelNo: reel.reelNo || '', size: reel.size || '', gsm: reel.gsm || '', bf: reel.bf || '', colour: reel.colour || 'Kraft', receivedQty: reel.receivedQty || '', initialIssuedQty: reel.initialIssuedQty || '', ratePerKg: reel.ratePerKg || '' }]);
     window.scrollTo({ top: 0, behavior: 'smooth' }); 
   };
   
-  const handleDelete = async (id, reelNo) => { if(window.confirm(`Delete inventory record for Reel ${reelNo}?`)) { await deleteDoc(getDocRef('inventory', id)); addLog(`Deleted inventory reel: ${reelNo}`); } };
+  const handleDelete = async (id, nameStr) => { 
+    if(window.confirm(`Delete inventory record for ${nameStr}?`)) { 
+        await deleteDoc(getDocRef('inventory', id)); 
+        if(addLog) addLog(`Deleted inventory record: ${nameStr}`); 
+    } 
+  };
   
   const cancelEdit = () => { 
     setEditingId(null); 
@@ -960,7 +1391,7 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     if (role !== 'admin') return;
     if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected records?`)) {
         await Promise.all(Array.from(selectedIds).map(id => deleteDoc(getDocRef('inventory', id))));
-        addLog(`Bulk deleted ${selectedIds.size} inventory records`);
+        if(addLog) addLog(`Bulk deleted ${selectedIds.size} inventory records`);
         setSelectedIds(new Set());
     }
   };
@@ -969,33 +1400,35 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     if (role !== 'admin') return;
     const pwd = window.prompt("WARNING: You are about to permanently delete ALL records in this inventory database.\n\nTo confirm, please enter your admin password:");
     if (pwd === null) return; 
-    if (pwd !== currentUser.password) {
+    if (pwd !== currentUser?.password) {
         alert("Incorrect password. Operation cancelled.");
         return;
     }
     if (window.confirm("FINAL WARNING: Are you absolutely sure you want to wipe the entire inventory database? This cannot be undone.")) {
         await Promise.all(inventory.map(reel => deleteDoc(getDocRef('inventory', reel.id))));
-        addLog("WIPED entire inventory database");
+        if(addLog) addLog("WIPED entire inventory database");
         alert("Inventory database completely wiped.");
         setSelectedIds(new Set());
     }
   };
 
+  const paperInventoryData = inventory.filter(i => !i.category || i.category === 'Paper');
+  
   const balances = {};
   const usageStats = {}; 
-  inventory.forEach(reel => {
+  paperInventoryData.forEach(reel => {
     const rNo = String(reel.reelNo || '').trim().toLowerCase();
     const initialIssued = parseFloat(reel.initialIssuedQty || 0);
     balances[rNo] = parseFloat(reel.receivedQty || 0) - initialIssued;
     usageStats[rNo] = { issued: 0, log: [] };
     if (initialIssued > 0) {
-        usageStats[rNo].log.push({ date: reel.date, usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
+        usageStats[rNo].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
     }
   });
 
   const sortedProd = [...production].sort((a,b) => {
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
+      const dateA = new Date(a.date || 0).getTime();
+      const dateB = new Date(b.date || 0).getTime();
       return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
   });
   
@@ -1016,13 +1449,13 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
         balances[rNo] = (balances[rNo] || 0) - deduct;
         if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
         usageStats[rNo].issued += deduct;
-        usageStats[rNo].log.push({ date: p.date, usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+        usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
         remainingUse -= deduct;
       }
     });
   });
 
-  const inventoryWithUsage = inventory.map(reel => {
+  const inventoryWithUsage = paperInventoryData.map(reel => {
     const rNo = String(reel.reelNo || '').trim().toLowerCase();
     const stats = usageStats[rNo] || { issued: 0, log: [] };
     const initialIssued = parseFloat(reel.initialIssuedQty || 0);
@@ -1031,7 +1464,7 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     const balanceQty = Math.max(0, received - issuedQty);
     const rate = parseFloat(reel.ratePerKg || 0);
     const value = balanceQty * rate;
-    return { ...reel, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log };
+    return { ...reel, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log || [] };
   });
 
   const filteredInventory = inventoryWithUsage.filter(reel => {
@@ -1043,8 +1476,8 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
     if (filters.gsm && String(reel.gsm || '') !== String(filters.gsm)) return false;
     if (filters.bf && String(reel.bf || '') !== String(filters.bf)) return false;
     if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
-    if (filters.status === 'Available' && reel.balanceQty <= 0) return false;
-    if (filters.status === 'Used' && reel.balanceQty > 0) return false;
+    if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
+    if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
     return true;
   });
 
@@ -1064,45 +1497,1171 @@ function InventoryView({ inventory, production, addLog, role, getColRef, getDocR
   };
 
   const handleExport = () => {
+    if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
     const exportData = filteredInventory.map(reel => ({
-      Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown', Date: reel.date || '', Mill_Name: reel.millName || '', Invoice_No: reel.invoiceNo || '', Vehicle_No: reel.vehicleNo || '', Reel_No: reel.reelNo || '', Size: reel.size || '', GSM: reel.gsm || '', BF: reel.bf || '', Colour: reel.colour || '', Received_Qty: reel.receivedQty || '', Initial_Issued: reel.initialIssuedQty || '0', Total_Issued_Qty: reel.issuedQty.toFixed(2), Balance_Qty: reel.balanceQty.toFixed(2), Rate_per_KG: reel.ratePerKg, Current_Value: reel.value.toFixed(2), Used_For_History: reel.usageLog.map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
+      Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown', Date: reel.date || '', Mill_Name: reel.millName || '', Invoice_No: reel.invoiceNo || '', Vehicle_No: reel.vehicleNo || '', Reel_No: reel.reelNo || '', Size: reel.size || '', GSM: reel.gsm || '', BF: reel.bf || '', Colour: reel.colour || '', Received_Qty: reel.receivedQty || '', Initial_Issued: reel.initialIssuedQty || '0', Total_Issued_Qty: (reel.issuedQty || 0).toFixed(2), Balance_Qty: (reel.balanceQty || 0).toFixed(2), Rate_per_KG: reel.ratePerKg || 0, Current_Value: (reel.value || 0).toFixed(2), Used_For_History: (reel.usageLog || []).map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
     }));
     downloadCSV(exportData, 'stock_inventory');
   };
 
-  const totalReels = filteredInventory.length;
-  const emptyReels = filteredInventory.filter(r => r.balanceQty <= 0).length;
+  const totalReels = filteredInventory.length || 0;
+  const emptyReels = filteredInventory.filter(r => (r.balanceQty || 0) <= 0).length || 0;
   const activeReels = totalReels - emptyReels;
-  const totalKgAvailable = filteredInventory.reduce((sum, r) => sum + r.balanceQty, 0);
-  const totalValueAvailable = filteredInventory.reduce((sum, r) => sum + r.value, 0);
+  const totalKgAvailable = filteredInventory.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+  const totalValueAvailable = filteredInventory.reduce((sum, r) => sum + (r.value || 0), 0);
+
+  const handleAddConsumable = async (e) => {
+    e.preventDefault();
+    await addDoc(getColRef('inventory'), { ...consumableData, category: 'Consumables' });
+    if(addLog) addLog(`Added ${consumableData.receivedQty} units of ${consumableData.itemName} to inventory.`);
+    setConsumableData({ date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' });
+  };
+
+  const rawConsumables = inventory.filter(i => i.category === 'Consumables');
+  
+  const processedConsumables = rawConsumables.map(item => {
+      const received = parseFloat(item.receivedQty || 0);
+      const issued = parseFloat(item.initialIssuedQty || 0);
+      const balance = Math.max(0, received - issued);
+      const rate = parseFloat(item.rate || 0);
+      const value = balance * rate;
+      return { ...item, balance, value };
+  });
+
+  const filteredConsumables = processedConsumables.filter(item => {
+      if (consumableFilters.itemName && item.itemName !== consumableFilters.itemName) return false;
+      if (consumableFilters.vendorName && !String(item.vendorName || '').toLowerCase().includes(consumableFilters.vendorName.toLowerCase())) return false;
+      if (consumableFilters.status === 'Available' && (item.balance || 0) <= 0) return false;
+      if (consumableFilters.status === 'Empty' && (item.balance || 0) > 0) return false;
+      return true;
+  });
+
+  const totalConsumableValue = filteredConsumables.reduce((sum, i) => sum + (i.value || 0), 0);
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-2xl font-bold">Stock Inventory</h2>
+          {role === 'admin' && activeSubTab === 'Paper' && (
+            <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button onClick={handleBulkDelete} className="bg-red-100 text-red-700 px-3 py-1.5 rounded text-sm font-bold hover:bg-red-200 transition">
+                  Delete Selected ({selectedIds.size})
+                </button>
+              )}
+              <button onClick={handleWipeDatabase} className="bg-red-600 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-red-700 transition flex items-center gap-1 shadow-sm">
+                Wipe All
+              </button>
+            </div>
+          )}
+        </div>
+        {activeSubTab === 'Paper' && (
+          <div className="flex gap-2">
+            <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
+              Import CSV
+              <input type="file" accept=".csv" className="hidden" onChange={(e) => {
+                  if (typeof handleCSVImport === 'function') {
+                      handleCSVImport(e, 'inventory', getColRef, addLog, (row, getVal) => {
+                          const compName = getVal(row, 'Company name', 'Company', 'Client', 'Customer', 'Brand') || '';
+                          const comp = companies.find(c => c?.name?.toLowerCase().trim() === compName.toLowerCase().trim());
+                          const rowCompanyId = comp ? comp.id : (allowedCompanyId !== 'all' ? allowedCompanyId : '');
+
+                          let rawDate = getVal(row, 'Date', 'date', 'Date / Ref', 'Receipt Date');
+                          let formattedDate = new Date().toISOString().split('T')[0];
+                          if (rawDate) {
+                              const d = new Date(rawDate);
+                              if (!isNaN(d.getTime())) formattedDate = d.toISOString().split('T')[0];
+                              else formattedDate = rawDate; 
+                          }
+                          return {
+                              companyId: rowCompanyId, date: formattedDate,
+                              millName: getVal(row, 'Party Name', 'Mill Name') || '',
+                              invoiceNo: getVal(row, 'Invoice No', 'Invoice_No') || '',
+                              vehicleNo: getVal(row, 'Vehicle No', 'Vehicle_No') || '',
+                              reelNo: getVal(row, 'Reel No', 'Reel_No') || '',
+                              size: getVal(row, 'Size', 'size') || '',
+                              gsm: getVal(row, 'GSM', 'gsm') || '',
+                              bf: getVal(row, 'BF', 'bf') || '',
+                              colour: getVal(row, 'Colour', 'Color') || 'Kraft',
+                              receivedQty: getVal(row, 'Received Qty', 'Received_Qty') || '',
+                              initialIssuedQty: getVal(row, 'Issue Qty', 'Issued Qty') || '',
+                              ratePerKg: getVal(row, 'Rate/Kg', 'Rate per KG') || '',
+                              category: 'Paper'
+                          };
+                      });
+                  }
+              }} />
+            </label>
+            <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-2 mb-6 border-b border-stone-200">
+        <button 
+            onClick={() => setActiveSubTab('Paper')}
+            className={`px-6 py-3 font-bold text-sm flex items-center gap-2 transition-colors border-b-2 ${activeSubTab === 'Paper' ? 'border-stone-900 text-stone-900' : 'border-transparent text-stone-500 hover:text-stone-700'}`}
+        >
+            Paper Reels
+        </button>
+        <button 
+            onClick={() => setActiveSubTab('Consumables')}
+            className={`px-6 py-3 font-bold text-sm flex items-center gap-2 transition-colors border-b-2 ${activeSubTab === 'Consumables' ? 'border-stone-900 text-stone-900' : 'border-transparent text-stone-500 hover:text-stone-700'}`}
+        >
+            Other Consumables
+        </button>
+      </div>
+
+      {activeSubTab === 'Paper' ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">#</div>
+              <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Reels (Active / Empty)</p><p className="text-2xl font-bold text-stone-900">{activeReels} <span className="text-stone-300">/</span> <span className="text-stone-400">{emptyReels}</span></p></div>
+            </div>
+            <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-green-50 text-green-600 rounded-lg">KG</div>
+              <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Available (KG)</p><p className="text-2xl font-bold text-stone-900">{totalKgAvailable.toFixed(1)} kg</p></div>
+            </div>
+            <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-yellow-50 text-yellow-600 rounded-lg">₹</div>
+              <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Available Stock Value</p><p className="text-2xl font-bold text-stone-900">₹{totalValueAvailable.toLocaleString('en-IN', {maximumFractionDigits:0})}</p></div>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
+            <h3 className="font-bold mb-4 flex items-center gap-2">{editingId ? 'Edit Reel Entry' : 'Receive New Invoice'}</h3>
+            <form onSubmit={handleAddOrUpdate} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end bg-stone-50 p-4 rounded-lg border border-stone-200">
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={commonData.date} onChange={e => setCommonData({...commonData, date: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Company</label><select required className="w-full p-2 border rounded" value={commonData.companyId} onChange={e => setCommonData({...commonData, companyId: e.target.value})} disabled={allowedCompanyId !== 'all'}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" value={commonData.invoiceNo} onChange={e => setCommonData({...commonData, invoiceNo: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" value={commonData.vehicleNo} onChange={e => setCommonData({...commonData, vehicleNo: e.target.value})} /></div>
+              </div>
+
+              <div className="space-y-3">
+                {reelsInput.map((reel, idx) => (
+                  <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end">
+                    <div className="flex-1 min-w-[100px]"><label className="block text-[10px] text-stone-500 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-sm" value={reel.reelNo} onChange={e => handleReelChange(idx, 'reelNo', e.target.value)} /></div>
+                    <div className="w-20"><label className="block text-[10px] text-stone-500 mb-1">Size</label><input required type="text" className="w-full p-2 border rounded text-sm" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} /></div>
+                    <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} /></div>
+                    <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} /></div>
+                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded text-sm" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
+                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Recv (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50 text-sm" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} /></div>
+                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50 text-sm" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} /></div>
+                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Rate (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded text-sm" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} /></div>
+                    {!editingId && reelsInput.length > 1 && (
+                      <button type="button" onClick={() => removeReelRow(idx)} className="p-2 mb-1 text-red-500 hover:bg-red-50 rounded">Delete</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2 pt-4 border-t border-stone-200">
+                {!editingId && (
+                  <button type="button" onClick={addReelRow} className="bg-stone-100 text-stone-700 px-4 py-2 rounded text-sm font-bold hover:bg-stone-200 flex items-center gap-2">
+                    Add Another Reel
+                  </button>
+                )}
+                <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">
+                  {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'} to Inventory`}
+                </button>
+                {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6 font-bold">Cancel</button>}
+              </div>
+            </form>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-2 text-stone-500 mr-2">Filter:</div>
+            {allowedCompanyId === 'all' && (
+               <input type="text" placeholder="Company..." className="p-2 border rounded text-sm w-32 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
+            )}
+            <input type="text" placeholder="Mill / Party" className="p-2 border rounded text-sm w-28 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.millName} onChange={e => setFilters({...filters, millName: e.target.value})} />
+            <input type="text" placeholder="Reel No" className="p-2 border rounded text-sm w-24 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.searchReel} onChange={e => setFilters({...filters, searchReel: e.target.value})} />
+            <input type="text" placeholder="Size" className="p-2 border rounded text-sm w-20 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.size} onChange={e => setFilters({...filters, size: e.target.value})} />
+            <input type="text" placeholder="GSM" className="p-2 border rounded text-sm w-16 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.gsm} onChange={e => setFilters({...filters, gsm: e.target.value})} />
+            <input type="text" placeholder="BF" className="p-2 border rounded text-sm w-16 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.bf} onChange={e => setFilters({...filters, bf: e.target.value})} />
+            <select className="p-2 border rounded text-sm" value={filters.colour} onChange={e => setFilters({...filters, colour: e.target.value})}><option value="">All Colours</option><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select>
+            <select className="p-2 border rounded text-sm font-bold bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}><option value="All">All Statuses</option><option value="Available">Only Available (Balance &gt; 0)</option><option value="Used">Used / Empty (Balance = 0)</option></select>
+            <button onClick={() => setFilters({company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-2 transition">Clear</button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+            <table className="w-full text-left min-w-[1200px]">
+              <thead className="bg-stone-100 text-stone-600 text-sm">
+                <tr>
+                  {role === 'admin' && <th className="p-4 w-10"><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === filteredInventory.length && filteredInventory.length > 0}/></th>}
+                  <th className="p-4">Company</th>
+                  <th className="p-4">Date / Ref</th>
+                  <th className="p-4">Mill / Party</th>
+                  <th className="p-4">Reel No</th>
+                  <th className="p-4">Specs</th>
+                  <th className="p-4">Received</th>
+                  <th className="p-4 bg-orange-50 text-orange-800">Issued (Auto)</th>
+                  <th className="p-4 bg-green-50 text-green-800">Balance</th>
+                  <th className="p-4">Rate & Value (₹)</th>
+                  <th className="p-4">Used For (Production Link)</th>
+                  {role === 'admin' && <th className="p-4 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200 text-sm">
+                {filteredInventory.length === 0 && <tr><td colSpan="12" className="p-4 text-center text-stone-500">No inventory records found.</td></tr>}
+                {[...filteredInventory].sort((a,b) => {
+                   const dateA = new Date(a.date || 0).getTime();
+                   const dateB = new Date(b.date || 0).getTime();
+                   return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+                }).map(reel => {
+                  const isAvailable = (reel.balanceQty || 0) > 0;
+                  const compName = companies.find(c => c.id === reel.companyId)?.name || 'Unassigned';
+                  return (
+                  <tr key={reel.id} className={`hover:bg-stone-50 ${!isAvailable ? 'opacity-60 bg-stone-50' : ''}`}>
+                    {role === 'admin' && <td className="p-4"><input type="checkbox" checked={selectedIds.has(reel.id)} onChange={() => toggleSelection(reel.id)} /></td>}
+                    <td className="p-4 font-bold text-stone-900">{compName}</td>
+                    <td className="p-4"><div className="font-medium">{reel.date || '-'}</div><div className="text-[10px] text-stone-400">Veh: {reel.vehicleNo || '-'}</div></td>
+                    <td className="p-4 font-medium text-stone-800">{reel.millName || '-'}</td>
+                    <td className="p-4"><span className={`font-mono font-bold text-lg ${isAvailable ? 'text-blue-700' : 'text-stone-500'}`}>{reel.reelNo || '-'}</span>{!isAvailable && <span className="ml-2 text-[10px] bg-stone-300 px-1 py-0.5 rounded text-stone-700 font-bold">EMPTY</span>}</td>
+                    <td className="p-4 text-stone-600"><div>{reel.size || '-'}</div><div className="text-xs">{reel.gsm || '-'} GSM | {reel.bf || '-'} BF</div><div className="text-xs">{reel.colour || '-'}</div></td>
+                    <td className="p-4 font-semibold">{reel.receivedQty || 0} kg</td>
+                    <td className="p-4 font-semibold text-orange-600 bg-orange-50/30">{(reel.issuedQty || 0) > 0 ? (reel.issuedQty || 0).toFixed(1) : '-'} kg</td>
+                    <td className="p-4 bg-green-50/30"><span className={`font-bold text-lg ${isAvailable ? 'text-green-700' : 'text-stone-500'}`}>{(reel.balanceQty || 0).toFixed(1)} kg</span></td>
+                    <td className="p-4"><div className="text-xs text-stone-500 mb-1">Rate: ₹{parseFloat(reel.ratePerKg || 0).toFixed(2)}/kg</div><div className="font-bold text-stone-800 text-base">₹{parseFloat(reel.value || 0).toFixed(2)}</div></td>
+                    <td className="p-4">{(reel.usageLog || []).length === 0 ? <span className="text-stone-400 italic text-xs">Not used yet</span> : (<ul className="text-xs space-y-1">{(reel.usageLog || []).map((log, idx) => (<li key={idx} className="flex gap-2"><span className="text-stone-400">{log.date || '-'}</span><span className="font-medium text-stone-700">{log.usedFor || '-'}</span><span className="text-orange-600 font-mono">({log.kg || 0}kg)</span></li>))}</ul>)}</td>
+                    {role === 'admin' && <td className="p-4 text-right whitespace-nowrap"><button onClick={() => handleEdit(reel)} className="text-blue-500 hover:text-blue-700 mr-3" title="Edit">Edit</button><button onClick={() => handleDelete(reel.id, reel.reelNo)} className="text-red-500 hover:text-red-700" title="Delete">Delete</button></td>}
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">#</div>
+              <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Consumable Entries</p><p className="text-2xl font-bold text-stone-900">{filteredConsumables.length || 0}</p></div>
+            </div>
+            <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-green-50 text-green-600 rounded-lg">₹</div>
+              <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Consumables Stock Value</p><p className="text-2xl font-bold text-stone-900">₹{totalConsumableValue.toLocaleString('en-IN', {maximumFractionDigits:0})}</p></div>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
+            <h3 className="font-bold mb-4 flex items-center gap-2">Receive Consumables</h3>
+            <form onSubmit={handleAddConsumable} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={consumableData.date} onChange={e => setConsumableData({...consumableData, date: e.target.value})} /></div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Material Type</label>
+                  <select required className="w-full p-2 border rounded bg-stone-50 font-bold" value={consumableData.itemName} onChange={e => setConsumableData({...consumableData, itemName: e.target.value})}>
+                    <option value="Gum">Gum (Adhesive)</option>
+                    <option value="Stitching Wire">Stitching Wire</option>
+                    <option value="Stretch Film">Stretch Film</option>
+                    <option value="Strapping Tape">Strapping Tape</option>
+                  </select>
+                </div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Vendor Name</label><input required type="text" className="w-full p-2 border rounded" value={consumableData.vendorName} onChange={e => setConsumableData({...consumableData, vendorName: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Invoice No. (Optional)</label><input type="text" className="w-full p-2 border rounded" value={consumableData.invoiceNo} onChange={e => setConsumableData({...consumableData, invoiceNo: e.target.value})} /></div>
+                
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Received Qty (KG / Rolls)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50" value={consumableData.receivedQty} onChange={e => setConsumableData({...consumableData, receivedQty: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Manual Issue (Consumption)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50" value={consumableData.initialIssuedQty} onChange={e => setConsumableData({...consumableData, initialIssuedQty: e.target.value})} /></div>
+                <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Rate per Unit (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded" value={consumableData.rate} onChange={e => setConsumableData({...consumableData, rate: e.target.value})} /></div>
+                
+                <div className="col-span-1">
+                  <button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">
+                    Save Record
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-2 text-stone-500 mr-2">Filter:</div>
+            <select className="p-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-stone-800" value={consumableFilters.itemName} onChange={e => setConsumableFilters({...consumableFilters, itemName: e.target.value})}>
+              <option value="">All Materials</option>
+              <option value="Gum">Gum</option>
+              <option value="Stitching Wire">Stitching Wire</option>
+              <option value="Stretch Film">Stretch Film</option>
+              <option value="Strapping Tape">Strapping Tape</option>
+            </select>
+            <input type="text" placeholder="Vendor Name..." className="p-2 border rounded text-sm w-48 focus:outline-none focus:ring-2 focus:ring-stone-800" value={consumableFilters.vendorName} onChange={e => setConsumableFilters({...consumableFilters, vendorName: e.target.value})} />
+            <select className="p-2 border rounded text-sm font-bold bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-800" value={consumableFilters.status} onChange={e => setConsumableFilters({...consumableFilters, status: e.target.value})}>
+              <option value="All">All Statuses</option>
+              <option value="Available">Only Available</option>
+              <option value="Empty">Empty (Fully Consumed)</option>
+            </select>
+            <button onClick={() => setConsumableFilters({itemName: '', vendorName: '', status: 'All'})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-2 transition">Clear</button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+            <table className="w-full text-left min-w-[800px]">
+              <thead className="bg-stone-100 text-stone-600 text-sm">
+                <tr>
+                  <th className="p-4">Date / Invoice</th>
+                  <th className="p-4">Material</th>
+                  <th className="p-4">Vendor</th>
+                  <th className="p-4">Received</th>
+                  <th className="p-4 bg-orange-50 text-orange-800">Issued</th>
+                  <th className="p-4 bg-green-50 text-green-800">Balance</th>
+                  <th className="p-4">Rate & Value (₹)</th>
+                  {role === 'admin' && <th className="p-4 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200 text-sm">
+                {filteredConsumables.length === 0 && <tr><td colSpan="8" className="p-4 text-center text-stone-500">No consumable records found.</td></tr>}
+                {[...filteredConsumables].sort((a,b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()).map(item => {
+                  const isAvailable = (item.balance || 0) > 0;
+                  return (
+                  <tr key={item.id} className={`hover:bg-stone-50 ${!isAvailable ? 'opacity-60 bg-stone-50' : ''}`}>
+                    <td className="p-4"><div className="font-medium">{item.date || '-'}</div><div className="text-[10px] text-stone-400">Inv: {item.invoiceNo || '-'}</div></td>
+                    <td className="p-4"><span className="font-bold text-stone-900 bg-stone-200 px-2 py-1 rounded">{item.itemName || '-'}</span>{!isAvailable && <span className="ml-2 text-[10px] bg-stone-300 px-1 py-0.5 rounded text-stone-700 font-bold">EMPTY</span>}</td>
+                    <td className="p-4 font-medium text-stone-800">{item.vendorName || '-'}</td>
+                    <td className="p-4 font-semibold">{item.receivedQty || 0}</td>
+                    <td className="p-4 font-semibold text-orange-600 bg-orange-50/30">{(item.initialIssuedQty || 0) > 0 ? item.initialIssuedQty : '-'}</td>
+                    <td className="p-4 bg-green-50/30"><span className={`font-bold text-lg ${isAvailable ? 'text-green-700' : 'text-stone-500'}`}>{(item.balance || 0).toFixed(1)}</span></td>
+                    <td className="p-4"><div className="text-xs text-stone-500 mb-1">Rate: ₹{parseFloat(item.rate || 0).toFixed(2)}</div><div className="font-bold text-stone-800 text-base">₹{parseFloat(item.value || 0).toFixed(2)}</div></td>
+                    {role === 'admin' && <td className="p-4 text-right whitespace-nowrap"><button onClick={() => handleDelete(item.id, item.itemName)} className="text-red-500 hover:text-red-700" title="Delete">Delete</button></td>}
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- PRODUCTION VIEW ---
+function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
+  const visibleProduction = allowedCompanyId === 'all' ? production : production.filter(p => p.companyId === allowedCompanyId);
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [editingId, setEditingId] = useState(null);
+  const [newRecord, setNewRecord] = useState({ 
+    date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', 
+    size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
+  });
+
+  const availableMills = [...new Set(inventory.filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId)).map(i => i.millName).filter(Boolean))];
+
+  const handleOrderLink = (orderId) => {
+    if (!orderId) {
+      setNewRecord({...newRecord, orderId: ''});
+      return;
+    }
+    const ord = orders.find(o => o.id === orderId);
+    if (ord) {
+      setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
+    }
+  };
+
+  const handleAddOrUpdate = async (e) => {
+    e.preventDefault();
+    if (editingId) {
+      await updateDoc(getDocRef('production', editingId), newRecord);
+      addLog(`Updated production record: Reels ${newRecord.reelNos}`);
+      setEditingId(null);
+    } else {
+      await addDoc(getColRef('production'), newRecord);
+      addLog(`Added production record: Reels ${newRecord.reelNos}`);
+    }
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+  };
+
+  const handleEdit = (record) => {
+    setEditingId(record.id);
+    setNewRecord(record);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+  };
+
+  const handleDelete = async (id, reelNos) => {
+    if(window.confirm(`Delete production record for Reels ${reelNos}?`)) {
+      await deleteDoc(getDocRef('production', id));
+      addLog(`Deleted production record: Reels ${reelNos}`);
+    }
+  };
+
+  const handleExport = () => {
+    if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
+    const exportData = visibleProduction.map(record => {
+      const compName = companies.find(c => c.id === record.companyId)?.name || 'Unknown';
+      const orderInfo = record.orderId ? (() => { const o = orders.find(o => o.id === record.orderId); return o ? `Order: ${o.orderQty}x ${o.itemName || o.Item_Name}` : 'Unknown Order'; })() : 'Standalone Production';
+      return { Date: record.date || '', Company: compName, Linked_Order: orderInfo, MillName: record.millName || '', Reels: record.reelNos || record.reelNo || '', PaperUsedFor: record.paperUsedFor || '', UsedForItem: record.usedForItem || '', Size_mm: record.size || '', GSM: record.gsm || '', BF: record.bf || '', UseKG: record.useKg || '', Good_Sheets_Qty: record.linerQty || '', Waste_Sheets_KG: record.wasteSheetsKg || '', Ups: record.numberOfUps || '', Common_Ups: record.commonUps || '', Small_Ups: record.smallUps || '' };
+    });
+    downloadCSV(exportData, 'production_records');
+  };
+
+  const selectedItemObj = items.find(i => (i.name === newRecord.usedForItem) || (i.Item_Name === newRecord.usedForItem));
+  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.Item_Type === 'PPC';
+
+  const groupedProduction = visibleProduction.reduce((acc, record) => {
+    const cId = record.companyId || 'unassigned';
+    if (!acc[cId]) acc[cId] = [];
+    acc[cId].push(record);
+    return acc;
+  }, {});
+
+  const sortedCompanyIds = Object.keys(groupedProduction).sort((a, b) => {
+    const nameA = a === 'unassigned' ? 'Z_Unassigned' : (companies.find(c => c.id === a)?.name || '');
+    const nameB = b === 'unassigned' ? 'Z_Unassigned' : (companies.find(c => c.id === b)?.name || '');
+    return nameA.localeCompare(nameB);
+  });
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Stock Inventory (Raw Materials)</h2>
-        {role === 'admin' && (
-          <div className="flex items-center gap-2">
-            {selectedIds.size > 0 && (
-              <button onClick={handleBulkDelete} className="bg-red-100 text-red-700 px-3 py-1.5 rounded text-sm font-bold hover:bg-red-200 transition">
-                Delete Selected ({selectedIds.size})
-              </button>
-            )}
-            <button onClick={handleWipeDatabase} className="bg-red-600 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-red-700 transition flex items-center gap-1 shadow-sm">
-              <Trash2 className="w-4 h-4" /> Wipe All
-            </button>
-          </div>
-        )}
+        <h2 className="text-2xl font-bold">Production Log</h2>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
+            Export to Excel
+          </button>
+        </div>
       </div>
-      <form onSubmit={handleAddOrUpdate} className="flex gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm">
+      
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
+        <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
+        
+        <div className="col-span-1 md:col-span-6 bg-blue-50 p-4 rounded-lg border border-blue-100 flex flex-col md:flex-row gap-4 items-center mb-6">
+          <div className="w-full">
+            <label className="block text-xs font-bold text-blue-800 mb-1">Link to Pending Order (Optional)</label>
+            <select className="w-full p-2 border border-blue-200 rounded text-blue-900 bg-white" value={newRecord.orderId || ''} onChange={e => handleOrderLink(e.target.value)}>
+              <option value="">-- Standalone Production (No Order Linked) --</option>
+              {visibleOrders.filter(o => o.status !== 'Completed').map(o => {
+                const comp = companies.find(c => c.id === o.companyId)?.name || 'Unknown';
+                return <option key={o.id} value={o.id}>{comp} - {o.itemName || o.Item_Name} (Order: {o.orderQty} pcs)</option>;
+              })}
+            </select>
+          </div>
+          <div className="w-full text-xs text-blue-700">Linking an order will automatically update the Ready Quantity and Pending Quantity in your Orders & Finished Goods tab!</div>
+        </div>
+
+        <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date</label><input required type="date" className="w-full p-2 border rounded" value={newRecord.date} onChange={e => setNewRecord({...newRecord, date: e.target.value})} /></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company (For Report)</label><select required className="w-full p-2 border rounded" value={newRecord.companyId} onChange={e => setNewRecord({...newRecord, companyId: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          
+          <div className="col-span-1 md:col-span-3">
+            <label className="block text-xs text-stone-500 mb-1">Mill Name</label>
+            <input required list="mill-options" className="w-full p-2 border rounded bg-white" placeholder="Type or select mill..." value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} />
+            <datalist id="mill-options">
+               {availableMills.map((m, i) => <option key={i} value={m} />)}
+            </datalist>
+          </div>
+
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Reel No(s) (Comma separated)</label><input required type="text" placeholder="e.g. 101, 102, 105" className="w-full p-2 border rounded" value={newRecord.reelNos} onChange={e => setNewRecord({...newRecord, reelNos: e.target.value})} /></div>
+          
+          <div className="col-span-1 md:col-span-2">
+            <label className="block text-xs font-bold text-stone-700 mb-1">Paper Used For</label>
+            <select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}>
+              <option value="Paper">Paper (1-Ply)</option>
+              <option value="Liner">Liner (2-Ply)</option>
+              <option value="Board">Board (Combined)</option>
+            </select>
+          </div>
+
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
+          
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Use KG</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.useKg} onChange={e => setNewRecord({...newRecord, useKg: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Good Qty (Sheets)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-blue-50" value={newRecord.linerQty} onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Waste (KG)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-red-50" value={newRecord.wasteSheetsKg} onChange={e => setNewRecord({...newRecord, wasteSheetsKg: e.target.value})} /></div>
+          
+          {isPPC ? (
+              <div className="col-span-1 md:col-span-3 grid grid-cols-2 gap-2 p-2 bg-blue-50 border border-blue-200 rounded">
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.commonUps} onChange={e => setNewRecord({...newRecord, commonUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.smallUps} onChange={e => setNewRecord({...newRecord, smallUps: e.target.value})} /></div>
+              </div>
+          ) : (
+              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Number of Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newRecord.numberOfUps} onChange={e => setNewRecord({...newRecord, numberOfUps: e.target.value})} /></div>
+          )}
+
+          <div className="col-span-1 lg:col-span-6 flex gap-2 mt-2">
+            <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? 'Update Record' : 'Save Production Record'}</button>
+            {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6">Cancel</button>}
+          </div>
+        </form>
+      </div>
+
+      {(() => {
+        const itemTotals = visibleProduction.reduce((acc, record) => {
+          if (record.usedForItem) acc[record.usedForItem] = (acc[record.usedForItem] || 0) + (parseFloat(record.useKg) || 0);
+          return acc;
+        }, {});
+        if (Object.keys(itemTotals).length === 0) return null;
+        return (
+          <div className="bg-white rounded-xl shadow-sm border border-stone-200 mb-8 overflow-hidden">
+            <div className="bg-stone-100 p-4 border-b border-stone-200"><h3 className="font-bold text-stone-800">Total Paper Usage by Item</h3></div>
+            <div className="p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              {Object.entries(itemTotals).sort((a,b) => b[1] - a[1]).map(([itemName, totalKg]) => (
+                <div key={itemName} className="bg-stone-50 p-3 rounded-lg border border-stone-200 text-center"><p className="text-xs text-stone-500 truncate mb-1" title={itemName}>{itemName}</p><p className="font-bold text-lg text-stone-900">{totalKg.toFixed(1)} <span className="text-sm font-normal text-stone-500">KG</span></p></div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {sortedCompanyIds.length === 0 && (
+        <div className="bg-white p-8 rounded-xl shadow-sm border border-stone-200 text-center text-stone-500">
+          No production records found.
+        </div>
+      )}
+
+      {sortedCompanyIds.map(compId => {
+        const compName = compId === 'unassigned' ? 'Unassigned / Unknown Client' : (companies.find(c => c.id === compId)?.name || 'Unknown Company');
+        const records = groupedProduction[compId];
+
+        return (
+          <div key={compId} className="mb-8">
+            <h4 className="text-xl font-bold text-stone-800 mb-3 pl-3 border-l-4 border-stone-800">{compName}</h4>
+            <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+              <table className="w-full text-left min-w-[1100px]">
+                <thead className="bg-stone-100 text-stone-600 text-sm">
+                  <tr>
+                    <th className="p-4">Date</th>
+                    <th className="p-4">Item Details</th>
+                    <th className="p-4">Mill Name & Reel No(s)</th>
+                    <th className="p-4">Used For</th>
+                    <th className="p-4">Use KG</th>
+                    <th className="p-4">Qty & Ups</th>
+                    <th className="p-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-200">
+                  {[...records].sort((a,b) => {
+                     const dateA = new Date(a.date).getTime();
+                     const dateB = new Date(b.date).getTime();
+                     return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+                  }).map(record => {
+                    const itemObj = items.find(i => (i.name === record.usedForItem) || (i.Item_Name === record.usedForItem));
+                    const isRecordPpc = itemObj?.itemType === 'PPC' || itemObj?.Item_Type === 'PPC';
+
+                    let upsDisplay = `${record.numberOfUps || 1} Ups`;
+                    if (isRecordPpc) upsDisplay = `Ups: ${record.commonUps || '-'}C / ${record.smallUps || '-'}S`;
+
+                    return (
+                    <tr key={record.id} className="hover:bg-stone-50">
+                      <td className="p-4 whitespace-nowrap">{record.date}</td>
+                      <td className="p-4">
+                        <p className="font-bold text-stone-900">{record.usedForItem || '-'}</p>
+                        {record.orderId && <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Order Linked</span>}
+                      </td>
+                      <td className="p-4"><p className="font-medium text-stone-800">{record.millName}</p><p className="text-xs text-stone-500">Reels: {record.reelNos || record.reelNo}</p></td>
+                      <td className="p-4 font-bold text-blue-700">{record.paperUsedFor}</td>
+                      <td className="p-4 font-semibold">{record.useKg} KG</td>
+                      <td className="p-4">
+                        <p className="font-bold text-stone-800">{record.linerQty || '-'} <span className="text-[10px] font-normal text-stone-500">Good Qty</span></p>
+                        {record.wasteSheetsKg > 0 && <p className="text-xs text-red-500">-{record.wasteSheetsKg}kg Waste</p>}
+                        <p className="text-[10px] text-stone-500 mt-1 font-bold bg-stone-200 px-1 py-0.5 rounded inline-block">{upsDisplay}</p>
+                      </td>
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <button onClick={() => handleEdit(record)} className="text-blue-500 hover:text-blue-700 mr-3" title="Edit">Edit</button>
+                        {role === 'admin' && <button onClick={() => handleDelete(record.id, record.reelNos || record.reelNo)} className="text-red-500 hover:text-red-700" title="Delete">Delete</button>}
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+// --- ORDERS VIEW ---
+function OrdersView({ orders, production, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [newOrder, setNewOrder] = useState({
+    orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0,
+    commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: ''
+  });
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    const item = items.find(i => i.id === newOrder.itemId);
+    const orderData = { ...newOrder, itemName: item?.name || item?.Item_Name || 'Unknown Item' };
+    
+    if (item?.itemType !== 'PPC' && item?.Item_Type !== 'PPC') {
+        delete orderData.commonPerSet;
+        delete orderData.smallPerSet;
+        delete orderData.commonUps;
+        delete orderData.smallUps;
+        delete orderData.plannedUpsCommon;
+        delete orderData.plannedUpsSmall;
+    }
+
+    await addDoc(getColRef('orders'), orderData);
+    addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
+    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '' });
+  };
+
+  const handleDelete = async (id, itemName) => {
+    if(window.confirm(`Delete order for ${itemName}?`)) {
+      await deleteDoc(getDocRef('orders', id));
+      addLog(`Deleted order for ${itemName}`);
+    }
+  };
+
+  const toggleStatus = async (id, currentStatus) => {
+    const nextStatus = currentStatus === 'Pending' ? 'In Production' : (currentStatus === 'In Production' ? 'Completed' : 'Pending');
+    await updateDoc(getDocRef('orders', id), { status: nextStatus });
+    addLog(`Updated order status to ${nextStatus}`);
+  };
+
+  const handleExport = () => {
+    if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
+    const exportData = visibleOrders.map(order => ({
+      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
+    }));
+    downloadCSV(exportData, 'orders');
+  };
+
+  const selectedItemObj = items.find(i => i.id === newOrder.itemId);
+  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.Item_Type === 'PPC';
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-2xl font-bold">Order Management</h2>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
+            Export
+          </button>
+        </div>
+      </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
+
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
+        <h3 className="font-bold mb-4">Add New Order</h3>
+        <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Order Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.orderDate} onChange={e => setNewOrder({...newOrder, orderDate: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Client Company</label><select required className="w-full p-2 border rounded" value={newOrder.companyId} onChange={e => setNewOrder({...newOrder, companyId: e.target.value, itemId: ''})}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Select Item</label><select required className="w-full p-2 border rounded" value={newOrder.itemId} onChange={e => setNewOrder({...newOrder, itemId: e.target.value})} disabled={!newOrder.companyId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newOrder.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}</select></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">{isPPC ? 'Order Qty (Sets)' : 'Order Quantity'}</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.orderQty} onChange={e => setNewOrder({...newOrder, orderQty: e.target.value})} /></div>
+          
+          {isPPC ? (
+              <div className="col-span-1 md:col-span-4 grid grid-cols-6 gap-2 p-3 bg-blue-50 border border-blue-200 rounded">
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonPerSet} onChange={e => setNewOrder({...newOrder, commonPerSet: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallPerSet} onChange={e => setNewOrder({...newOrder, smallPerSet: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Com. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonUps} onChange={e => setNewOrder({...newOrder, commonUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Sml. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallUps} onChange={e => setNewOrder({...newOrder, smallUps: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (C)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsCommon} onChange={e => setNewOrder({...newOrder, plannedUpsCommon: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (S)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsSmall} onChange={e => setNewOrder({...newOrder, plannedUpsSmall: e.target.value})} /></div>
+              </div>
+          ) : (
+              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Planned Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.plannedUps} onChange={e => setNewOrder({...newOrder, plannedUps: e.target.value})} /></div>
+          )}
+          
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate (₹) per {isPPC ? 'Set' : 'Box'}</label><input required type="number" step="0.01" className="w-full p-2 border rounded bg-green-50" value={newOrder.rate} onChange={e => setNewOrder({...newOrder, rate: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Target Delivery Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.deliveryDate} onChange={e => setNewOrder({...newOrder, deliveryDate: e.target.value})} /></div>
+          <div className="col-span-1 lg:col-span-3"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">Save Order</button></div>
+        </form>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[1200px]">
+          <thead className="bg-stone-100 text-stone-600 text-sm">
+            <tr>
+              <th className="p-4">Order Date</th>
+              <th className="p-4">Client</th>
+              <th className="p-4">Item Ordered</th>
+              <th className="p-4">Target Qty</th>
+              <th className="p-4">Rate & Value (₹)</th>
+              <th className="p-4 bg-green-50 text-green-800">Ready Qty</th>
+              <th className="p-4 bg-red-50 text-red-800">Pending Qty</th>
+              <th className="p-4">Status</th>
+              {role === 'admin' && <th className="p-4 text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
+            {[...visibleOrders].sort((a,b) => {
+               const dateA = new Date(a.orderDate).getTime();
+               const dateB = new Date(b.orderDate).getTime();
+               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+            }).map(order => {
+              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
+              const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
+
+              const pLogs = production.filter(p => p.orderId === order.id);
+              const item = items.find(i => i.id === order.itemId);
+              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+              
+              let producedQty = 0;
+              let targetSheetsDisplay = null;
+
+              if (isPpcOrder) {
+                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+
+                  let totalCommonPieces = 0;
+                  let totalSmallPieces = 0;
+                  
+                  pLogs.forEach(p => {
+                      const sheets = parseFloat(p.linerQty || 0);
+                      const cUps = parseInt(p.commonUps || order.commonUps || 0);
+                      const sUps = parseInt(p.smallUps || order.smallUps || 0);
+                      totalCommonPieces += sheets * cUps;
+                      totalSmallPieces += sheets * sUps;
+                  });
+
+                  const possibleFromCommon = Math.floor(totalCommonPieces / cPiecesPerSet);
+                  const possibleFromSmall = Math.floor(totalSmallPieces / sPiecesPerSet);
+                  producedQty = Math.min(possibleFromCommon, possibleFromSmall);
+                  if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+
+                  const orderQty = parseInt(order.orderQty || 0);
+                  const totalCNeeded = cPiecesPerSet * orderQty;
+                  const totalSNeeded = sPiecesPerSet * orderQty;
+
+                  const baseC = parseInt(order.commonUps || 1);
+                  const baseS = parseInt(order.smallUps || 1);
+                  const pUpsC = parseInt(order.plannedUpsCommon || 1);
+                  const pUpsS = parseInt(order.plannedUpsSmall || 1);
+
+                  const commonPiecesPerCommonSheet = Math.max(1, baseC * pUpsC);
+                  const smallPiecesPerCommonSheet = Math.max(1, baseC * pUpsC); 
+                  const smallPiecesPerDedicatedSheet = Math.max(1, baseS * pUpsS * 2);
+
+                  const commonSheetsNeeded = Math.ceil(totalCNeeded / commonPiecesPerCommonSheet);
+                  const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+                  const remainingSmallNeeded = Math.max(0, totalSNeeded - smallPiecesAcquired);
+                  const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+
+                  const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
+
+                  targetSheetsDisplay = (
+                      <span className="text-[10px] text-blue-600 font-bold block mt-1 leading-tight">
+                          Needs ~{targetSheets} Shts<br/>
+                          ({commonSheetsNeeded}C + {smallSheetsNeeded}S)
+                      </span>
+                  );
+              } else {
+                  const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+                  const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  
+                  const ply = parseInt(item?.ply || item?.Ply || 3);
+                  let effectiveBase = 0;
+
+                  if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
+                  else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+                  else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+                  else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+                  else effectiveBase = sumBoard + sumPaper;
+                  
+                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+              }
+              
+              const pendingQty = Math.max(0, order.orderQty - producedQty);
+              const rate = parseFloat(order.rate || 0);
+              const totalValue = rate * parseInt(order.orderQty || 0);
+
+              return (
+                <tr key={order.id} className="hover:bg-stone-50">
+                  <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
+                  <td className="p-4 font-bold text-stone-900">{compName}</td>
+                  <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
+                  <td className="p-4">
+                      <p className="font-bold text-lg">{order.orderQty}</p>
+                      {targetSheetsDisplay}
+                  </td>
+                  <td className="p-4">
+                     <p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p>
+                     <p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p>
+                  </td>
+                  <td className="p-4 bg-green-50/30 font-bold text-green-600 text-lg">{producedQty}</td>
+                  <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
+                  <td className="p-4">
+                    <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
+                  </td>
+                  {role === 'admin' && (
+                    <td className="p-4 text-right">
+                      <button onClick={() => handleDelete(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:text-red-700">Delete</button>
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- FINISHED GOODS VIEW ---
+function FinishedGoodsView({ orders, production, items, companies, addLog, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+
+  const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
+
+  const handleDispatch = async (e, order, inStock, qtyToDispatch = null) => {
+    if (e) e.preventDefault();
+    const qty = qtyToDispatch || parseInt(e.target.dispatchQty.value);
+    if (!qty || qty <= 0 || qty > inStock) return;
+    
+    const currentDispatched = parseInt(order.dispatchedQty || 0);
+    const newDispatched = currentDispatched + qty;
+
+    const newHistory = [...(order.dispatchHistory || []), {
+      date: new Date().toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      qty: qty
+    }];
+
+    await updateDoc(getDocRef('orders', order.id), { 
+      dispatchedQty: newDispatched,
+      dispatchHistory: newHistory
+    });
+    
+    addLog(`Dispatched ${qty} boxes for Order: ${order.itemName}`);
+    if (e) e.target.reset(); 
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
+      </div>
+      <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">
+        Database Link: Showing {visibleOrders.length} total records downloaded
+      </p>
+
+      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[1200px]">
+          <thead className="bg-stone-100 text-stone-600 text-sm">
+            <tr>
+              <th className="p-4">Order Ref / Client</th>
+              <th className="p-4">Item Details</th>
+              <th className="p-4 bg-blue-50">Produced (Qty & Wt)</th>
+              <th className="p-4 bg-orange-50">Dispatched (Qty, Val, Wt)</th>
+              <th className="p-4 bg-green-50 text-green-800">In Stock (Qty, Val, Wt)</th>
+              <th className="p-4 text-right">Dispatch Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {visibleOrders.map(order => {
+              const pLogs = production.filter(p => p.orderId === order.id);
+              const item = items.find(i => i.id === order.itemId);
+              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+              
+              let producedQty = 0;
+
+              if (isPpcOrder) {
+                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+                  let totalCommonPieces = 0, totalSmallPieces = 0;
+                  
+                  pLogs.forEach(p => {
+                      const sheets = parseFloat(p.linerQty || 0);
+                      totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
+                      totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
+                  });
+
+                  producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
+                  if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+              } else {
+                  const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+                  const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+                  
+                  const ply = parseInt(item?.ply || item?.Ply || 3);
+                  let effectiveBase = 0;
+
+                  if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
+                  else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+                  else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+                  else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+                  else effectiveBase = sumBoard + sumPaper;
+                  
+                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+              }
+
+              const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
+              const avgWeightKg = producedQty > 0 ? (totalKgUsed / producedQty) : 0;
+              
+              const dispatchedQty = parseInt(order.dispatchedQty || 0);
+              const rate = parseFloat(order.rate || 0);
+              
+              const dispatchedWeight = dispatchedQty * avgWeightKg;
+              const dispatchedValue = dispatchedQty * rate;
+
+              const inStock = Math.max(0, producedQty - dispatchedQty);
+              const stockWeight = inStock * avgWeightKg;
+              const stockValue = inStock * rate;
+
+              if (producedQty <= 0 && dispatchedQty <= 0) return null; 
+
+              const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
+
+              return (
+                <tr key={order.id} className={`hover:bg-stone-50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/50' : ''}`}>
+                  <td className="p-4">
+                    <p className="font-bold text-stone-900">{compName}</p>
+                    <p className="text-xs text-stone-500">Ordered: {order.orderDate}</p>
+                  </td>
+                  <td className="p-4">
+                    <p className="font-medium text-stone-800">{order.itemName || order.Item_Name}</p>
+                    <p className="text-xs text-stone-500">{item?.weight || item?.Weight_g ? `${item.weight || item.Weight_g}g` : '-'} | ₹{rate.toFixed(2)}/{isPpcOrder?'set':'box'}</p>
+                  </td>
+                  <td className="p-4 bg-blue-50/30">
+                    <p className="font-bold text-lg text-blue-700">{producedQty}</p>
+                    <p className="text-xs font-medium text-blue-600">{totalKgUsed.toFixed(1)} kg total</p>
+                  </td>
+                  <td className="p-4 bg-orange-50/30">
+                    <p className="font-bold text-lg text-orange-600">{dispatchedQty}</p>
+                    <p className="text-xs font-bold text-stone-800">₹{dispatchedValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-orange-600 mb-1">{dispatchedWeight.toFixed(1)} kg</p>
+                    {order.dispatchHistory && order.dispatchHistory.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-orange-200">
+                        <p className="text-[10px] font-bold text-orange-800 mb-1">Dispatch History:</p>
+                        <ul className="text-[10px] space-y-0.5 text-orange-700">
+                          {order.dispatchHistory.map((h, i) => (
+                            <li key={i}>{h.date}: <span className="font-bold">{h.qty}</span></li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-4 bg-green-50/30">
+                    <p className="font-bold text-xl text-green-700">{inStock}</p>
+                    <p className="text-sm font-bold text-stone-800">₹{stockValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-green-600">{stockWeight.toFixed(1)} kg</p>
+                  </td>
+                  <td className="p-4 text-right">
+                    {inStock > 0 ? (
+                      <form onSubmit={(e) => handleDispatch(e, order, inStock)} className="flex items-center justify-end gap-2">
+                        <input required type="number" min="1" max={inStock} name="dispatchQty" className={`w-24 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
+                        <button type="submit" className="bg-stone-900 text-white px-4 py-2 rounded text-xs font-bold hover:bg-stone-800">
+                          Dispatch
+                        </button>
+                        {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
+                      </form>
+                    ) : (
+                      <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- ITEMS VIEW ---
+function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
+
+  const [newItem, setNewItem] = useState({ companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemType: 'Box', name: '', size: '', ply: '', weight: '', paperGsm: '', paperBf: '', paperColour: 'Kraft' });
+  const [filters, setFilters] = useState({ company: '', name: '', type: '', ply: '' });
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    await addDoc(getColRef('items'), newItem);
+    addLog(`Added new box spec: ${newItem.name} (${newItem.itemType})`);
+    setNewItem({ companyId: '', itemType: 'Box', name: '', size: '', ply: '', weight: '', paperGsm: '', paperBf: '', paperColour: 'Kraft' });
+  };
+
+  const handleDelete = async (id, name) => {
+    if(window.confirm(`Delete ${name}?`)) {
+      await deleteDoc(getDocRef('items', id));
+      addLog(`Deleted item: ${name}`);
+    }
+  };
+
+  const filteredItems = visibleItems.filter(item => {
+    const compName = companies.find(c => c.id === item.companyId)?.name || 'Unknown';
+    const itemName = item.name || item.Item_Name || 'Unnamed';
+    const itemType = item.itemType || item.Item_Type || 'Box';
+    const itemPly = item.ply || item.Ply || '';
+
+    if (filters.company && !compName.toLowerCase().includes(filters.company.toLowerCase())) return false;
+    if (filters.name && !itemName.toLowerCase().includes(filters.name.toLowerCase())) return false;
+    if (filters.type && itemType.toLowerCase() !== filters.type.toLowerCase()) return false;
+    if (filters.ply && String(itemPly) !== String(filters.ply)) return false;
+    
+    return true;
+  });
+
+  const handleExport = () => {
+    if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
+    const exportData = filteredItems.map(item => ({
+      Company: companies.find(c => c.id === item.companyId)?.name || 'Unknown',
+      itemType: item.itemType || item.Item_Type || '',
+      name: item.name || item.Item_Name || '',
+      size: item.size || item.Size_mm || '',
+      ply: item.ply || item.Ply || '',
+      weight: item.weight || item.Weight_g || 'N/A',
+      paperGsm: item.paperGsm || item.Paper_GSM || '',
+      paperBf: item.paperBf || item.Paper_BF || '',
+      paperColour: item.paperColour || item.Paper_Colour || ''
+    }));
+    downloadCSV(exportData, 'box_specifications');
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto pb-12">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Box Specifications Database</h2>
+        <div className="flex gap-2">
+          <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
+            Import CSV
+            <input type="file" accept=".csv" className="hidden" onChange={(e) => {
+              if (typeof handleCSVImport === 'function') {
+                handleCSVImport(e, 'items', getColRef, addLog, (row, getVal) => {
+                  const compName = getVal(row, 'Company name', 'Company', 'Client', 'Customer', 'Brand') || '';
+                  const comp = companies.find(c => c?.name?.toLowerCase().trim() === compName.toLowerCase().trim());
+                  return {
+                    companyId: comp ? comp.id : '',
+                    itemType: getVal(row, 'Type', 'Item Type', 'Style', 'Category') || 'Box',
+                    name: getVal(row, 'Item Name', 'Item', 'Product', 'Box Name', 'Code', 'Title', 'Description') || 'Unnamed Item',
+                    size: getVal(row, 'Size ( L x W x H) mm', 'Size', 'Dimensions', 'L x W x H', 'Size mm', 'Measurements') || '',
+                    ply: getVal(row, 'Ply', 'Layers', 'Board Ply', 'No of Plies') || '3',
+                    weight: getVal(row, 'weight', 'Weight g', 'Grams', 'Box Weight') || '',
+                    paperGsm: getVal(row, 'paper gsm', 'GSM', 'Top GSM', 'Board GSM') || '',
+                    paperBf: getVal(row, 'Paper bf', 'BF', 'Bursting Factor', 'Strength') || '',
+                    paperColour: getVal(row, 'Colour', 'Color', 'Paper Color', 'Shade') || 'Kraft'
+                  };
+                });
+              }
+            }} />
+          </label>
+          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
+            Export
+          </button>
+        </div>
+      </div>
+      
+      {role === 'admin' && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
+          <h3 className="font-bold mb-4">Add New Item</h3>
+          <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+            <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company</label><select required className="w-full p-2 border rounded" value={newItem.companyId} onChange={e => setNewItem({...newItem, companyId: e.target.value})}><option value="">Select Company...</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Item Type</label><select required className="w-full p-2 border rounded" value={newItem.itemType} onChange={e => setNewItem({...newItem, itemType: e.target.value})}><option value="Box">Box</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC</option><option value="Lid">Lid</option><option value="Plate">Plate</option></select></div>
+            <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Item Name / Code</label><input required type="text" className="w-full p-2 border rounded" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} /></div>
+            <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Size (L x W x H) in mm</label><input required type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border rounded" value={newItem.size} onChange={e => setNewItem({...newItem, size: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Ply</label><select required className="w-full p-2 border rounded" value={newItem.ply} onChange={e => setNewItem({...newItem, ply: e.target.value})}><option value="">-</option><option value="2">2 Ply</option><option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option></select></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Weight (g)</label><input type="number" step="0.1" placeholder="Optional" className="w-full p-2 border rounded" value={newItem.weight} onChange={e => setNewItem({...newItem, weight: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Paper GSM</label><input required type="number" className="w-full p-2 border rounded" value={newItem.paperGsm} onChange={e => setNewItem({...newItem, paperGsm: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Paper BF</label><input required type="number" className="w-full p-2 border rounded" value={newItem.paperBf} onChange={e => setNewItem({...newItem, paperBf: e.target.value})} /></div>
+            <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded" value={newItem.paperColour} onChange={e => setNewItem({...newItem, paperColour: e.target.value})}><option value="Kraft">Kraft (Brown)</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
+            <div className="col-span-1 md:col-span-6 lg:col-span-2"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">Save Item to Database</button></div>
+          </form>
+        </div>
+      )}
+
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-3 items-center">
+        <div className="flex items-center gap-2 text-stone-500 mr-2">Filter:</div>
+        <input type="text" placeholder="Company..." className="p-2 border rounded text-sm w-32 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
+        <input type="text" placeholder="Item Name / Code..." className="p-2 border rounded text-sm flex-1 min-w-[150px] focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.name} onChange={e => setFilters({...filters, name: e.target.value})} />
+        <select className="p-2 border rounded text-sm w-32 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.type} onChange={e => setFilters({...filters, type: e.target.value})}>
+          <option value="">All Types</option>
+          <option value="Box">Box</option>
+          <option value="Tray">Tray</option>
+          <option value="Sheet">Sheet</option>
+          <option value="PPC">PPC</option>
+          <option value="Lid">Lid</option>
+          <option value="Plate">Plate</option>
+        </select>
+        <select className="p-2 border rounded text-sm w-24 focus:outline-none focus:ring-2 focus:ring-stone-800" value={filters.ply} onChange={e => setFilters({...filters, ply: e.target.value})}>
+          <option value="">All Plies</option>
+          <option value="2">2 Ply</option>
+          <option value="3">3 Ply</option>
+          <option value="5">5 Ply</option>
+          <option value="7">7 Ply</option>
+        </select>
+        <button onClick={() => setFilters({company: '', name: '', type: '', ply: ''})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-2 transition">Clear</button>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[800px]">
+          <thead className="bg-stone-100 text-stone-600 text-sm">
+            <tr><th className="p-4">Company</th><th className="p-4">Item Details</th><th className="p-4">Size (L x W x H) mm</th><th className="p-4">Paper Specs</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {filteredItems.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-stone-500">No items found matching your filters.</td></tr>}
+            {[...filteredItems].sort((a,b) => {
+               const compA = companies.find(c => c.id === a.companyId)?.name || '';
+               const compB = companies.find(c => c.id === b.companyId)?.name || '';
+               if (compA === compB) {
+                 const nA = a?.name || a?.Item_Name || '';
+                 const nB = b?.name || b?.Item_Name || '';
+                 return nA.localeCompare(nB);
+               }
+               return compA.localeCompare(compB);
+            }).map(item => (
+              <tr key={item.id} className="hover:bg-stone-50">
+                <td className="p-4">{companies.find(c => c.id === item.companyId)?.name || 'Unknown'}</td>
+                <td className="p-4"><p className="font-bold text-stone-900">{item.name || item.Item_Name || 'Unnamed'}</p><p className="text-xs text-stone-500">{item.itemType || item.Item_Type || 'Box'}</p></td>
+                <td className="p-4 whitespace-nowrap">{item.size || item.Size_mm || '-'}</td>
+                <td className="p-4 text-sm"><p><span className="font-medium">{item.ply || item.Ply || '-'}-Ply</span> | {item.weight || item.Weight_g ? `${item.weight || item.Weight_g}g` : 'N/A'}</p><p className="text-stone-500">{item.paperGsm || item.Paper_GSM || '-'} GSM, {item.paperBf || item.Paper_BF || '-'} BF, {item.paperColour || item.Paper_Colour || '-'}</p></td>
+                {role === 'admin' && <td className="p-4 text-right"><button onClick={() => handleDelete(item.id, item.name || item.Item_Name)} className="text-red-500 hover:text-red-700">Delete</button></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- COMPANIES VIEW ---
+function CompaniesView({ companies, addLog, getColRef, getDocRef }) {
+  const [newCompany, setNewCompany] = useState('');
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if(!newCompany.trim()) return;
+    await addDoc(getColRef('companies'), { name: newCompany });
+    addLog(`Added new client: ${newCompany}`);
+    setNewCompany('');
+  };
+  const handleDelete = async (id, name) => {
+    if(window.confirm(`Delete ${name}? Note: This does not automatically delete their items.`)) {
+      await deleteDoc(getDocRef('companies', id));
+      addLog(`Deleted client: ${name}`);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Manage Client Companies</h2>
+      </div>
+      <form onSubmit={handleAdd} className="flex gap-4 mb-8 bg-white p-4 rounded-xl border shadow-sm">
         <input required type="text" placeholder="New Company Name" className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newCompany} onChange={e => setNewCompany(e.target.value)} />
-        <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 flex items-center gap-2"><Plus className="w-5 h-5"/> Add Client</button>
+        <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 flex items-center gap-2">Add Client</button>
       </form>
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 divide-y">
-        {companies.length === 0 && <div className="p-6 text-center text-stone-500">No companies yet. Add your first admin user above.</div>}
+        {companies.length === 0 && <div className="p-6 text-center text-stone-500">No companies yet. Add your first client above.</div>}
         {[...companies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => (
           <div key={c.id} className="p-4 flex items-center justify-between hover:bg-stone-50">
-            <div className="flex items-center gap-3"><Building2 className="w-5 h-5 text-stone-400" /><span className="font-medium text-lg">{c.name}</span></div>
-            <button onClick={() => handleDelete(c.id, c.name)} className="text-red-500 hover:text-red-700 p-2"><Trash2 className="w-5 h-5" /></button>
+            <div className="flex items-center gap-3"><span className="font-medium text-lg">{c.name}</span></div>
+            <button onClick={() => handleDelete(c.id, c.name)} className="text-red-400 hover:text-red-600 p-2">Delete</button>
           </div>
         ))}
       </div>
@@ -1157,7 +2716,7 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
         <input required type="text" placeholder="Set Password" className="flex-1 min-w-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-800" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
         <select value={newRole} onChange={e=>setNewRole(e.target.value)} className="p-3 border rounded-lg bg-stone-50 min-w-[120px]"><option value="staff">Staff (Restricted)</option><option value="admin">Admin (Full Access)</option></select>
         <select value={newCompanyId} onChange={e=>setNewCompanyId(e.target.value)} className="p-3 border rounded-lg bg-stone-50 min-w-[150px]"><option value="all">All Companies</option>{[...companies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}</select>
-        <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 w-full md:w-auto flex items-center justify-center gap-2"><Plus className="w-5 h-5"/> Add User</button>
+        <button type="submit" className="bg-stone-900 text-white px-6 py-3 rounded-lg hover:bg-stone-800 w-full md:w-auto flex items-center justify-center gap-2">Add User</button>
       </form>
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
         <table className="w-full text-left">
@@ -1172,8 +2731,8 @@ function UsersView({ users, companies, addLog, getColRef, getDocRef, currentUser
                 <td className="p-4 text-stone-600 text-sm">{assignedCompany}</td>
                 <td className="p-4 text-stone-500 text-sm">{formatDate(u.lastAccess)}</td>
                 <td className="p-4 text-right whitespace-nowrap">
-                  <button onClick={() => handleChangePassword(u.id, u.name)} className="text-blue-500 hover:text-blue-700 mr-3" title="Change Password"><Edit2 className="w-5 h-5 inline" /></button>
-                  <button onClick={() => handleDelete(u.id, u.name)} className="text-red-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-red-400" disabled={u.id === currentUserId} title="Delete User"><Trash2 className="w-5 h-5 inline" /></button>
+                  <button onClick={() => handleChangePassword(u.id, u.name)} className="text-blue-500 hover:text-blue-700 mr-3" title="Change Password">Edit</button>
+                  <button onClick={() => handleDelete(u.id, u.name)} className="text-red-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-red-400" disabled={u.id === currentUserId} title="Delete User">Delete</button>
                 </td>
               </tr>
               );
@@ -1210,373 +2769,6 @@ function LogsView({ logs }) {
             <span className="text-stone-400 whitespace-nowrap ml-4">{formatDate(log.time)}</span>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// --- ADMIN DASHBOARD (ADMIN ONLY) ---
-function AdminDashboard({ inventory = [], production = [], orders = [], wastageLogs = [], companies = [], items = [], addLog, getColRef, getDocRef, currentUser }) {
-  const now = new Date();
-
-  const toKey = (dateStr, period) => {
-    const d = new Date(dateStr);
-    if (isNaN(d)) return null;
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
-    if (period === 'month') return `${y}-${String(m).padStart(2, '0')}`;
-    if (period === 'quarter') return `${y}-Q${Math.ceil(m / 3)}`;
-    if (period === 'year') return `${y}`;
-    return null;
-  };
-
-  const aggregatePurchases = (period) => {
-    const map = {};
-    inventory.forEach(inv => {
-      const key = toKey(inv.date || inv.dateReceived || new Date().toISOString(), period);
-      if (!key) return;
-      const kg = parseFloat(inv.receivedQty || inv.Received_Qty || 0) || 0;
-      const rate = parseFloat(inv.ratePerKg || inv.Rate_per_KG || inv.rate || 0) || 0;
-      const value = kg * rate;
-      map[key] = map[key] || { kg: 0, value: 0 };
-      map[key].kg += kg;
-      map[key].value += value;
-    });
-    return map;
-  };
-
-  const aggregateProduction = (period) => {
-    const map = {};
-    production.forEach(p => {
-      const key = toKey(p.date || new Date().toISOString(), period);
-      if (!key) return;
-      const kg = parseFloat(p.useKg || p.UseKG || 0) || 0;
-      map[key] = map[key] || 0;
-      map[key] += kg;
-    });
-    return map;
-  };
-
-  const aggregateWastage = (period) => {
-    const map = {};
-    wastageLogs.forEach(w => {
-      const key = toKey(w.date || new Date().toISOString(), period);
-      if (!key) return;
-      const paper = parseFloat(w.paperWastage || w.paperWastageKg || 0) || 0;
-      const sheet = parseFloat(w.sheetWastage || 0) || 0;
-      const total = paper + sheet;
-      map[key] = map[key] || { kg: 0, count: 0 };
-      map[key].kg += total;
-      map[key].count += 1;
-    });
-    return map;
-  };
-
-  const aggregateSales = (period) => {
-    const map = {};
-    orders.forEach(o => {
-      if (Array.isArray(o.dispatchHistory) && o.dispatchHistory.length > 0) {
-        o.dispatchHistory.forEach(h => {
-          const dateKey = toKey(h.date ? new Date(h.date).toISOString() : o.orderDate, period);
-          if (!dateKey) return;
-          const qty = parseFloat(h.qty || 0) || 0;
-          const rate = parseFloat(o.rate || 0) || 0;
-          const value = qty * rate;
-          map[dateKey] = map[dateKey] || { kg: 0, value: 0, qty: 0 };
-          const item = items.find(i => i.id === o.itemId);
-          const avgKg = item ? (parseFloat(item.weight || item.Weight_g || 0) / 1000) : 0;
-          map[dateKey].kg += qty * avgKg;
-          map[dateKey].value += value;
-          map[dateKey].qty += qty;
-        });
-      } else if (parseFloat(o.dispatchedQty || 0) > 0) {
-        const dateKey = toKey(o.orderDate || new Date().toISOString(), period);
-        if (!dateKey) return;
-        const qty = parseFloat(o.dispatchedQty || 0) || 0;
-        const rate = parseFloat(o.rate || 0) || 0;
-        const item = items.find(i => i.id === o.itemId);
-        const avgKg = item ? (parseFloat(item.weight || item.Weight_g || 0) / 1000) : 0;
-        const value = qty * rate;
-        map[dateKey] = map[dateKey] || { kg: 0, value: 0, qty: 0 };
-        map[dateKey].kg += qty * avgKg;
-        map[dateKey].value += value;
-        map[dateKey].qty += qty;
-      }
-    });
-    return map;
-  };
-
-  const buildSummary = (period) => {
-    const purchases = aggregatePurchases(period);
-    const productionAgg = aggregateProduction(period);
-    const salesAgg = aggregateSales(period);
-    const wastageAgg = aggregateWastage(period);
-
-    const keys = Array.from(new Set([
-      ...Object.keys(purchases),
-      ...Object.keys(productionAgg),
-      ...Object.keys(salesAgg),
-      ...Object.keys(wastageAgg)
-    ])).sort().reverse();
-
-    return keys.map(key => ({
-      period: key,
-      purchaseKg: +(purchases[key]?.kg || 0).toFixed(2),
-      purchaseValue: +(purchases[key]?.value || 0).toFixed(2),
-      productionKg: +(productionAgg[key] || 0).toFixed(2),
-      salesKg: +(salesAgg[key]?.kg || 0).toFixed(2),
-      salesValue: +(salesAgg[key]?.value || 0).toFixed(2),
-      wastageKg: +(wastageAgg[key]?.kg || 0).toFixed(2)
-    }));
-  };
-
-  const monthKeys = (() => {
-    const arr = [];
-    const months = 12;
-    for (let i = 0; i < months; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      arr.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-    }
-    return arr;
-  })();
-
-  const purchasesAll = aggregatePurchases('month');
-  const productionAll = aggregateProduction('month');
-  const salesAll = aggregateSales('month');
-
-  const openingClosing = monthKeys.map((mk, idx) => {
-    const cumPurchaseKg = Object.entries(purchasesAll).filter(([k]) => k <= mk).reduce((s, [,v]) => s + v.kg, 0);
-    const cumProductionKg = Object.entries(productionAll).filter(([k]) => k <= mk).reduce((s, [,v]) => s + v, 0);
-    const cumSalesKg = Object.entries(salesAll).filter(([k]) => k <= mk).reduce((s, [,v]) => s + v.kg, 0);
-
-    const closingKg = Math.max(0, cumPurchaseKg - cumProductionKg - cumSalesKg);
-    const prevCumPurchaseKg = Object.entries(purchasesAll).filter(([k]) => k < mk).reduce((s, [,v]) => s + v.kg, 0);
-    const prevCumProductionKg = Object.entries(productionAll).filter(([k]) => k < mk).reduce((s, [,v]) => s + v, 0);
-    const prevCumSalesKg = Object.entries(salesAll).filter(([k]) => k < mk).reduce((s, [,v]) => s + v.kg, 0);
-    const openingKg = Math.max(0, prevCumPurchaseKg - prevCumProductionKg - prevCumSalesKg);
-
-    const cumPurchaseValue = Object.entries(purchasesAll).filter(([k]) => k <= mk).reduce((s, [,v]) => s + v.value, 0);
-    const avgRate = (cumPurchaseKg > 0) ? (cumPurchaseValue / cumPurchaseKg) : 0;
-    const openingValue = +(openingKg * avgRate).toFixed(2);
-    const closingValue = +(closingKg * avgRate).toFixed(2);
-
-    return { month: mk, openingKg: +openingKg.toFixed(2), closingKg: +closingKg.toFixed(2), openingValue, closingValue };
-  });
-
-  const monthlySummary = buildSummary('month');
-  const quarterlySummary = buildSummary('quarter');
-  const yearlySummary = buildSummary('year');
-
-  const wastageMap = aggregateWastage('month');
-  const wastageValues = Object.keys(wastageMap).filter(k => monthKeys.includes(k)).map(k => wastageMap[k].kg || 0);
-  const avgMonthlyWastKg = wastageValues.length ? (wastageValues.reduce((a,b)=>a+b,0) / wastageValues.length) : 0;
-
-  const sumPeriod = (summaryRows) => summaryRows.reduce((acc, r) => {
-    acc.purchaseKg += r.purchaseKg; acc.purchaseValue += r.purchaseValue;
-    acc.productionKg += r.productionKg; acc.salesKg += r.salesKg; acc.salesValue += r.salesValue;
-    acc.wastageKg += r.wastageKg;
-    return acc;
-  }, { purchaseKg:0, purchaseValue:0, productionKg:0, salesKg:0, salesValue:0, wastageKg:0 });
-
-  const monthlyTotals = sumPeriod(monthlySummary);
-  const quarterlyTotals = sumPeriod(quarterlySummary);
-  const yearlyTotals = sumPeriod(yearlySummary);
-
-  const [editingOrderId, setEditingOrderId] = React.useState(null);
-  const [manualProduced, setManualProduced] = React.useState('');
-
-  const startEditProduced = (order) => {
-    setEditingOrderId(order.id);
-    const pLogs = production.filter(p => p.orderId === order.id);
-    let producedQty = 0;
-    const item = items.find(i => i.id === order.itemId);
-    const isPpc = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
-    if (isPpc) {
-      const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
-      const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
-      let totalCommonPieces = 0; let totalSmallPieces = 0;
-      pLogs.forEach(p => {
-        const sheets = parseFloat(p.linerQty || 0);
-        const cUps = parseInt(p.commonUps || order.commonUps || 0);
-        const sUps = parseInt(p.smallUps || order.smallUps || 0);
-        totalCommonPieces += sheets * cUps;
-        totalSmallPieces += sheets * sUps;
-      });
-      const possibleFromCommon = Math.floor(totalCommonPieces / cPiecesPerSet);
-      const possibleFromSmall = Math.floor(totalSmallPieces / sPiecesPerSet);
-      producedQty = Math.min(possibleFromCommon, possibleFromSmall);
-    } else {
-      const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
-      const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
-      const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
-      const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
-      const ply = parseInt(item?.ply || item?.Ply || 3);
-      let effectiveBase = 0;
-      if (ply <= 2) effectiveBase = sumBoard + sumPaper;
-      else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper);
-      else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
-      else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
-      else effectiveBase = sumBoard + sumPaper;
-      producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
-    }
-    setManualProduced(String(producedQty || 0));
-  };
-
-  const saveManualProduced = async (orderId) => {
-    const val = parseInt(manualProduced || 0);
-    await updateDoc(getDocRef('orders', orderId), { adjustedProduced: val });
-    addLog(`Admin adjusted produced qty for order ${orderId} => ${val}`);
-    setEditingOrderId(null);
-    setManualProduced('');
-  };
-
-  return (
-    <div className="max-w-7xl mx-auto pb-12">
-      <h2 className="text-3xl font-bold mb-8 text-stone-900">Admin Dashboard</h2>
-
-      {/* KPI CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white p-5 rounded-lg border border-stone-200 shadow-sm">
-          <p className="text-xs text-stone-500 uppercase font-semibold mb-1">Monthly Purchases</p>
-          <p className="text-2xl font-bold text-stone-900">{monthlyTotals.purchaseKg.toFixed(0)} <span className="text-xs text-stone-500 font-normal">kg</span></p>
-          <p className="text-sm text-stone-600 mt-1">₹{monthlyTotals.purchaseValue.toFixed(0)}</p>
-        </div>
-        <div className="bg-white p-5 rounded-lg border border-stone-200 shadow-sm">
-          <p className="text-xs text-stone-500 uppercase font-semibold mb-1">Monthly Production</p>
-          <p className="text-2xl font-bold text-stone-900">{monthlyTotals.productionKg.toFixed(0)} <span className="text-xs text-stone-500 font-normal">kg</span></p>
-        </div>
-        <div className="bg-white p-5 rounded-lg border border-stone-200 shadow-sm">
-          <p className="text-xs text-stone-500 uppercase font-semibold mb-1">Monthly Sales</p>
-          <p className="text-2xl font-bold text-stone-900">{monthlyTotals.salesKg.toFixed(0)} <span className="text-xs text-stone-500 font-normal">kg</span></p>
-          <p className="text-sm text-stone-600 mt-1">₹{monthlyTotals.salesValue.toFixed(0)}</p>
-        </div>
-        <div className="bg-white p-5 rounded-lg border border-stone-200 shadow-sm">
-          <p className="text-xs text-stone-500 uppercase font-semibold mb-1">Avg Monthly Wastage</p>
-          <p className="text-2xl font-bold text-red-600">{avgMonthlyWastKg.toFixed(2)} <span className="text-xs text-stone-500 font-normal">kg</span></p>
-        </div>
-      </div>
-
-      {/* PERIOD TOTALS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-5 rounded-lg border border-blue-200">
-          <h3 className="text-sm font-bold text-blue-900 mb-3">Quarterly (Purchases)</h3>
-          <p className="text-2xl font-bold text-blue-900">{quarterlyTotals.purchaseKg.toFixed(0)} kg</p>
-          <p className="text-sm text-blue-700 mt-1">₹{quarterlyTotals.purchaseValue.toFixed(0)}</p>
-        </div>
-        <div className="bg-gradient-to-br from-green-50 to-green-100 p-5 rounded-lg border border-green-200">
-          <h3 className="text-sm font-bold text-green-900 mb-3">Yearly (Production)</h3>
-          <p className="text-2xl font-bold text-green-900">{yearlyTotals.productionKg.toFixed(0)} kg</p>
-        </div>
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-5 rounded-lg border border-purple-200">
-          <h3 className="text-sm font-bold text-purple-900 mb-3">Yearly (Sales)</h3>
-          <p className="text-2xl font-bold text-purple-900">{yearlyTotals.salesKg.toFixed(0)} kg</p>
-          <p className="text-sm text-purple-700 mt-1">₹{yearlyTotals.salesValue.toFixed(0)}</p>
-        </div>
-      </div>
-
-      {/* OPENING / CLOSING STOCK TABLE */}
-      <div className="bg-white rounded-lg border border-stone-200 shadow-sm mb-8">
-        <div className="p-5 border-b border-stone-200">
-          <h3 className="text-lg font-bold text-stone-900">Opening & Closing Stock (Last 12 Months)</h3>
-          <p className="text-xs text-stone-500 mt-1">Includes finished goods inventory</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-stone-50 border-b border-stone-200">
-              <tr>
-                <th className="p-4 text-left font-semibold text-stone-700">Month</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Opening (kg)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Closing (kg)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Opening (₹)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Closing (₹)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-200">
-              {openingClosing.map(r => (
-                <tr key={r.month} className="hover:bg-stone-50">
-                  <td className="p-4 font-medium text-stone-900">{r.month}</td>
-                  <td className="p-4 text-right text-stone-700">{r.openingKg.toFixed(1)}</td>
-                  <td className="p-4 text-right text-stone-700">{r.closingKg.toFixed(1)}</td>
-                  <td className="p-4 text-right text-stone-700">₹{r.openingValue.toFixed(0)}</td>
-                  <td className="p-4 text-right text-stone-700">₹{r.closingValue.toFixed(0)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* MONTHLY DETAILS TABLE */}
-      <div className="bg-white rounded-lg border border-stone-200 shadow-sm mb-8">
-        <div className="p-5 border-b border-stone-200">
-          <h3 className="text-lg font-bold text-stone-900">Detailed Monthly Summary</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-stone-50 border-b border-stone-200">
-              <tr>
-                <th className="p-4 text-left font-semibold text-stone-700">Period</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Purchase (kg)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Purchase (₹)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Production (kg)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Sales (kg)</th>
-                <th className="p-4 text-right font-semibold text-stone-700">Sales (₹)</th>
-                <th className="p-4 text-right font-semibold text-red-700">Wastage (kg)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-200">
-              {monthlySummary.slice(0, 12).map(r => (
-                <tr key={r.period} className="hover:bg-stone-50">
-                  <td className="p-4 font-medium text-stone-900">{r.period}</td>
-                  <td className="p-4 text-right text-stone-700">{r.purchaseKg.toFixed(0)}</td>
-                  <td className="p-4 text-right text-stone-700">₹{r.purchaseValue.toFixed(0)}</td>
-                  <td className="p-4 text-right text-stone-700">{r.productionKg.toFixed(0)}</td>
-                  <td className="p-4 text-right text-stone-700">{r.salesKg.toFixed(2)}</td>
-                  <td className="p-4 text-right text-stone-700">₹{r.salesValue.toFixed(0)}</td>
-                  <td className="p-4 text-right text-red-600 font-medium">{r.wastageKg.toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* EDIT FINISHED GOODS */}
-      <div className="bg-white rounded-lg border border-stone-200 shadow-sm">
-        <div className="p-5 border-b border-stone-200">
-          <h3 className="text-lg font-bold text-stone-900">Adjust Finished Goods (Per Order)</h3>
-          <p className="text-xs text-stone-500 mt-1">Manually override produced quantity if there are discrepancies</p>
-        </div>
-        <div className="p-5 space-y-3 max-h-96 overflow-y-auto">
-          {orders.length === 0 && <p className="text-stone-500 text-center py-4">No orders found.</p>}
-          {orders.slice().sort((a,b) => (b.orderDate||'').localeCompare(a.orderDate||'')).map(o => {
-            const item = items.find(i => i.id === o.itemId);
-            const company = companies.find(c => c.id === o.companyId);
-            const produced = o.adjustedProduced != null ? o.adjustedProduced : 'Auto';
-            return (
-              <div key={o.id} className="flex items-center justify-between gap-3 border p-4 rounded hover:bg-stone-50">
-                <div className="flex-1">
-                  <div className="font-bold text-stone-900">{o.itemName || o.Item_Name}</div>
-                  <div className="text-xs text-stone-500 mt-1">{company?.name || 'Unknown'} • Target: {o.orderQty} units • Rate: ₹{parseFloat(o.rate||0).toFixed(2)}</div>
-                </div>
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  {editingOrderId === o.id ? (
-                    <>
-                      <input type="number" className="p-2 border border-stone-300 rounded w-20 text-sm" value={manualProduced} onChange={e => setManualProduced(e.target.value)} />
-                      <button onClick={() => saveManualProduced(o.id)} className="bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700">Save</button>
-                      <button onClick={() => { setEditingOrderId(null); setManualProduced(''); }} className="px-3 py-2 border border-stone-300 rounded text-sm hover:bg-stone-50">Cancel</button>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-sm font-medium text-stone-700 bg-stone-100 px-3 py-2 rounded">Produced: <span className="font-bold">{produced}</span></div>
-                      <button onClick={() => startEditProduced(o)} className="px-3 py-2 border border-stone-300 rounded text-sm hover:bg-stone-50">Edit</button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );
