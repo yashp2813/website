@@ -10,6 +10,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 import './index.css'; 
 import './App.css'; 
@@ -1314,6 +1315,7 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
     </div>
   );
 }
+
 // --- INVENTORY VIEW ---
 function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [] }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -1321,6 +1323,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   // --- SUB-TAB STATE ---
   const [activeSubTab, setActiveSubTab] = useState('Paper'); 
+
+  // --- NEW SCANNER STATE ---
+  const [isScanning, setIsScanning] = useState(false);
 
   // --- PAPER STATE ---
   const [editingId, setEditingId] = useState(null);
@@ -1335,6 +1340,65 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
   });
   const [consumableFilters, setConsumableFilters] = useState({ itemName: '', vendorName: '', status: 'All' });
+
+  // --- AUTOMATED INVOICE SCANNING ---
+  const handleScanInvoice = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setIsScanning(true);
+
+    try {
+      // 1. Convert image to Base64
+      const base64Image = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (error) => reject(error);
+      });
+
+      // 2. Point explicitly to your Mumbai server
+      const functions = getFunctions(app, 'asia-south1');
+      const parseInvoice = httpsCallable(functions, 'parseInvoice');
+
+      // 3. Call Google Document AI
+      const response = await parseInvoice({ 
+          base64Image, 
+          mimeType: file.type 
+      });
+      const data = response.data;
+
+      // 4. Auto-fill the React state
+      setCommonData(prev => ({
+        ...prev,
+        millName: data.millName || prev.millName,
+        invoiceNo: data.invoiceNo || prev.invoiceNo,
+        date: data.date || prev.date
+      }));
+
+      if (data.lineItems && data.lineItems.length > 0) {
+        setReelsInput(data.lineItems.map(item => ({
+          reelNo: item.reelNo || '',
+          size: item.size || '', // <--- CHANGED
+          gsm: item.gsm || '',   // <--- CHANGED
+          bf: item.bf || '',     // <--- CHANGED
+          colour: 'Kraft',
+          receivedQty: item.weight || '',
+          initialIssuedQty: '',
+          ratePerKg: item.rate || ''
+        })));
+        if (addLog) addLog(`AI Scanned Invoice: ${data.invoiceNo || 'Unknown'}`);
+      } else {
+        alert("Invoice scanned, but no paper reels were detected.");
+      }
+
+    } catch (error) {
+      console.error("Scan error:", error);
+      alert(`Scanning failed: ${error.message}`);
+    } finally {
+      setIsScanning(false);
+      e.target.value = null;
+    }
+  };
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
@@ -1558,6 +1622,13 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         </div>
         {activeSubTab === 'Paper' && (
           <div className="flex gap-2">
+            
+            <label className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition cursor-pointer shadow-sm ${isScanning ? 'bg-blue-300 text-blue-800' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+              <ScanLine className="w-4 h-4" />
+              {isScanning ? 'Scanning via AI...' : 'Scan Bill (PDF/Img)'}
+              <input type="file" accept=".pdf,image/*" className="hidden" onChange={handleScanInvoice} disabled={isScanning} />
+            </label>
+
             <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
               Import CSV
               <input type="file" accept=".csv" className="hidden" onChange={(e) => {
@@ -1836,7 +1907,6 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     </div>
   );
 }
-
 // --- PRODUCTION VIEW ---
 function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
