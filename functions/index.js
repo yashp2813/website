@@ -22,7 +22,6 @@ function formatToYYYYMMDD(rawDate) {
 }
 
 // --- PROXIMITY HELPERS ---
-// Added 'flags' parameter so we can force case-insensitive global searches
 function getTokens(regexStr, text, flags = 'g') {
     let tokens = [];
     let re = new RegExp(regexStr, flags);
@@ -97,6 +96,8 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
     const isSpenzzer = textUpper.includes('SPENZZER') || (parsedData.millName && parsedData.millName.toUpperCase().includes('SPENZZER'));
     const isDevBhoomi = textUpper.includes('DEV BHOOMI');
     const isHanumant = textUpper.includes('HANUMANT') || textUpper.includes('KUVIRA');
+    const isMaheshwari = textUpper.includes('MAHESHWARI LOGISTICS');
+    const isSwastik = textUpper.includes('SWASTIK') || textUpper.includes('SUKRAFT');
 
     let colors = getTokens('\\b(GOLDEN|KRAFT|NATURAL)\\b', textUpper);
 
@@ -153,7 +154,7 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
             let myBf = sortedBfs.length > 0 ? sortedBfs[0].val : '16';
             
             let cToken = pullClosest(r.index, colors, false);
-            let itemColor = cToken ? cToken.val.charAt(0) + cToken.val.slice(1).toLowerCase() : 'Kraft';
+            let itemColor = cToken ? cToken.val.charAt(0).toUpperCase() + cToken.val.slice(1).toLowerCase() : 'Kraft';
 
             rawLineItems.push({
                 reelNo: r.val,
@@ -190,7 +191,7 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
         }
     } else if (isHanumant) {
         // ==========================================
-        // HANUMANT / KUVIRA LOGIC (Fixed Anchors)
+        // HANUMANT / KUVIRA LOGIC 
         // ==========================================
         let rateMatch = fullText.match(/\bKGS\s+(\d{2,3}\.\d{2})\b/i);
         let defaultRate = rateMatch ? rateMatch[1] : '31.75';
@@ -200,10 +201,8 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
 
         let reels = getTokens('\\b([A-Z]\\d{2}[A-Z]{3}\\d{4})\\b', searchArea);
         let weights = getTokens('\\b([3-9]\\d{2}(?:\\.\\d{2})?|1\\d{3}(?:\\.\\d{2})?)\\b', searchArea);
-        let bfs = getTokens('\\b(16|18|20|22|24|26|28)\\b', searchArea);
-        let gsms = getTokens('\\b(80|90|100|110|120|130|140|150|180|200)\\b', searchArea);
-        
-        // Strictly grabs numbers that sit directly next to a physical unit constraint using 'gi' flags
+        let bfs = getTokens('\\b(16|18|20|22|24|26|28)\\b(?!\\.)', searchArea);
+        let gsms = getTokens('\\b(80|90|100|110|120|130|140|150|180|200)\\b(?!\\.)', searchArea);
         let sizes = getTokens('\\b(\\d{2,3}(?:\\.\\d{1,2})?)\\s*(?:INCH|CM|MM|IN)\\b', searchArea, 'gi');
 
         for (let r of reels) {
@@ -212,7 +211,6 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
             let wToken = pullClosest(r.index, weights, true, claimed);
             if (wToken) claimed.push(wToken.index);
             
-            // PRIORITY CLAIM: Size is claimed FIRST so "26.00 Inch" is locked away from the BF scanner
             let sToken = pullClosest(r.index, sizes, true, claimed);
             if (sToken) claimed.push(sToken.index);
             
@@ -235,9 +233,117 @@ exports.parseInvoice = onCall({ cors: true, region: 'asia-south1' }, async (requ
                 color: itemColor
             });
         }
+    } else if (isMaheshwari) {
+        // ==========================================
+        // MAHESHWARI LOGIC 
+        // ==========================================
+        let rateMatch = fullText.match(/\b(\d{2}\.\d{2})\b/);
+        let defaultRate = rateMatch ? rateMatch[1] : '30.00';
+
+        let annexIdx = textUpper.indexOf("DETAIL ANNEXURE");
+        let searchArea = annexIdx !== -1 ? fullText.substring(annexIdx) : fullText;
+
+        let reels = getTokens('\\b([A-Z]{4,8}\\d{8,16})\\b', searchArea);
+        let weights = getTokens('\\b(\\d{2,4}(?:\\.\\d{1,3})?)\\s*KGS\\b', searchArea, 'gi');
+        let sizes = getTokens('\\b(\\d{2,3}(?:\\.\\d{1,2})?)\\s*(?:CMS|MM|INCH|IN|\\"|”|\\\'\\\')', searchArea, 'gi');
+        let bfs = getTokens('\\b(16|18|20|22|24|26|28)\\b(?!\\.)', searchArea);
+        let gsms = getTokens('\\b(80|90|100|110|120|130|140|150|180|200|250)\\b(?!\\.)', searchArea);
+
+        for (let r of reels) {
+            let claimed = [];
+            
+            let wToken = pullClosest(r.index, weights, true, claimed);
+            if (wToken) claimed.push(wToken.index);
+            
+            let sToken = pullClosest(r.index, sizes, true, claimed);
+            if (sToken) claimed.push(sToken.index);
+            
+            let gToken = pullClosest(r.index, gsms, true, claimed);
+            if (gToken) claimed.push(gToken.index);
+            
+            let bToken = pullClosest(r.index, bfs, true, claimed);
+            if (bToken) claimed.push(bToken.index);
+            
+            let cToken = pullClosest(r.index, colors, false); 
+            let itemColor = cToken ? cToken.val.charAt(0).toUpperCase() + cToken.val.slice(1).toLowerCase() : 'Kraft';
+
+            rawLineItems.push({
+                reelNo: r.val,
+                weight: wToken ? wToken.val.replace(/\s*KGS/i, '').trim() : '',
+                rate: defaultRate,
+                gsm: gToken ? gToken.val : '120',
+                bf: bToken ? bToken.val : '16',
+                size: sToken ? sToken.val.replace(/\s*(CMS|MM|INCH|IN|"|”|'')/i, '').trim() : '',
+                color: itemColor
+            });
+        }
+    } else if (isSwastik) {
+        // ==========================================
+        // SWASTIK LOGIC (The Eraser Zipper)
+        // ==========================================
+        let rateMatch = fullText.match(/\bKgs\s+(\d{2,3}\.\d{2})\b/i);
+        let defaultRate = rateMatch ? rateMatch[1] : '31.50';
+
+        let descIdx = textUpper.lastIndexOf("DESCRIPTION OF GOODS");
+        let searchArea = descIdx !== -1 ? fullText.substring(descIdx) : fullText;
+
+        let cleanSearchArea = searchArea.split('\n').filter(line => !line.match(/Total/i)).join('\n');
+
+        let weights = getTokens('\\b([3-9]\\d{2}(?:\\.\\d{1,3})?|1[0-5]\\d{2}(?:\\.\\d{1,3})?)\\s*KGS\\b', cleanSearchArea, 'gi');
+        let sizes = getTokens('\\b(\\d{2,3}(?:\\.\\d{1,2})?)\\s*(?:CMS|MM|INCH|IN|\\"|”|\\\'\\\')', cleanSearchArea, 'gi');
+        
+        // THE FIX: We literally erase the Weights and Sizes from the text block.
+        // This ensures a GSM of 100 or a Size of 130 cannot be mistakenly grabbed as a Reel ID.
+        let textForReels = cleanSearchArea
+            .replace(/\b([3-9]\d{2}(?:\.\d{1,3})?|1[0-5]\d{2}(?:\.\d{1,3})?)\s*KGS\b/gi, '')
+            .replace(/\b(\d{2,3}(?:\.\d{1,2})?)\s*(?:CMS|MM|INCH|IN|"|”|'')/gi, '');
+
+        // Narrowing the scanner to ONLY target 4-to-5 digit numbers
+        let rawReels = getTokens('\\b([1-9]\\d{3,4})\\b', textForReels, 'g');
+        
+        let validReels = rawReels.filter(r => {
+            let n = parseInt(r.val);
+            if (n >= 2024 && n <= 2030) return false; 
+            if (['123','1234','1231','666'].includes(r.val)) return false; 
+            if (['6666','1616','1818','2020'].includes(r.val)) return false; 
+            if (/^(\d)\1+$/.test(r.val)) return false; 
+            return true;
+        });
+
+        let gsms = getTokens('\\b(80|90|100|110|120|130|140|150|180|200|250)\\b(?!\\.)', cleanSearchArea, 'g');
+        let bfs = getTokens('\\b(16|18|20|22|24|26|28)\\b(?!\\.)', cleanSearchArea, 'g');
+
+        let gsmMatch = cleanSearchArea.match(/\b(80|90|100|110|120|130|140|150|180|200|250)\b/);
+        let bfMatch = cleanSearchArea.match(/\b(16|18|20|22|24|26|28)\b/);
+        let docGsm = gsmMatch ? gsmMatch[1] : '100';
+        let docBf = bfMatch ? bfMatch[1] : '16';
+
+        for (let i = 0; i < weights.length; i++) {
+            let wToken = weights[i];
+            let sToken = sizes[i]; 
+            let rToken = validReels[i];
+            
+            let claimed = [];
+            let rIndex = rToken ? rToken.index : wToken.index;
+            let gToken = pullClosest(rIndex, gsms, true, claimed);
+            let bToken = pullClosest(rIndex, bfs, true, claimed);
+            
+            let cToken = pullClosest(wToken.index, colors, false); 
+            let itemColor = cToken ? cToken.val.charAt(0).toUpperCase() + cToken.val.slice(1).toLowerCase() : 'Kraft';
+
+            rawLineItems.push({
+                reelNo: rToken ? rToken.val : '',
+                weight: wToken.val.replace(/\s*KGS/i, '').trim(),
+                rate: defaultRate,
+                gsm: gToken ? gToken.val : docGsm,
+                bf: bToken ? bToken.val : docBf,
+                size: sToken ? sToken.val.replace(/\s*(CMS|MM|INCH|IN|"|”|'')/i, '').trim() : '',
+                color: itemColor
+            });
+        }
     } else {
         // ==========================================
-        // MAHESHWARI / GENERIC LOGIC
+        // GENERIC FALLBACK
         // ==========================================
         const lines = fullText.split('\n');
         for (const entity of result.document.entities) {

@@ -322,7 +322,7 @@ export default function App() {
         {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView />}
         {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'production' && <ProductionView inventory={inventory} production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getDocRef={getDocRef} currentUser={currentErpUser} />}
+        {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} orders={orders} companies={companies} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} />}
         {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
@@ -342,6 +342,7 @@ function NavButton({ icon, label, isActive, onClick }) {
     </button>
   );
 }
+// --- DASHBOARD VIEW ---
 // --- DASHBOARD VIEW ---
 function DashboardView({ inventory, production, orders, items, companies, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -385,26 +386,39 @@ function DashboardView({ inventory, production, orders, items, companies, curren
         .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     
     sortedProd.forEach(p => {
-      if (!p.reelNos || !p.useKg) return;
-      const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
-      if (pReels.length === 0) return;
-      
-      let remainingUse = parseFloat(p.useKg || 0);
-      pReels.forEach((rNo, index) => {
-        if (remainingUse <= 0) return;
-        let deduct = 0;
-        if (index === pReels.length - 1) { 
-            deduct = remainingUse; 
-        } else { 
-            deduct = Math.min(Math.max(balances[rNo] || 0, 0), remainingUse); 
-        }
-        if (deduct > 0) {
-          balances[rNo] = (balances[rNo] || 0) - deduct;
-          if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
-          usageStats[rNo].issued += deduct;
-          remainingUse -= deduct;
-        }
-      });
+      // THE FIX: Safe granular parsing without log array pushing
+      if (p.consumedReels && p.consumedReels.length > 0) {
+        p.consumedReels.forEach(cr => {
+           const rNo = String(cr.reelNo || '').trim().toLowerCase();
+           const deduct = parseFloat(cr.weight || 0);
+           if (deduct > 0) {
+             balances[rNo] = (balances[rNo] || 0) - deduct;
+             if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
+             usageStats[rNo].issued += deduct;
+           }
+        });
+      } else {
+        if (!p.reelNos || !p.useKg) return;
+        const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+        if (pReels.length === 0) return;
+        
+        let remainingUse = parseFloat(p.useKg || 0);
+        pReels.forEach((rNo, index) => {
+          if (remainingUse <= 0) return;
+          let deduct = 0;
+          if (index === pReels.length - 1) { 
+              deduct = remainingUse; 
+          } else { 
+              deduct = Math.min(Math.max(balances[rNo] || 0, 0), remainingUse); 
+          }
+          if (deduct > 0) {
+            balances[rNo] = (balances[rNo] || 0) - deduct;
+            if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
+            usageStats[rNo].issued += deduct;
+            remainingUse -= deduct;
+          }
+        });
+      }
     });
 
     return inventory
@@ -463,15 +477,25 @@ function DashboardView({ inventory, production, orders, items, companies, curren
             const cId = p.companyId || 'unassigned';
             if (compId !== 'all' && cId !== compId) return;
             
-            const used = parseFloat(p.useKg || 0);
-            kg += used;
-
-            const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
-            let avgRate = 0;
-            if (pReels.length > 0 && reelLedger[pReels[0]]) {
-                avgRate = reelLedger[pReels[0]].rate;
+            // THE FIX: Correctly maps values whether using the new Granular format or old sequential logs
+            if (p.consumedReels && p.consumedReels.length > 0) {
+               p.consumedReels.forEach(cr => {
+                  const used = parseFloat(cr.weight || 0);
+                  kg += used;
+                  const rNo = String(cr.reelNo || '').trim().toLowerCase();
+                  const avgRate = reelLedger[rNo]?.rate || 0;
+                  val += (used * avgRate);
+               });
+            } else {
+               const used = parseFloat(p.useKg || 0);
+               kg += used;
+               const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+               let avgRate = 0;
+               if (pReels.length > 0 && reelLedger[pReels[0]]) {
+                   avgRate = reelLedger[pReels[0]].rate;
+               }
+               val += (used * avgRate);
             }
-            val += (used * avgRate);
         }
     });
     return { kg, val };
@@ -511,6 +535,8 @@ function DashboardView({ inventory, production, orders, items, companies, curren
         
         producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
     }
+
+    producedQty += parseInt(order.openingFgQty || 0);
 
     let dispatchedToDate = 0;
     if (order.dispatchHistory) {
@@ -1054,23 +1080,12 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
 
 // --- COSTING VIEW ---
 function CostingView() {
-  const [size, setSize] = useState('');
-  const [plyCount, setPlyCount] = useState(3);
-  const [conversionCost, setConversionCost] = useState(0);
-
-  const [plyDetails, setPlyDetails] = useState([
-    { id: 0, name: 'Top Liner', gsm: 150, bf: 18, factor: 1.0, rate: 40 },
-    { id: 1, name: 'Fluting 1', gsm: 120, bf: 18, factor: 1.4, rate: 35 },
-    { id: 2, name: 'Bottom Liner', gsm: 150, bf: 18, factor: 1.0, rate: 40 }
-  ]);
-
-  const handlePlyCountChange = (e) => {
-    const count = parseInt(e.target.value) || 3;
-    setPlyCount(count);
-    const newPlies = [];
+  // Helper to generate default plies
+  const generatePlies = (count) => {
+    const plies = [];
     for (let i = 0; i < count; i++) {
       const isFlute = i % 2 !== 0; 
-      newPlies.push({
+      plies.push({
         id: i,
         name: isFlute ? `Fluting ${Math.ceil(i/2)}` : (i === 0 ? 'Top Liner' : (i === count - 1 ? 'Bottom Liner' : `Middle Liner ${Math.floor(i/2)}`)),
         gsm: isFlute ? 120 : 150,
@@ -1079,94 +1094,268 @@ function CostingView() {
         rate: isFlute ? 35 : 40
       });
     }
-    setPlyDetails(newPlies);
+    return plies;
   };
 
-  const handlePlyChange = (index, field, value) => {
-    const newPlies = [...plyDetails];
-    newPlies[index][field] = parseFloat(value) || 0;
-    setPlyDetails(newPlies);
+  // Master State: Array of parts making up the Set
+  const [parts, setParts] = useState([{
+    id: Date.now(),
+    partName: 'Main Box',
+    qtyPerSet: 1,
+    itemType: 'Box',
+    size: '',
+    plyCount: 3,
+    conversionCost: 0,
+    pocketsLength: 3,
+    pocketsWidth: 2,
+    plyDetails: generatePlies(3)
+  }]);
+
+  const addPart = () => {
+    setParts([...parts, {
+      id: Date.now(), partName: `Part ${parts.length + 1}`, qtyPerSet: 1, itemType: 'Partition', size: '', plyCount: 3, conversionCost: 0, pocketsLength: 3, pocketsWidth: 2, plyDetails: generatePlies(3)
+    }]);
   };
 
-  const dimensions = size.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
-  const L = dimensions[0] || 0;
-  const W = dimensions[1] || 0;
-  const H = dimensions[2] || 0;
-  const boardLength = L && W ? (L + W) * 2 + 50 : 0;
-  const boardWidth = W && H ? W + H + 20 : 0;
-  const boardAreaSqM = (boardLength * boardWidth) / 1000000;
+  const removePart = (id) => {
+    if (parts.length > 1) {
+      setParts(parts.filter(p => p.id !== id));
+    } else {
+      alert("A set must have at least one part.");
+    }
+  };
 
-  let totalWeightKg = 0;
-  let totalMaterialCost = 0;
+  const handlePartChange = (id, field, value) => {
+    setParts(parts.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, [field]: value };
+        // Auto-regenerate plies if plyCount changes
+        if (field === 'plyCount') {
+          updated.plyDetails = generatePlies(parseInt(value) || 3);
+        }
+        return updated;
+      }
+      return p;
+    }));
+  };
 
-  const plyRows = plyDetails.map((ply, index) => {
-    const plyWeightKg = (boardAreaSqM * ply.gsm * ply.factor) / 1000;
-    const plyCost = plyWeightKg * ply.rate;
-    totalWeightKg += plyWeightKg;
-    totalMaterialCost += plyCost;
+  const handlePlyChange = (partId, plyIndex, field, value) => {
+    setParts(parts.map(p => {
+      if (p.id === partId) {
+        const newPlies = [...p.plyDetails];
+        newPlies[plyIndex][field] = parseFloat(value) || 0;
+        return { ...p, plyDetails: newPlies };
+      }
+      return p;
+    }));
+  };
 
-    return (
-      <tr key={ply.id} className="border-b border-stone-100 hover:bg-stone-50">
-        <td className="p-3 text-sm font-medium text-stone-800">{ply.name}</td>
-        <td className="p-2"><input type="number" className="w-16 p-2 border rounded text-sm bg-white" value={ply.gsm} onChange={e => handlePlyChange(index, 'gsm', e.target.value)} /></td>
-        <td className="p-2"><input type="number" className="w-16 p-2 border rounded text-sm bg-white" value={ply.bf} onChange={e => handlePlyChange(index, 'bf', e.target.value)} /></td>
-        <td className="p-2"><input type="number" step="0.1" className="w-16 p-2 border rounded text-sm bg-white" value={ply.factor} onChange={e => handlePlyChange(index, 'factor', e.target.value)} /></td>
-        <td className="p-2"><input type="number" className="w-20 p-2 border rounded text-sm bg-white" value={ply.rate} onChange={e => handlePlyChange(index, 'rate', e.target.value)} /></td>
-        <td className="p-3 text-sm font-mono text-stone-600">{plyWeightKg > 0 ? plyWeightKg.toFixed(3) : '-'} kg</td>
-        <td className="p-3 text-sm font-mono font-semibold text-stone-900">{plyCost > 0 ? plyCost.toFixed(2) : '-'}</td>
-      </tr>
-    );
+  // --- LIVE MATH ENGINE ---
+  const calculatedParts = parts.map(part => {
+    const dims = part.size.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
+    const L = dims[0] || 0; const W = dims[1] || 0; const H = dims[2] || 0;
+    
+    let boardAreaSqM = 0;
+    let uiDetails = {};
+
+    if (part.itemType === 'Partition') {
+        const pL = parseInt(part.pocketsLength) || 1;
+        const pW = parseInt(part.pocketsWidth) || 1;
+        const latPieces = Math.max(0, pL - 1);  
+        const longPieces = Math.max(0, pW - 1); 
+        boardAreaSqM = ((latPieces * W * H) + (longPieces * L * H)) / 1000000;
+        uiDetails = { latPieces, longPieces };
+    } else {
+        let bl = 0, bw = 0;
+        if (part.itemType === 'Box') { bl = (L+W)*2+50; bw = W+H+20; }
+        else if (part.itemType === 'Tray') { bl = L+(H*2)+15; bw = W+(H*2)+15; }
+        else { bl = L; bw = W; }
+        boardAreaSqM = (bl * bw) / 1000000;
+        uiDetails = { bl, bw };
+    }
+
+    let singleWeightKg = 0;
+    let singleMaterialCost = 0;
+
+    part.plyDetails.forEach(ply => {
+      const plyWt = (boardAreaSqM * ply.gsm * ply.factor) / 1000;
+      singleWeightKg += plyWt;
+      singleMaterialCost += (plyWt * ply.rate);
+    });
+
+    const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
+    const qty = parseInt(part.qtyPerSet) || 1;
+
+    return { 
+      ...part, boardAreaSqM, uiDetails, singleWeightKg, singleMaterialCost, singleTotalCost,
+      totalWeightKg: singleWeightKg * qty, totalCost: singleTotalCost * qty
+    };
   });
 
-  const finalBoxCost = totalMaterialCost + parseFloat(conversionCost || 0);
-  const ratePerKg = totalWeightKg > 0 ? (finalBoxCost / totalWeightKg) : 0;
+  const grandTotalCost = calculatedParts.reduce((sum, p) => sum + p.totalCost, 0);
+  const grandTotalWeight = calculatedParts.reduce((sum, p) => sum + p.totalWeightKg, 0);
+  const blendedRatePerKg = grandTotalWeight > 0 ? (grandTotalCost / grandTotalWeight) : 0;
 
   return (
-    <div className="max-w-6xl mx-auto pb-12">
-      <h2 className="text-2xl font-bold mb-6">Box Costing Calculator (Standalone)</h2>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 space-y-6">
-           <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 space-y-4">
-              <h3 className="font-bold border-b pb-2">Box Dimensions & Ply</h3>
-              <div><label className="block text-xs font-medium text-stone-500 mb-1">Size (L x W x H) in mm</label><input type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={size} onChange={(e) => setSize(e.target.value)} /></div>
-              <div><label className="block text-xs font-medium text-stone-500 mb-1">Number of Plies</label><select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={plyCount} onChange={handlePlyCountChange}><option value={2}>2 Ply</option><option value={3}>3 Ply</option><option value={5}>5 Ply</option><option value={7}>7 Ply</option></select></div>
-              {boardAreaSqM > 0 && (
-                <div className="pt-4 bg-stone-50 p-4 rounded-lg mt-4 text-sm border border-stone-100">
-                  <p className="flex justify-between mb-1"><span className="text-stone-500">Board Length:</span> <span className="font-medium text-stone-900">{boardLength.toFixed(1)} mm</span></p>
-                  <p className="flex justify-between mb-1"><span className="text-stone-500">Board Width:</span> <span className="font-medium text-stone-900">{boardWidth.toFixed(1)} mm</span></p>
-                  <p className="flex justify-between"><span className="text-stone-500">Board Area:</span> <span className="font-medium text-stone-900">{boardAreaSqM.toFixed(3)} m²</span></p>
-                </div>
-              )}
-           </div>
-           <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-               <h3 className="font-bold mb-4 border-b pb-2">Manufacturing Add-ons</h3>
-               <div><label className="block text-xs font-medium text-stone-500 mb-1">Conversion/Mfg Cost per Box</label><input type="number" step="0.01" className="w-full p-2 border border-stone-300 rounded-md bg-white text-lg font-mono" value={conversionCost} onChange={(e) => setConversionCost(e.target.value)} /></div>
-           </div>
+    <div className="max-w-7xl mx-auto pb-12 flex flex-col xl:flex-row gap-8 items-start">
+      
+      {/* LEFT COLUMN: PARTS BUILDER */}
+      <div className="flex-1 space-y-6 w-full">
+        <div className="flex justify-between items-center">
+           <h2 className="text-2xl font-bold">Composite Set Costing</h2>
+           <button onClick={addPart} className="bg-stone-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-stone-800 transition">+ Add Another Part to Set</button>
         </div>
-        <div className="lg:col-span-2 space-y-6">
-           <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
-              <div className="bg-stone-100 p-4 border-b border-stone-200"><h3 className="font-bold text-stone-800">Ply Specification & Material Cost</h3></div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
-                    <tr><th className="p-3">Ply Layer</th><th className="p-3">GSM</th><th className="p-3">BF</th><th className="p-3">Fluting Factor</th><th className="p-3">Rate / KG</th><th className="p-3">Ply Wt.</th><th className="p-3">Cost</th></tr>
-                  </thead>
-                  <tbody>{plyRows}</tbody>
-                </table>
-              </div>
-           </div>
-           <div className="bg-stone-900 text-stone-100 p-6 rounded-xl shadow-lg border border-stone-800 grid grid-cols-2 md:grid-cols-4 gap-6">
-               <div><p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Total Weight</p><p className="text-2xl font-bold font-mono text-white">{totalWeightKg > 0 ? totalWeightKg.toFixed(3) : '0.000'} <span className="text-sm font-normal text-stone-500">kg</span></p></div>
-               <div><p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Material Cost</p><p className="text-2xl font-bold font-mono text-white">{totalMaterialCost > 0 ? totalMaterialCost.toFixed(2) : '0.00'}</p></div>
-               <div><p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Conversion</p><p className="text-2xl font-bold font-mono text-white">{parseFloat(conversionCost || 0).toFixed(2)}</p></div>
-               <div className="bg-stone-800 p-3 rounded-lg -m-3 text-center border border-stone-700">
-                  <p className="text-stone-300 text-xs uppercase tracking-wider mb-1 font-bold">Total Box Cost</p>
-                  <p className="text-3xl font-bold font-mono text-green-400">{finalBoxCost > 0 ? finalBoxCost.toFixed(2) : '0.00'}</p>
-                  <p className="text-stone-400 text-xs mt-1 font-medium">{ratePerKg > 0 ? ratePerKg.toFixed(2) : '0.00'} / kg</p>
+
+        {calculatedParts.map((part, index) => (
+          <div key={part.id} className="bg-white rounded-xl shadow-sm border border-stone-300 overflow-hidden">
+            
+            {/* PART HEADER */}
+            <div className="bg-stone-100 p-4 border-b border-stone-200 flex flex-wrap gap-4 justify-between items-center">
+               <div className="flex items-center gap-3 flex-1 min-w-[250px]">
+                  <span className="bg-stone-800 text-white font-bold w-6 h-6 flex items-center justify-center rounded-full text-xs">{index + 1}</span>
+                  <input type="text" className="p-1.5 border border-stone-300 rounded font-bold text-stone-800 bg-white" placeholder="Part Name (e.g. Outer Box)" value={part.partName} onChange={e => handlePartChange(part.id, 'partName', e.target.value)} />
                </div>
-           </div>
-        </div>
+               <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                     <label className="text-xs font-bold text-stone-600 uppercase">Qty Per Set:</label>
+                     <input type="number" min="1" className="w-16 p-1.5 border border-blue-300 bg-blue-50 rounded font-bold text-blue-900 text-center" value={part.qtyPerSet} onChange={e => handlePartChange(part.id, 'qtyPerSet', e.target.value)} />
+                  </div>
+                  {parts.length > 1 && <button onClick={() => removePart(part.id)} className="text-red-500 hover:text-red-700 text-sm font-bold px-2">Remove</button>}
+               </div>
+            </div>
+
+            {/* PART CONFIGURATION */}
+            <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 border-b border-stone-100">
+               <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-stone-500 mb-1">Item Type</label>
+                      <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-bold" value={part.itemType} onChange={e => handlePartChange(part.id, 'itemType', e.target.value)}>
+                        <option value="Box">Standard Box</option><option value="Tray">Tray</option><option value="Partition">Partition (Divider)</option><option value="Sheet">Flat Sheet</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-stone-500 mb-1">Number of Plies</label>
+                      <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={part.plyCount} onChange={e => handlePartChange(part.id, 'plyCount', e.target.value)}>
+                        <option value={2}>2 Ply</option><option value={3}>3 Ply</option><option value={5}>5 Ply</option><option value={7}>7 Ply</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-1">
+                      {part.itemType === 'Partition' ? 'Inner Box Size (L x W x H) mm' : (part.itemType === 'Sheet' ? 'Size (L x W) mm' : 'Size (L x W x H) mm')}
+                    </label>
+                    <input type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.size} onChange={e => handlePartChange(part.id, 'size', e.target.value)} />
+                  </div>
+
+                  {part.itemType === 'Partition' && (
+                    <div className="grid grid-cols-2 gap-4 bg-blue-50 p-3 rounded border border-blue-100">
+                      <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Length</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsLength} onChange={e => handlePartChange(part.id, 'pocketsLength', e.target.value)} /></div>
+                      <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Width</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsWidth} onChange={e => handlePartChange(part.id, 'pocketsWidth', e.target.value)} /></div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-1">Conversion/Mfg Cost (Per 1 Piece)</label>
+                    <input type="number" step="0.01" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
+                  </div>
+               </div>
+
+               {/* DYNAMIC METRICS READOUT */}
+               <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 flex flex-col justify-center">
+                  <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 border-b border-stone-200 pb-2">Single Piece Geometry</p>
+                  {part.boardAreaSqM > 0 ? (
+                    <div className="space-y-2">
+                       {part.itemType === 'Partition' ? (
+                         <>
+                           <p className="flex justify-between text-sm"><span className="text-stone-500">Longitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.longPieces} pcs</span></p>
+                           <p className="flex justify-between text-sm"><span className="text-stone-500">Latitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.latPieces} pcs</span></p>
+                         </>
+                       ) : (
+                         <>
+                           <p className="flex justify-between text-sm"><span className="text-stone-500">Board Length:</span> <span className="font-mono text-stone-900">{part.uiDetails.bl?.toFixed(1)} mm</span></p>
+                           <p className="flex justify-between text-sm"><span className="text-stone-500">Board Width:</span> <span className="font-mono text-stone-900">{part.uiDetails.bw?.toFixed(1)} mm</span></p>
+                         </>
+                       )}
+                       <p className="flex justify-between text-base font-bold pt-2 border-t border-stone-200 mt-2"><span className="text-stone-700">Total Flat Area:</span> <span className="font-mono text-blue-700">{part.boardAreaSqM.toFixed(4)} m²</span></p>
+                       <p className="flex justify-between text-sm font-bold"><span className="text-stone-700">Single Piece Wt:</span> <span className="font-mono text-orange-700">{part.singleWeightKg.toFixed(3)} kg</span></p>
+                    </div>
+                  ) : (
+                    <p className="text-stone-400 text-sm text-center italic">Enter dimensions to calculate geometry.</p>
+                  )}
+               </div>
+            </div>
+
+            {/* PLY TABLE */}
+            <div className="overflow-x-auto p-4">
+              <table className="w-full text-left">
+                <thead className="text-stone-400 text-xs uppercase tracking-wider">
+                  <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {part.plyDetails.map((ply, idx) => {
+                    const plyCost = (part.boardAreaSqM * ply.gsm * ply.factor / 1000) * ply.rate;
+                    return (
+                      <tr key={ply.id} className="hover:bg-stone-50">
+                        <td className="p-2 text-sm font-medium text-stone-600">{ply.name}</td>
+                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.gsm} onChange={e => handlePlyChange(part.id, idx, 'gsm', e.target.value)} /></td>
+                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.bf} onChange={e => handlePlyChange(part.id, idx, 'bf', e.target.value)} /></td>
+                        <td className="p-1"><input type="number" step="0.1" className="w-16 p-1.5 border rounded text-xs" value={ply.factor} onChange={e => handlePlyChange(part.id, idx, 'factor', e.target.value)} /></td>
+                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.rate} onChange={e => handlePlyChange(part.id, idx, 'rate', e.target.value)} /></td>
+                        <td className="p-2 text-right text-sm font-mono font-bold text-stone-800">{plyCost > 0 ? `₹${plyCost.toFixed(2)}` : '-'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* PART TOTAL FOOTER */}
+            <div className="bg-stone-800 text-white p-4 flex flex-wrap justify-between items-center">
+               <div className="text-sm">
+                  <span className="text-stone-400 mr-2">Single Piece Cost:</span> 
+                  <span className="font-mono font-bold text-green-400">₹{part.singleTotalCost.toFixed(2)}</span>
+               </div>
+               <div className="text-base font-bold">
+                  <span className="text-stone-400 mr-2 uppercase text-xs tracking-wider">Subtotal ({part.qtyPerSet}x):</span> 
+                  <span className="font-mono text-xl">₹{part.totalCost.toFixed(2)}</span>
+               </div>
+            </div>
+          </div>
+        ))}
       </div>
+
+      {/* RIGHT COLUMN: STICKY SET SUMMARY */}
+      <div className="w-full xl:w-96 xl:sticky top-8 space-y-4">
+         <div className="bg-stone-900 rounded-xl shadow-xl border border-stone-800 overflow-hidden">
+            <div className="bg-stone-950 p-6 text-center border-b border-stone-800">
+               <h3 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-2">Grand Total Set Cost</h3>
+               <p className="text-5xl font-bold font-mono text-green-400">₹{grandTotalCost > 0 ? grandTotalCost.toFixed(2) : '0.00'}</p>
+               <p className="text-stone-500 text-sm mt-2 font-mono">Blended: ₹{blendedRatePerKg.toFixed(2)} / kg</p>
+            </div>
+            
+            <div className="p-6">
+               <h4 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-4 border-b border-stone-700 pb-2">Set Composition</h4>
+               <ul className="space-y-3 mb-6">
+                 {calculatedParts.map((p, i) => (
+                    <li key={p.id} className="flex justify-between items-center text-sm">
+                       <span className="text-stone-300 font-medium">
+                         <span className="text-stone-500 mr-2">{p.qtyPerSet}x</span> {p.partName || `Part ${i+1}`}
+                       </span>
+                       <span className="font-mono font-bold text-white">₹{p.totalCost.toFixed(2)}</span>
+                    </li>
+                 ))}
+               </ul>
+
+               <div className="bg-stone-800 p-4 rounded-lg border border-stone-700">
+                  <p className="flex justify-between text-sm mb-1"><span className="text-stone-400">Total Set Weight:</span> <span className="font-mono text-white font-bold">{grandTotalWeight.toFixed(3)} kg</span></p>
+                  <p className="flex justify-between text-sm"><span className="text-stone-400">Total Pieces:</span> <span className="font-mono text-white">{calculatedParts.reduce((s, p) => s + parseInt(p.qtyPerSet||0), 0)}</span></p>
+               </div>
+            </div>
+         </div>
+      </div>
+
     </div>
   );
 }
@@ -1317,17 +1506,14 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
 }
 
 // --- INVENTORY VIEW ---
+// --- INVENTORY VIEW ---
 function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [] }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
-  // --- SUB-TAB STATE ---
   const [activeSubTab, setActiveSubTab] = useState('Paper'); 
-
-  // --- NEW SCANNER STATE ---
   const [isScanning, setIsScanning] = useState(false);
 
-  // --- PAPER STATE ---
   const [editingId, setEditingId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [commonData, setCommonData] = useState({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', invoiceNo: '', vehicleNo: '' });
@@ -1335,20 +1521,17 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
   const [filters, setFilters] = useState({ company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
 
-  // --- CONSUMABLES STATE ---
   const [consumableData, setConsumableData] = useState({ 
       date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
   });
   const [consumableFilters, setConsumableFilters] = useState({ itemName: '', vendorName: '', status: 'All' });
 
-  // --- AUTOMATED INVOICE SCANNING ---
   const handleScanInvoice = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setIsScanning(true);
 
     try {
-      // 1. Convert image to Base64
       const base64Image = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
@@ -1356,18 +1539,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         reader.onerror = (error) => reject(error);
       });
 
-      // 2. Point explicitly to your Mumbai server
       const functions = getFunctions(app, 'asia-south1');
       const parseInvoice = httpsCallable(functions, 'parseInvoice');
 
-      // 3. Call Google Document AI
-      const response = await parseInvoice({ 
-          base64Image, 
-          mimeType: file.type 
-      });
+      const response = await parseInvoice({ base64Image, mimeType: file.type });
       const data = response.data;
 
-      // 4. Auto-fill the React state
       setCommonData(prev => ({
         ...prev,
         millName: data.millName || prev.millName,
@@ -1378,9 +1555,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       if (data.lineItems && data.lineItems.length > 0) {
         setReelsInput(data.lineItems.map(item => ({
           reelNo: item.reelNo || '',
-          size: item.size || '', // <--- CHANGED
-          gsm: item.gsm || '',   // <--- CHANGED
-          bf: item.bf || '',     // <--- CHANGED
+          size: item.size || '',
+          gsm: item.gsm || '', 
+          bf: item.bf || '',   
           colour: 'Kraft',
           receivedQty: item.weight || '',
           initialIssuedQty: '',
@@ -1497,26 +1674,39 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   });
   
   sortedProd.forEach(p => {
-    if (!p.reelNos || !p.useKg) return;
-    const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
-    if (pReels.length === 0) return;
-    let remainingUse = parseFloat(p.useKg || 0);
-    pReels.forEach((rNo, index) => {
-      if (remainingUse <= 0) return;
-      let deduct = 0;
-      if (index === pReels.length - 1) { deduct = remainingUse; } 
-      else {
-        const available = balances[rNo] || 0;
-        deduct = Math.min(Math.max(available, 0), remainingUse);
-      }
-      if (deduct > 0) {
-        balances[rNo] = (balances[rNo] || 0) - deduct;
-        if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
-        usageStats[rNo].issued += deduct;
-        usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-        remainingUse -= deduct;
-      }
-    });
+    if (p.consumedReels && p.consumedReels.length > 0) {
+      p.consumedReels.forEach(cr => {
+         const rNo = String(cr.reelNo || '').trim().toLowerCase();
+         const deduct = parseFloat(cr.weight || 0);
+         if (deduct > 0) {
+           balances[rNo] = (balances[rNo] || 0) - deduct;
+           if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
+           usageStats[rNo].issued += deduct;
+           usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+         }
+      });
+    } else {
+      if (!p.reelNos || !p.useKg) return;
+      const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+      if (pReels.length === 0) return;
+      let remainingUse = parseFloat(p.useKg || 0);
+      pReels.forEach((rNo, index) => {
+        if (remainingUse <= 0) return;
+        let deduct = 0;
+        if (index === pReels.length - 1) { deduct = remainingUse; } 
+        else {
+          const available = balances[rNo] || 0;
+          deduct = Math.min(Math.max(available, 0), remainingUse);
+        }
+        if (deduct > 0) {
+          balances[rNo] = (balances[rNo] || 0) - deduct;
+          if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
+          usageStats[rNo].issued += deduct;
+          usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+          remainingUse -= deduct;
+        }
+      });
+    }
   });
 
   const inventoryWithUsage = paperInventoryData.map(reel => {
@@ -1916,12 +2106,99 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
   const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
 
   const [editingId, setEditingId] = useState(null);
+  const [suggestedKg, setSuggestedKg] = useState(null);
+  
+  // New State for Granular Reel Entry
+  const [consumedReels, setConsumedReels] = useState([{ reelNo: '', weight: '' }]);
+  
   const [newRecord, setNewRecord] = useState({ 
-    date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', 
-    size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
+    date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', 
+    linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
   });
 
   const availableMills = [...new Set(inventory.filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId)).map(i => i.millName).filter(Boolean))];
+
+  // ==========================================
+  // LIVE MATH ENGINE: Auto-Suggest Use KG
+  // ==========================================
+  useEffect(() => {
+    if (!newRecord.usedForItem) {
+      setSuggestedKg(null);
+      return;
+    }
+
+    const item = items.find(i => i.name === newRecord.usedForItem || i.Item_Name === newRecord.usedForItem);
+    if (!item) return;
+
+    const sizeStr = String(item.size || item.Size_mm || '0x0x0').toLowerCase().replace(/\*/g, 'x');
+    const dims = sizeStr.split('x').map(s => parseFloat(s.trim()) || 0);
+    const L = dims[0] || 0;
+    const W = dims[1] || 0;
+    const H = dims[2] || 0;
+
+    const type = item.itemType || item.Item_Type || 'Box';
+    let totalAreaSqM = 0;
+
+    let targetSheets = parseFloat(newRecord.linerQty || 0);
+
+    if (targetSheets === 0 && newRecord.orderId) {
+      const ord = orders.find(o => o.id === newRecord.orderId);
+      if (ord) {
+        if (type === 'PPC') {
+          const orderQty = parseFloat(ord.orderQty || 0);
+          const cPerSet = Math.max(1, parseInt(ord.commonPerSet || 2) - 1);
+          const sPerSet = Math.max(1, parseInt(ord.smallPerSet || 2) - 1);
+          const baseC = parseInt(ord.commonUps || 1);
+          const baseS = parseInt(ord.smallUps || 1);
+          const pUpsC = parseInt(ord.plannedUpsCommon || 1);
+          const pUpsS = parseInt(ord.plannedUpsSmall || 1);
+
+          const cNeeded = cPerSet * orderQty;
+          const sNeeded = sPerSet * orderQty;
+          const cPiecesPerCSheet = baseC * pUpsC;
+          const sPiecesPerCSheet = baseC * pUpsC;
+          const sPiecesPerSSheet = baseS * pUpsS * 2;
+
+          const cSheetsNeeded = Math.ceil(cNeeded / cPiecesPerCSheet);
+          const sAcquired = cSheetsNeeded * sPiecesPerCSheet;
+          const remainingS = Math.max(0, sNeeded - sAcquired);
+          const sSheetsNeeded = Math.ceil(remainingS / sPiecesPerSSheet);
+
+          targetSheets = cSheetsNeeded + sSheetsNeeded;
+
+          const cWidth = H * baseC;
+          const cLength = ((L + W) * pUpsC) + 10;
+          const sWidth = cWidth;
+          const sLength = (W * 2 * pUpsS) + 10;
+
+          totalAreaSqM = ((cSheetsNeeded * cWidth * cLength) + (sSheetsNeeded * sWidth * sLength)) / 1000000;
+        } else {
+          const ups = parseFloat(newRecord.numberOfUps || 1);
+          targetSheets = Math.ceil(parseFloat(ord.orderQty || 0) / ups);
+        }
+      }
+    }
+
+    if (targetSheets > 0) {
+      if (type !== 'PPC') {
+        let boardLength = 0, boardWidth = 0;
+        if (type === 'Box') { boardLength = (L + W) * 2 + 50; boardWidth = W + H + 20; }
+        else if (type === 'Tray' || type === 'Lid') { boardLength = (L + W * 2) + 10; boardWidth = (W + 2 * H) + 10; }
+        else { boardLength = L; boardWidth = W; }
+
+        totalAreaSqM = (boardLength * boardWidth / 1000000) * targetSheets;
+      }
+
+      const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120);
+      const isFlute = newRecord.paperUsedFor === 'Paper';
+      const factor = isFlute ? 1.4 : 1.0;
+
+      const expectedKg = totalAreaSqM * (gsm / 1000) * factor;
+      setSuggestedKg(expectedKg.toFixed(1));
+    } else {
+      setSuggestedKg(null);
+    }
+  }, [newRecord.usedForItem, newRecord.orderId, newRecord.numberOfUps, newRecord.paperUsedFor, newRecord.linerQty, items, orders]);
 
   const handleOrderLink = (orderId) => {
     if (!orderId) {
@@ -1936,26 +2213,48 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
+    
+    // Auto-calculate the total and generate the backward-compatible string
+    const totalKg = consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0);
+    const reelNosStr = consumedReels.map(r => r.reelNo.toUpperCase()).filter(Boolean).join(', ');
+    
+    const finalRecord = { 
+      ...newRecord, 
+      consumedReels: consumedReels, 
+      useKg: totalKg.toFixed(1), 
+      reelNos: reelNosStr 
+    };
+
     if (editingId) {
-      await updateDoc(getDocRef('production', editingId), newRecord);
-      addLog(`Updated production record: Reels ${newRecord.reelNos}`);
+      await updateDoc(getDocRef('production', editingId), finalRecord);
+      addLog(`Updated production record: Reels ${reelNosStr}`);
       setEditingId(null);
     } else {
-      await addDoc(getColRef('production'), newRecord);
-      addLog(`Added production record: Reels ${newRecord.reelNos}`);
+      await addDoc(getColRef('production'), finalRecord);
+      addLog(`Added production record: Reels ${reelNosStr}`);
     }
-    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+    
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+    setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
   const handleEdit = (record) => {
     setEditingId(record.id);
     setNewRecord(record);
+    
+    // Load granular reels if they exist, otherwise adapt the old sequential format
+    if (record.consumedReels && record.consumedReels.length > 0) {
+      setConsumedReels(record.consumedReels);
+    } else if (record.reelNos) {
+      setConsumedReels([{ reelNo: record.reelNos, weight: record.useKg }]);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
     setEditingId(null);
-    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', reelNos: '', paperUsedFor: 'Paper', usedForItem: '', size: '', gsm: '', bf: '', useKg: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+    setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
   const handleDelete = async (id, reelNos) => {
@@ -1970,7 +2269,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     const exportData = visibleProduction.map(record => {
       const compName = companies.find(c => c.id === record.companyId)?.name || 'Unknown';
       const orderInfo = record.orderId ? (() => { const o = orders.find(o => o.id === record.orderId); return o ? `Order: ${o.orderQty}x ${o.itemName || o.Item_Name}` : 'Unknown Order'; })() : 'Standalone Production';
-      return { Date: record.date || '', Company: compName, Linked_Order: orderInfo, MillName: record.millName || '', Reels: record.reelNos || record.reelNo || '', PaperUsedFor: record.paperUsedFor || '', UsedForItem: record.usedForItem || '', Size_mm: record.size || '', GSM: record.gsm || '', BF: record.bf || '', UseKG: record.useKg || '', Good_Sheets_Qty: record.linerQty || '', Waste_Sheets_KG: record.wasteSheetsKg || '', Ups: record.numberOfUps || '', Common_Ups: record.commonUps || '', Small_Ups: record.smallUps || '' };
+      return { Date: record.date || '', Company: compName, Linked_Order: orderInfo, MillName: record.millName || '', Reels: record.reelNos || record.reelNo || '', PaperUsedFor: record.paperUsedFor || '', UsedForItem: record.usedForItem || '', UseKG: record.useKg || '', Good_Sheets_Qty: record.linerQty || '', Waste_Sheets_KG: record.wasteSheetsKg || '', Ups: record.numberOfUps || '', Common_Ups: record.commonUps || '', Small_Ups: record.smallUps || '' };
     });
     downloadCSV(exportData, 'production_records');
   };
@@ -2031,35 +2330,60 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             </datalist>
           </div>
 
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Reel No(s) (Comma separated)</label><input required type="text" placeholder="e.g. 101, 102, 105" className="w-full p-2 border rounded" value={newRecord.reelNos} onChange={e => setNewRecord({...newRecord, reelNos: e.target.value})} /></div>
-          
           <div className="col-span-1 md:col-span-2">
             <label className="block text-xs font-bold text-stone-700 mb-1">Paper Used For</label>
             <select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}>
-              <option value="Paper">Paper (1-Ply)</option>
-              <option value="Liner">Liner (2-Ply)</option>
+              <option value="Paper">Paper (1-Ply / Fluting)</option>
+              <option value="Liner">Liner (2-Ply / Flat)</option>
               <option value="Board">Board (Combined)</option>
             </select>
           </div>
 
-          <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
+          <div className="col-span-1 md:col-span-4"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
           
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Use KG</label><input required type="number" step="0.1" className="w-full p-2 border rounded" value={newRecord.useKg} onChange={e => setNewRecord({...newRecord, useKg: e.target.value})} /></div>
+          <div className="col-span-1 md:col-span-6 bg-stone-50 p-4 rounded-lg border border-stone-200 shadow-inner">
+            <div className="flex justify-between items-center mb-3">
+              <label className="text-xs font-bold text-stone-700 uppercase tracking-wider">Granular Reel Consumption</label>
+              {suggestedKg && <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-1 rounded font-bold shadow-sm">Target: ~{suggestedKg} kg</span>}
+            </div>
+            {consumedReels.map((reel, idx) => (
+              <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end mb-2">
+                <div className="flex-1">
+                  <label className="block text-[10px] text-stone-500 mb-1">Reel No.</label>
+                  <input required type="text" className="w-full p-2 border border-stone-300 rounded text-sm uppercase bg-white" value={reel.reelNo} onChange={e => { const upd = [...consumedReels]; upd[idx].reelNo = e.target.value; setConsumedReels(upd); }} />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-[10px] text-stone-500 mb-1">KG Consumed</label>
+                  <input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded text-sm bg-orange-50" value={reel.weight} onChange={e => { const upd = [...consumedReels]; upd[idx].weight = e.target.value; setConsumedReels(upd); }} />
+                </div>
+                {consumedReels.length > 1 && (
+                  <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 bg-red-100 text-red-600 hover:bg-red-200 rounded mb-0.5"><Trash2 className="w-4 h-4"/></button>
+                )}
+              </div>
+            ))}
+            <button type="button" onClick={() => setConsumedReels([...consumedReels, { reelNo: '', weight: '' }])} className="text-[10px] font-bold text-stone-600 bg-stone-200 px-3 py-1.5 rounded hover:bg-stone-300 mt-1">+ Add Another Reel</button>
+            
+            <div className="mt-4 pt-3 border-t border-stone-200 flex justify-end items-center gap-4">
+              <span className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Consumed:</span>
+              <span className="text-xl font-bold text-orange-600">{consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0).toFixed(1)} KG</span>
+            </div>
+          </div>
+
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Good Qty (Sheets)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-blue-50" value={newRecord.linerQty} onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Waste (KG)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-red-50" value={newRecord.wasteSheetsKg} onChange={e => setNewRecord({...newRecord, wasteSheetsKg: e.target.value})} /></div>
           
           {isPPC ? (
-              <div className="col-span-1 md:col-span-3 grid grid-cols-2 gap-2 p-2 bg-blue-50 border border-blue-200 rounded">
+              <div className="col-span-1 md:col-span-4 grid grid-cols-2 gap-2 p-2 bg-blue-50 border border-blue-200 rounded">
                   <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.commonUps} onChange={e => setNewRecord({...newRecord, commonUps: e.target.value})} /></div>
                   <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Ups Produced</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={newRecord.smallUps} onChange={e => setNewRecord({...newRecord, smallUps: e.target.value})} /></div>
               </div>
           ) : (
-              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Number of Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newRecord.numberOfUps} onChange={e => setNewRecord({...newRecord, numberOfUps: e.target.value})} /></div>
+              <div className="col-span-1 md:col-span-4"><label className="block text-xs text-stone-500 mb-1">Number of Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newRecord.numberOfUps} onChange={e => setNewRecord({...newRecord, numberOfUps: e.target.value})} /></div>
           )}
 
           <div className="col-span-1 lg:col-span-6 flex gap-2 mt-2">
-            <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">{editingId ? 'Update Record' : 'Save Production Record'}</button>
-            {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6">Cancel</button>}
+            <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">{editingId ? 'Update Record' : 'Save Production Record'}</button>
+            {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6 font-bold">Cancel</button>}
           </div>
         </form>
       </div>
@@ -2101,9 +2425,9 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                   <tr>
                     <th className="p-4">Date</th>
                     <th className="p-4">Item Details</th>
-                    <th className="p-4">Mill Name & Reel No(s)</th>
+                    <th className="p-4">Reels Consumed</th>
                     <th className="p-4">Used For</th>
-                    <th className="p-4">Use KG</th>
+                    <th className="p-4 bg-orange-50 text-orange-800">Total KG</th>
                     <th className="p-4">Qty & Ups</th>
                     <th className="p-4 text-right">Actions</th>
                   </tr>
@@ -2127,9 +2451,20 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                         <p className="font-bold text-stone-900">{record.usedForItem || '-'}</p>
                         {record.orderId && <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Order Linked</span>}
                       </td>
-                      <td className="p-4"><p className="font-medium text-stone-800">{record.millName}</p><p className="text-xs text-stone-500">Reels: {record.reelNos || record.reelNo}</p></td>
+                      <td className="p-4">
+                        <p className="font-medium text-stone-800">{record.millName}</p>
+                        {record.consumedReels && record.consumedReels.length > 0 ? (
+                           <ul className="text-xs text-stone-500 mt-1 space-y-0.5">
+                             {record.consumedReels.map((r, i) => (
+                               <li key={i}><span className="font-bold text-stone-700">{r.reelNo}</span>: {r.weight}kg</li>
+                             ))}
+                           </ul>
+                        ) : (
+                           <p className="text-xs text-stone-500">Reels: {record.reelNos || record.reelNo}</p>
+                        )}
+                      </td>
                       <td className="p-4 font-bold text-blue-700">{record.paperUsedFor}</td>
-                      <td className="p-4 font-semibold">{record.useKg} KG</td>
+                      <td className="p-4 font-bold text-orange-700 bg-orange-50/30 text-lg">{record.useKg} KG</td>
                       <td className="p-4">
                         <p className="font-bold text-stone-800">{record.linerQty || '-'} <span className="text-[10px] font-normal text-stone-500">Good Qty</span></p>
                         {record.wasteSheetsKg > 0 && <p className="text-xs text-red-500">-{record.wasteSheetsKg}kg Waste</p>}
@@ -2151,6 +2486,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     </div>
   );
 }
+
+// --- ORDERS VIEW ---
 // --- ORDERS VIEW ---
 function OrdersView({ orders, production, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -2160,7 +2497,8 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
 
   const [newOrder, setNewOrder] = useState({
     orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0,
-    commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: ''
+    commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '',
+    openingFgQty: '' // <-- Added for Legacy Stock
   });
 
   const handleAdd = async (e) => {
@@ -2177,9 +2515,14 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
         delete orderData.plannedUpsSmall;
     }
 
+    // Auto-complete status if the legacy stock fulfills the order
+    if (parseInt(orderData.openingFgQty || 0) >= parseInt(orderData.orderQty || 0)) {
+        orderData.status = 'Completed';
+    }
+
     await addDoc(getColRef('orders'), orderData);
     addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
-    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '' });
+    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '', openingFgQty: '' });
   };
 
   const handleDelete = async (id, itemName) => {
@@ -2198,7 +2541,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
   const handleExport = () => {
     if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
     const exportData = visibleOrders.map(order => ({
-      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
+      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Legacy_Stock_Loaded: order.openingFgQty || 0, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
     }));
     downloadCSV(exportData, 'orders');
   };
@@ -2220,11 +2563,12 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
         <h3 className="font-bold mb-4">Add New Order</h3>
-        <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+        <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Order Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.orderDate} onChange={e => setNewOrder({...newOrder, orderDate: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Client Company</label><select required className="w-full p-2 border rounded" value={newOrder.companyId} onChange={e => setNewOrder({...newOrder, companyId: e.target.value, itemId: ''})}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Select Item</label><select required className="w-full p-2 border rounded" value={newOrder.itemId} onChange={e => setNewOrder({...newOrder, itemId: e.target.value})} disabled={!newOrder.companyId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newOrder.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}</select></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">{isPPC ? 'Order Qty (Sets)' : 'Order Quantity'}</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.orderQty} onChange={e => setNewOrder({...newOrder, orderQty: e.target.value})} /></div>
+          <div className="col-span-1"><label className="block text-xs font-bold text-blue-600 mb-1">Legacy/Ready Stock</label><input type="number" min="0" placeholder="Optional" className="w-full p-2 border rounded bg-blue-50 border-blue-200" value={newOrder.openingFgQty} onChange={e => setNewOrder({...newOrder, openingFgQty: e.target.value})} /></div>
           
           {isPPC ? (
               <div className="col-span-1 md:col-span-4 grid grid-cols-6 gap-2 p-3 bg-blue-50 border border-blue-200 rounded">
@@ -2340,6 +2684,9 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   
                   producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
               }
+
+              // --- ADD LEGACY STOCK TO PRODUCED QTY ---
+              producedQty += parseInt(order.openingFgQty || 0);
               
               const pendingQty = Math.max(0, order.orderQty - producedQty);
               const rate = parseFloat(order.rate || 0);
@@ -2358,7 +2705,10 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                      <p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p>
                      <p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p>
                   </td>
-                  <td className="p-4 bg-green-50/30 font-bold text-green-600 text-lg">{producedQty}</td>
+                  <td className="p-4 bg-green-50/30">
+                     <p className="font-bold text-green-600 text-lg">{producedQty}</p>
+                     {parseInt(order.openingFgQty || 0) > 0 && <p className="text-[10px] text-blue-600 font-bold">Includes {order.openingFgQty} legacy</p>}
+                  </td>
                   <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
                   <td className="p-4">
                     <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
@@ -2379,11 +2729,69 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
 }
 
 // --- FINISHED GOODS VIEW ---
-function FinishedGoodsView({ orders, production, items, companies, addLog, getDocRef, currentUser }) {
+function FinishedGoodsView({ orders, production, items, companies, addLog, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
 
   const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
+
+  // Helper to cleanly calculate stock levels for a specific order
+  const getOrderStockDetails = (order) => {
+    const pLogs = production.filter(p => p.orderId === order.id);
+    const item = items.find(i => i.id === order.itemId);
+    const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+    
+    let producedQty = 0;
+
+    if (isPpcOrder) {
+        const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
+        const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
+        let totalCommonPieces = 0, totalSmallPieces = 0;
+        
+        pLogs.forEach(p => {
+            const sheets = parseFloat(p.linerQty || 0);
+            totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
+            totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
+        });
+
+        producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
+        if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+    } else {
+        const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
+        const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
+        
+        const ply = parseInt(item?.ply || item?.Ply || 3);
+        let effectiveBase = 0;
+
+        if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
+        else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
+        else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+        else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+        else effectiveBase = sumBoard + sumPaper;
+        
+        producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+    }
+
+    // --- ADD LEGACY STOCK TO PRODUCED QTY ---
+    producedQty += parseInt(order.openingFgQty || 0);
+
+    const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
+    const avgWeightKg = producedQty > 0 && totalKgUsed > 0 ? (totalKgUsed / producedQty) : (parseFloat(item?.weight || item?.Weight_g || 0) / 1000);
+    
+    const dispatchedQty = parseInt(order.dispatchedQty || 0);
+    const rate = parseFloat(order.rate || 0);
+    
+    const dispatchedWeight = dispatchedQty * avgWeightKg;
+    const dispatchedValue = dispatchedQty * rate;
+
+    const inStock = Math.max(0, producedQty - dispatchedQty);
+    const stockWeight = inStock * avgWeightKg;
+    const stockValue = inStock * rate;
+
+    return { producedQty, avgWeightKg, dispatchedQty, rate, dispatchedWeight, dispatchedValue, inStock, stockWeight, stockValue, isPpcOrder, item };
+  };
 
   const handleDispatch = async (e, order, inStock, qtyToDispatch = null) => {
     if (e) e.preventDefault();
@@ -2407,10 +2815,246 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
     if (e) e.target.reset(); 
   };
 
+  // --- DELETE RECORD FEATURE ---
+  const handleDeleteRecord = async (id, itemName) => {
+    if(window.confirm(`Delete the stock record for ${itemName}? This will completely remove it from the database.`)) {
+      try {
+        await deleteDoc(getDocRef('orders', id));
+        addLog(`Deleted finished goods record: ${itemName}`);
+      } catch (err) {
+        console.error(err);
+        alert("Error deleting record.");
+      }
+    }
+  };
+
+  // ==========================================
+  // DEDICATED LEGACY STOCK IMPORTER
+  // ==========================================
+  const handleLegacyStockImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result;
+        const rows = text.split(/\r?\n/).filter(r => r.trim()); 
+        if (rows.length < 2) return alert("File is empty or missing data rows.");
+
+        const parseRow = (line) => {
+          const result = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            if (line[i] === '"' && line[i+1] === '"') { current += '"'; i++; }
+            else if (line[i] === '"') { inQuotes = !inQuotes; }
+            else if (line[i] === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+            else { current += line[i]; }
+          }
+          result.push(current.trim());
+          return result;
+        };
+
+        const headers = parseRow(rows[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        
+        const idxClient = headers.findIndex(h => h.includes('client') || h.includes('company'));
+        const idxItem = headers.findIndex(h => h.includes('item') || h.includes('product'));
+        const idxStock = headers.findIndex(h => h.includes('stock') || h.includes('qty'));
+        const idxRate = headers.findIndex(h => h.includes('rate') || h.includes('price'));
+
+        if (idxClient === -1 || idxItem === -1 || idxStock === -1) {
+          return alert("Error: Could not find required columns. Please ensure your CSV has headers exactly like: Client, Item, Current_Stock, Rate");
+        }
+
+        let successCount = 0;
+        let errors = [];
+
+        for (let i = 1; i < rows.length; i++) {
+          const cols = parseRow(rows[i]);
+          if (cols.every(c => !c)) continue;
+
+          const clientName = (cols[idxClient] || '').trim();
+          const itemName = (cols[idxItem] || '').trim();
+          const stockRaw = String(cols[idxStock] || '').replace(/,/g, ''); 
+          const rateRaw = idxRate !== -1 ? String(cols[idxRate] || '').replace(/,/g, '') : '';
+
+          const stockQty = parseInt(stockRaw);
+          if (isNaN(stockQty) || stockQty <= 0) continue;
+
+          const comp = companies.find(c => (c?.name||'').toLowerCase().trim() === clientName.toLowerCase());
+          if (!comp) {
+            errors.push(`Row ${i+1}: Client "${clientName}" not found.`);
+            continue;
+          }
+
+          const item = items.find(itm => 
+            (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && 
+            itm.companyId === comp.id
+          );
+          if (!item) {
+            errors.push(`Row ${i+1}: Item "${itemName}" not found under client "${clientName}".`);
+            continue;
+          }
+
+          let rate = parseFloat(rateRaw);
+          if (isNaN(rate)) rate = parseFloat(item.rate || 0);
+          if (isNaN(rate)) rate = 0;
+
+          await addDoc(getColRef('orders'), {
+            orderDate: new Date().toISOString().split('T')[0],
+            companyId: comp.id || '',
+            itemId: item.id || '',
+            itemName: item.name || item.Item_Name || 'Unknown Item',
+            orderQty: stockQty || 0,
+            openingFgQty: stockQty || 0, 
+            status: 'Completed',
+            plannedUps: '1',
+            deliveryDate: new Date().toISOString().split('T')[0],
+            rate: rate || 0,
+            dispatchedQty: 0
+          });
+          successCount++;
+        }
+
+        addLog(`Imported ${successCount} legacy stock items.`);
+        
+        if (errors.length > 0) {
+           alert(`Imported ${successCount} items successfully, but skipped ${errors.length} rows due to spelling mismatches:\n\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...and more.' : ''}`);
+        } else if (successCount > 0) {
+           alert(`Successfully matched and imported all ${successCount} items!`);
+        } else {
+           alert(`0 items imported. Check your spelling or ensure the Current_Stock column has numbers.`);
+        }
+
+      } catch (err) {
+        console.error("Parse Error Details:", err);
+        alert(`Failed to save to database. Error details logged to browser console.`);
+      } finally {
+        e.target.value = null; 
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExportTemplate = () => {
+    if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
+    const exportData = visibleOrders.map(order => {
+      const stock = getOrderStockDetails(order);
+      if (stock.inStock <= 0) return null; 
+      return { Order_ID: order.id, Client: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item: order.itemName || order.Item_Name, Current_Stock: stock.inStock, Dispatch_Qty_To_Add: '', Dispatch_Date: new Date().toISOString().split('T')[0] };
+    }).filter(Boolean);
+    if (exportData.length === 0) return alert("No items currently in stock to dispatch.");
+    downloadCSV(exportData, 'dispatch_import_template');
+  };
+
+  const handleDispatchCSVImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result;
+        const rawRows = text.split(/\r?\n/);
+
+        const parseCSVLine = (line) => {
+          const result = [];
+          let currentVal = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"' && line[i+1] === '"') { currentVal += '"'; i++; } 
+            else if (char === '"') { inQuotes = !inQuotes; } 
+            else if (char === ',' && !inQuotes) { result.push(currentVal.trim()); currentVal = ''; } 
+            else { currentVal += char; }
+          }
+          result.push(currentVal.trim());
+          return result;
+        };
+
+        let headers = [];
+        let headerRowIndex = -1;
+
+        for (let i = 0; i < rawRows.length; i++) {
+          if (!rawRows[i].trim()) continue;
+          const cols = parseCSVLine(rawRows[i]);
+          if (cols.some(c => c.trim() !== '')) {
+            headers = cols.map(h => h.trim().toLowerCase());
+            headerRowIndex = i;
+            break;
+          }
+        }
+
+        if (headerRowIndex === -1) return alert("Invalid CSV structure.");
+
+        let updateCount = 0;
+
+        for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+          if (!rawRows[i].trim()) continue;
+          const values = parseCSVLine(rawRows[i]);
+          if (values.every(v => v.trim() === '')) continue;
+
+          let rowObj = {};
+          headers.forEach((h, idx) => { rowObj[h] = values[idx]; });
+
+          const orderId = rowObj['order_id'];
+          const dispatchQtyRaw = String(rowObj['dispatch_qty_to_add'] || rowObj['dispatch qty to add'] || '').replace(/,/g, '');
+          const dispatchQty = parseInt(dispatchQtyRaw);
+          
+          let dispatchDate = rowObj['dispatch_date'] || rowObj['dispatch date'];
+          if (!dispatchDate || dispatchDate.trim() === '') {
+            dispatchDate = new Date().toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          }
+
+          if (orderId && !isNaN(dispatchQty) && dispatchQty > 0) {
+            const order = orders.find(o => o.id === orderId);
+            if (order) {
+              const currentDispatched = parseInt(order.dispatchedQty || 0);
+              const newHistory = [...(order.dispatchHistory || []), {
+                date: dispatchDate,
+                qty: dispatchQty
+              }];
+              
+              await updateDoc(getDocRef('orders', order.id), {
+                dispatchedQty: currentDispatched + dispatchQty,
+                dispatchHistory: newHistory
+              });
+              updateCount++;
+            }
+          }
+        }
+
+        addLog(`Bulk dispatched ${updateCount} orders via CSV`);
+        alert(`Successfully recorded ${updateCount} dispatches!`);
+
+      } catch (err) {
+         console.error(err);
+         alert("Error processing CSV.");
+      } finally {
+         e.target.value = null;
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="max-w-6xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
+        <div className="flex gap-2">
+          <label className="flex items-center gap-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg hover:bg-blue-200 font-medium text-sm transition cursor-pointer shadow-sm">
+            <Upload className="w-4 h-4" /> Import Legacy Stock (CSV)
+            <input type="file" accept=".csv" className="hidden" onChange={handleLegacyStockImport} />
+          </label>
+          <div className="w-px bg-stone-300 mx-2"></div>
+          <button onClick={handleExportTemplate} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
+            <Download className="w-4 h-4" /> Export Dispatch Template
+          </button>
+          <label className="flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-lg hover:bg-stone-800 font-medium text-sm transition cursor-pointer">
+            <Upload className="w-4 h-4" /> Import Dispatch CSV
+            <input type="file" accept=".csv" className="hidden" onChange={handleDispatchCSVImport} />
+          </label>
+        </div>
       </div>
       <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">
         Database Link: Showing {visibleOrders.length} total records downloaded
@@ -2430,57 +3074,8 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
           </thead>
           <tbody className="divide-y divide-stone-200">
             {visibleOrders.map(order => {
-              const pLogs = production.filter(p => p.orderId === order.id);
-              const item = items.find(i => i.id === order.itemId);
-              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
-              
-              let producedQty = 0;
-
-              if (isPpcOrder) {
-                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
-                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
-                  let totalCommonPieces = 0, totalSmallPieces = 0;
-                  
-                  pLogs.forEach(p => {
-                      const sheets = parseFloat(p.linerQty || 0);
-                      totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
-                      totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
-                  });
-
-                  producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
-                  if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
-              } else {
-                  const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
-                  const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
-                  const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
-                  const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
-                  
-                  const ply = parseInt(item?.ply || item?.Ply || 3);
-                  let effectiveBase = 0;
-
-                  if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
-                  else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
-                  else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
-                  else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
-                  else effectiveBase = sumBoard + sumPaper;
-                  
-                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
-              }
-
-              const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
-              const avgWeightKg = producedQty > 0 ? (totalKgUsed / producedQty) : 0;
-              
-              const dispatchedQty = parseInt(order.dispatchedQty || 0);
-              const rate = parseFloat(order.rate || 0);
-              
-              const dispatchedWeight = dispatchedQty * avgWeightKg;
-              const dispatchedValue = dispatchedQty * rate;
-
-              const inStock = Math.max(0, producedQty - dispatchedQty);
-              const stockWeight = inStock * avgWeightKg;
-              const stockValue = inStock * rate;
-
-              if (producedQty <= 0 && dispatchedQty <= 0) return null; 
+              const stock = getOrderStockDetails(order);
+              if (stock.producedQty <= 0 && stock.dispatchedQty <= 0) return null; 
 
               const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
 
@@ -2492,16 +3087,17 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
                   </td>
                   <td className="p-4">
                     <p className="font-medium text-stone-800">{order.itemName || order.Item_Name}</p>
-                    <p className="text-xs text-stone-500">{item?.weight || item?.Weight_g ? `${item.weight || item.Weight_g}g` : '-'} | ₹{rate.toFixed(2)}/{isPpcOrder?'set':'box'}</p>
+                    <p className="text-xs text-stone-500">{stock.item?.weight || stock.item?.Weight_g ? `${stock.item.weight || stock.item.Weight_g}g` : '-'} | ₹{stock.rate.toFixed(2)}/{stock.isPpcOrder?'set':'box'}</p>
                   </td>
                   <td className="p-4 bg-blue-50/30">
-                    <p className="font-bold text-lg text-blue-700">{producedQty}</p>
-                    <p className="text-xs font-medium text-blue-600">{totalKgUsed.toFixed(1)} kg total</p>
+                    <p className="font-bold text-lg text-blue-700">{stock.producedQty}</p>
+                    <p className="text-xs font-medium text-blue-600">{(stock.producedQty * stock.avgWeightKg).toFixed(1)} kg total</p>
+                    {parseInt(order.openingFgQty || 0) > 0 && <p className="text-[10px] text-blue-600 font-bold mt-1 bg-blue-100 px-1 py-0.5 rounded inline-block">Includes {order.openingFgQty} legacy</p>}
                   </td>
                   <td className="p-4 bg-orange-50/30">
-                    <p className="font-bold text-lg text-orange-600">{dispatchedQty}</p>
-                    <p className="text-xs font-bold text-stone-800">₹{dispatchedValue.toFixed(2)}</p>
-                    <p className="text-xs font-medium text-orange-600 mb-1">{dispatchedWeight.toFixed(1)} kg</p>
+                    <p className="font-bold text-lg text-orange-600">{stock.dispatchedQty}</p>
+                    <p className="text-xs font-bold text-stone-800">₹{stock.dispatchedValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-orange-600 mb-1">{stock.dispatchedWeight.toFixed(1)} kg</p>
                     {order.dispatchHistory && order.dispatchHistory.length > 0 && (
                       <div className="mt-2 pt-2 border-t border-orange-200">
                         <p className="text-[10px] font-bold text-orange-800 mb-1">Dispatch History:</p>
@@ -2514,22 +3110,30 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getDo
                     )}
                   </td>
                   <td className="p-4 bg-green-50/30">
-                    <p className="font-bold text-xl text-green-700">{inStock}</p>
-                    <p className="text-sm font-bold text-stone-800">₹{stockValue.toFixed(2)}</p>
-                    <p className="text-xs font-medium text-green-600">{stockWeight.toFixed(1)} kg</p>
+                    <p className="font-bold text-xl text-green-700">{stock.inStock}</p>
+                    <p className="text-sm font-bold text-stone-800">₹{stock.stockValue.toFixed(2)}</p>
+                    <p className="text-xs font-medium text-green-600">{stock.stockWeight.toFixed(1)} kg</p>
                   </td>
                   <td className="p-4 text-right">
-                    {inStock > 0 ? (
-                      <form onSubmit={(e) => handleDispatch(e, order, inStock)} className="flex items-center justify-end gap-2">
-                        <input required type="number" min="1" max={inStock} name="dispatchQty" className={`w-24 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
-                        <button type="submit" className="bg-stone-900 text-white px-4 py-2 rounded text-xs font-bold hover:bg-stone-800">
-                          Dispatch
+                    <div className="flex items-center justify-end gap-2">
+                      {stock.inStock > 0 ? (
+                        <form onSubmit={(e) => handleDispatch(e, order, stock.inStock)} className="flex items-center gap-2">
+                          <input required type="number" min="1" max={stock.inStock} name="dispatchQty" className={`w-20 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
+                          <button type="submit" className="bg-stone-900 text-white px-3 py-2 rounded text-xs font-bold hover:bg-stone-800">
+                            Dispatch
+                          </button>
+                          {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
+                        </form>
+                      ) : (
+                        <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
+                      )}
+                      
+                      {currentUser?.role === 'admin' && (
+                        <button onClick={() => handleDeleteRecord(order.id, order.itemName || order.Item_Name)} className="ml-2 text-red-500 hover:bg-red-50 p-2 rounded transition-colors" title="Delete Entire Record">
+                          <Trash2 className="w-4 h-4" />
                         </button>
-                        {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
-                      </form>
-                    ) : (
-                      <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
-                    )}
+                      )}
+                    </div>
                   </td>
                 </tr>
               )
