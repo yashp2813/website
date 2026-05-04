@@ -3,6 +3,8 @@ import {
   Calculator, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // ==========================================
 // 1. FIREBASE SETUP & API KEYS (SECURED)
@@ -342,7 +344,7 @@ function NavButton({ icon, label, isActive, onClick }) {
     </button>
   );
 }
-// --- DASHBOARD VIEW ---
+
 // --- DASHBOARD VIEW ---
 function DashboardView({ inventory, production, orders, items, companies, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -357,7 +359,6 @@ function DashboardView({ inventory, production, orders, items, companies, curren
 
   const yearOptions = [];
   for (let y = 2023; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
-
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
   let startDate, endDate;
@@ -372,60 +373,70 @@ function DashboardView({ inventory, production, orders, items, companies, curren
   const getInventoryAtDate = (targetDate) => {
     const balances = {};
     const usageStats = {}; 
+    const reelNoToIds = {};
     
     inventory.forEach(reel => {
       if (new Date(reel.date) > targetDate) return; 
+      const id = reel.id;
       const rNo = String(reel.reelNo || '').trim().toLowerCase();
       const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-      balances[rNo] = parseFloat(reel.receivedQty || 0) - initialIssued;
-      usageStats[rNo] = { issued: 0 };
+      balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
+      usageStats[id] = { issued: 0 };
+      
+      if (rNo) {
+          if (!reelNoToIds[rNo]) reelNoToIds[rNo] = [];
+          reelNoToIds[rNo].push(id);
+      }
     });
 
-    const sortedProd = [...production]
-        .filter(p => new Date(p.date) <= targetDate)
-        .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const sortedProd = [...production].filter(p => new Date(p.date) <= targetDate).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     
     sortedProd.forEach(p => {
-      // THE FIX: Safe granular parsing without log array pushing
       if (p.consumedReels && p.consumedReels.length > 0) {
         p.consumedReels.forEach(cr => {
            const rNo = String(cr.reelNo || '').trim().toLowerCase();
-           const deduct = parseFloat(cr.weight || 0);
-           if (deduct > 0) {
-             balances[rNo] = (balances[rNo] || 0) - deduct;
-             if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
-             usageStats[rNo].issued += deduct;
+           let remainingDeduct = parseFloat(cr.weight || 0);
+           if (remainingDeduct > 0 && reelNoToIds[rNo]) {
+             for (const id of reelNoToIds[rNo]) {
+                 if (remainingDeduct <= 0) break;
+                 const available = balances[id] || 0;
+                 if (available > 0) {
+                     const deduct = Math.min(available, remainingDeduct);
+                     balances[id] -= deduct;
+                     usageStats[id].issued += deduct;
+                     remainingDeduct -= deduct;
+                 }
+             }
+             if (remainingDeduct > 0) {
+                 const lastId = reelNoToIds[rNo][reelNoToIds[rNo].length - 1];
+                 balances[lastId] -= remainingDeduct;
+                 usageStats[lastId].issued += remainingDeduct;
+             }
            }
         });
       } else {
         if (!p.reelNos || !p.useKg) return;
         const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
         if (pReels.length === 0) return;
-        
         let remainingUse = parseFloat(p.useKg || 0);
         pReels.forEach((rNo, index) => {
-          if (remainingUse <= 0) return;
-          let deduct = 0;
-          if (index === pReels.length - 1) { 
-              deduct = remainingUse; 
-          } else { 
-              deduct = Math.min(Math.max(balances[rNo] || 0, 0), remainingUse); 
-          }
-          if (deduct > 0) {
-            balances[rNo] = (balances[rNo] || 0) - deduct;
-            if (!usageStats[rNo]) usageStats[rNo] = { issued: 0 };
-            usageStats[rNo].issued += deduct;
-            remainingUse -= deduct;
+          if (remainingUse <= 0 || !reelNoToIds[rNo]) return;
+          const isLast = (index === pReels.length - 1);
+          for (const id of reelNoToIds[rNo]) {
+             if (remainingUse <= 0) break;
+             const available = balances[id] || 0;
+             let deduct = 0;
+             if (isLast) deduct = remainingUse;
+             else { if (available <= 0) continue; deduct = Math.min(available, remainingUse); }
+             if (deduct > 0) { balances[id] -= deduct; usageStats[id].issued += deduct; remainingUse -= deduct; }
           }
         });
       }
     });
 
-    return inventory
-      .filter(reel => new Date(reel.date) <= targetDate)
-      .map(reel => {
-        const rNo = String(reel.reelNo || '').trim().toLowerCase();
-        const stats = usageStats[rNo] || { issued: 0 };
+    return inventory.filter(reel => new Date(reel.date) <= targetDate).map(reel => {
+        const id = reel.id;
+        const stats = usageStats[id] || { issued: 0 };
         const initialIssued = parseFloat(reel.initialIssuedQty || 0);
         const issuedQty = stats.issued + initialIssued;
         const received = parseFloat(reel.receivedQty || 0);
@@ -440,10 +451,10 @@ function DashboardView({ inventory, production, orders, items, companies, curren
     const inv = getInventoryAtDate(targetDate);
     let kg = 0, val = 0;
     inv.forEach(reel => {
+        if (reel.category === 'Consumables') return;
         const rCompId = reel.companyId || 'unassigned';
         if (compId !== 'all' && rCompId !== compId) return;
-        kg += reel.balanceQty;
-        val += reel.value;
+        kg += reel.balanceQty; val += reel.value;
     });
     return { kg, val };
   };
@@ -451,13 +462,13 @@ function DashboardView({ inventory, production, orders, items, companies, curren
   const getRmInward = (start, end, compId) => {
     let kg = 0, val = 0;
     inventory.forEach(reel => {
+        if (reel.category === 'Consumables') return;
         const cId = reel.companyId || 'unassigned';
         if (compId !== 'all' && cId !== compId) return;
         const rDate = new Date(reel.date);
         if (rDate >= start && rDate <= end) {
             const qty = parseFloat(reel.receivedQty || 0);
-            kg += qty;
-            val += qty * parseFloat(reel.ratePerKg || 0);
+            kg += qty; val += qty * parseFloat(reel.ratePerKg || 0);
         }
     });
     return { kg, val };
@@ -466,6 +477,7 @@ function DashboardView({ inventory, production, orders, items, companies, curren
   const getRmConsumedInPeriod = (start, end, compId) => {
     const reelLedger = {};
     inventory.forEach(r => {
+      if (r.category === 'Consumables') return;
       const rNo = String(r.reelNo || '').trim().toLowerCase();
       reelLedger[rNo] = { rate: parseFloat(r.ratePerKg || 0), companyId: r.companyId || 'unassigned' };
     });
@@ -476,8 +488,6 @@ function DashboardView({ inventory, production, orders, items, companies, curren
         if (pDate >= start && pDate <= end) {
             const cId = p.companyId || 'unassigned';
             if (compId !== 'all' && cId !== compId) return;
-            
-            // THE FIX: Correctly maps values whether using the new Granular format or old sequential logs
             if (p.consumedReels && p.consumedReels.length > 0) {
                p.consumedReels.forEach(cr => {
                   const used = parseFloat(cr.weight || 0);
@@ -491,9 +501,7 @@ function DashboardView({ inventory, production, orders, items, companies, curren
                kg += used;
                const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
                let avgRate = 0;
-               if (pReels.length > 0 && reelLedger[pReels[0]]) {
-                   avgRate = reelLedger[pReels[0]].rate;
-               }
+               if (pReels.length > 0 && reelLedger[pReels[0]]) avgRate = reelLedger[pReels[0]].rate;
                val += (used * avgRate);
             }
         }
@@ -587,62 +595,34 @@ function DashboardView({ inventory, production, orders, items, companies, curren
   };
 
   const companyMetrics = {};
-  let grandTotalOpeningValue = 0;
-  let grandTotalClosingValue = 0;
-  let grandTotalSalesValue = 0;
-  let grandTotalProdKg = 0;
+  let grandTotalOpeningValue = 0; let grandTotalClosingValue = 0; let grandTotalSalesValue = 0; let grandTotalProdKg = 0;
 
   companies.forEach(comp => {
     if (allowedCompanyId !== 'all' && comp.id !== allowedCompanyId) return;
-    
     const openingDate = new Date(startDate.getTime() - 1); 
-    
-    const rmOpen = getRmStockAtDate(openingDate, comp.id);
-    const rmClose = getRmStockAtDate(endDate, comp.id);
-    const rmInward = getRmInward(startDate, endDate, comp.id);
-    const rmOutward = getRmConsumedInPeriod(startDate, endDate, comp.id);
-
-    const fgOpen = getFgStockAtDate(openingDate, comp.id);
-    const fgClose = getFgStockAtDate(endDate, comp.id);
+    const rmOpen = getRmStockAtDate(openingDate, comp.id); const rmClose = getRmStockAtDate(endDate, comp.id);
+    const rmInward = getRmInward(startDate, endDate, comp.id); const rmOutward = getRmConsumedInPeriod(startDate, endDate, comp.id);
+    const fgOpen = getFgStockAtDate(openingDate, comp.id); const fgClose = getFgStockAtDate(endDate, comp.id);
     const fgSales = getSalesInPeriod(startDate, endDate, comp.id);
     
-    const fgProduced = {
-        kg: Math.max(0, fgClose.kg + fgSales.kg - fgOpen.kg),
-        val: Math.max(0, fgClose.val + fgSales.val - fgOpen.val)
-    };
-
-    const totalOpeningVal = rmOpen.val + fgOpen.val;
-    const totalClosingVal = rmClose.val + fgClose.val;
+    const fgProduced = { kg: Math.max(0, fgClose.kg + fgSales.kg - fgOpen.kg), val: Math.max(0, fgClose.val + fgSales.val - fgOpen.val) };
+    const totalOpeningVal = rmOpen.val + fgOpen.val; const totalClosingVal = rmClose.val + fgClose.val;
 
     if (totalOpeningVal > 0 || totalClosingVal > 0 || rmInward.val > 0 || fgSales.val > 0 || rmOutward.val > 0) {
-      companyMetrics[comp.id] = {
-        name: comp.name,
-        rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose },
-        fg: { opening: fgOpen, produced: fgProduced, sales: fgSales, closing: fgClose }
-      };
-      grandTotalOpeningValue += totalOpeningVal;
-      grandTotalClosingValue += totalClosingVal;
-      grandTotalSalesValue += fgSales.val;
-      grandTotalProdKg += rmOutward.kg;
+      companyMetrics[comp.id] = { name: comp.name, rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose }, fg: { opening: fgOpen, produced: fgProduced, sales: fgSales, closing: fgClose } };
+      grandTotalOpeningValue += totalOpeningVal; grandTotalClosingValue += totalClosingVal;
+      grandTotalSalesValue += fgSales.val; grandTotalProdKg += rmOutward.kg;
     }
   });
 
   if (allowedCompanyId === 'all') {
     const openingDate = new Date(startDate.getTime() - 1); 
-    const rmOpen = getRmStockAtDate(openingDate, 'unassigned');
-    const rmClose = getRmStockAtDate(endDate, 'unassigned');
-    const rmInward = getRmInward(startDate, endDate, 'unassigned');
-    const rmOutward = getRmConsumedInPeriod(startDate, endDate, 'unassigned');
+    const rmOpen = getRmStockAtDate(openingDate, 'unassigned'); const rmClose = getRmStockAtDate(endDate, 'unassigned');
+    const rmInward = getRmInward(startDate, endDate, 'unassigned'); const rmOutward = getRmConsumedInPeriod(startDate, endDate, 'unassigned');
     
     if (rmOpen.val > 0 || rmClose.val > 0 || rmInward.val > 0 || rmOutward.val > 0) {
-       companyMetrics['unassigned'] = {
-          name: 'Unassigned Client (Raw Material Only)',
-          rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose },
-          fg: { opening: {kg:0,val:0}, produced: {kg:0,val:0}, sales: {kg:0,val:0}, closing: {kg:0,val:0} }
-       };
-       grandTotalOpeningValue += rmOpen.val;
-       grandTotalClosingValue += rmClose.val;
-       grandTotalProdKg += rmOutward.kg;
+       companyMetrics['unassigned'] = { name: 'Unassigned Client (Raw Material Only)', rm: { opening: rmOpen, inward: rmInward, outward: rmOutward, closing: rmClose }, fg: { opening: {kg:0,val:0}, produced: {kg:0,val:0}, sales: {kg:0,val:0}, closing: {kg:0,val:0} } };
+       grandTotalOpeningValue += rmOpen.val; grandTotalClosingValue += rmClose.val; grandTotalProdKg += rmOutward.kg;
     }
   }
 
@@ -652,14 +632,7 @@ function DashboardView({ inventory, production, orders, items, companies, curren
   const chartData = sortedCompanyIds.map(id => {
     const m = companyMetrics[id];
     const totalClosing = m.rm.closing.val + m.fg.closing.val;
-    const shortName = m.name.length > 12 ? m.name.substring(0, 12) + '...' : m.name;
-    return {
-      name: shortName,
-      fullName: m.name,
-      Sales: m.fg.sales.val,
-      ClosingValue: totalClosing,
-      ProductionKg: m.rm.outward.kg
-    };
+    return { name: m.name.length > 12 ? m.name.substring(0, 12) + '...' : m.name, Sales: m.fg.sales.val, ClosingValue: totalClosing, ProductionKg: m.rm.outward.kg };
   }).filter(d => d.Sales > 0 || d.ClosingValue > 0 || d.ProductionKg > 0);
 
   return (
@@ -679,38 +652,22 @@ function DashboardView({ inventory, production, orders, items, companies, curren
         </select>
         {viewMode === 'month' ? (
           <div className="flex gap-2">
-            <select className="p-2 border rounded-lg" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
-              {months.map((m, idx) => <option key={idx} value={idx}>{m}</option>)}
-            </select>
-            <select className="p-2 border rounded-lg" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
-              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
+            <select className="p-2 border rounded-lg" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>{months.map((m, idx) => <option key={idx} value={idx}>{m}</option>)}</select>
+            <select className="p-2 border rounded-lg" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>{yearOptions.map(y => <option key={y} value={y}>{y}</option>)}</select>
           </div>
         ) : (
-          <select className="p-2 border rounded-lg font-bold text-blue-800 bg-blue-50" value={selectedFY} onChange={e => setSelectedFY(e.target.value)}>
-            {yearOptions.map(y => <option key={y} value={y}>FY {y}-{y + 1}</option>)}
-          </select>
+          <select className="p-2 border rounded-lg font-bold text-blue-800 bg-blue-50" value={selectedFY} onChange={e => setSelectedFY(e.target.value)}>{yearOptions.map(y => <option key={y} value={y}>FY {y}-{y + 1}</option>)}</select>
         )}
       </div>
 
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6">
-        <h3 className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-4 xl:mb-0">
-          Operational Summary: {displayPeriodName}
-        </h3>
+        <h3 className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-4 xl:mb-0">Operational Summary: {displayPeriodName}</h3>
         {sortedCompanyIds.length > 0 && (
           <div className="flex flex-wrap gap-3">
-             <div className="bg-stone-100 text-stone-800 px-3 py-2 rounded-lg text-xs font-bold border border-stone-200 shadow-sm">
-                Opening: ₹{grandTotalOpeningValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-             </div>
-             <div className="bg-orange-50 text-orange-800 px-3 py-2 rounded-lg text-xs font-bold border border-orange-200 shadow-sm">
-                Prod Consumed: {grandTotalProdKg.toFixed(0)} kg
-             </div>
-             <div className="bg-blue-50 text-blue-800 px-3 py-2 rounded-lg text-xs font-bold border border-blue-200 shadow-sm">
-                Sales: ₹{grandTotalSalesValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-             </div>
-             <div className="bg-green-50 text-green-800 px-3 py-2 rounded-lg text-xs font-bold border border-green-200 shadow-sm">
-                Closing: ₹{grandTotalClosingValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-             </div>
+             <div className="bg-stone-100 text-stone-800 px-3 py-2 rounded-lg text-xs font-bold border border-stone-200 shadow-sm">Opening: ₹{grandTotalOpeningValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+             <div className="bg-orange-50 text-orange-800 px-3 py-2 rounded-lg text-xs font-bold border border-orange-200 shadow-sm">Prod Consumed: {grandTotalProdKg.toFixed(0)} kg</div>
+             <div className="bg-blue-50 text-blue-800 px-3 py-2 rounded-lg text-xs font-bold border border-blue-200 shadow-sm">Sales: ₹{grandTotalSalesValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+             <div className="bg-green-50 text-green-800 px-3 py-2 rounded-lg text-xs font-bold border border-green-200 shadow-sm">Closing: ₹{grandTotalClosingValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
           </div>
         )}
       </div>
@@ -755,63 +712,24 @@ function DashboardView({ inventory, production, orders, items, companies, curren
       ) : (
         sortedCompanyIds.map(compId => {
           const m = companyMetrics[compId];
-
           return (
             <div key={compId} className="mb-10 bg-white rounded-xl shadow-sm border border-stone-300 overflow-hidden">
-              <div className="bg-stone-900 px-6 py-4 text-white">
-                <h4 className="text-xl font-bold">{m.name}</h4>
-              </div>
+              <div className="bg-stone-900 px-6 py-4 text-white"><h4 className="text-xl font-bold">{m.name}</h4></div>
               
-              <div className="bg-stone-100 px-6 py-2 border-b border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2">
-                <Archive className="w-4 h-4"/> Raw Material Ledger (Paper Reels)
-              </div>
+              <div className="bg-stone-100 px-6 py-2 border-b border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2"><Archive className="w-4 h-4"/> Raw Material Ledger (Paper Reels)</div>
               <div className="grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
-                <div className="p-4 bg-white">
-                  <p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-stone-500">{m.rm.opening.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-blue-50/30">
-                  <p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowDown className="w-3 h-3"/> 2. Received (+)</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.inward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-blue-700">{m.rm.inward.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-orange-50/30">
-                  <p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowUp className="w-3 h-3"/> 3. Consumed (-)</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.rm.outward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-orange-700">{m.rm.outward.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-green-50/30">
-                  <p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p>
-                  <p className="text-3xl font-bold text-green-700">₹{m.rm.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-bold text-stone-600">{m.rm.closing.kg.toFixed(1)} kg</p>
-                </div>
+                <div className="p-4 bg-white"><p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p><p className="text-2xl font-bold text-stone-800">₹{m.rm.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-stone-500">{m.rm.opening.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-blue-50/30"><p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowDown className="w-3 h-3"/> 2. Received (+)</p><p className="text-2xl font-bold text-stone-800">₹{m.rm.inward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-blue-700">{m.rm.inward.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-orange-50/30"><p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><ArrowUp className="w-3 h-3"/> 3. Consumed (-)</p><p className="text-2xl font-bold text-stone-800">₹{m.rm.outward.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-orange-700">{m.rm.outward.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-green-50/30"><p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p><p className="text-3xl font-bold text-green-700">₹{m.rm.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-bold text-stone-600">{m.rm.closing.kg.toFixed(1)} kg</p></div>
               </div>
 
-              <div className="bg-stone-100 px-6 py-2 border-y border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2">
-                <Package className="w-4 h-4"/> Finished Goods Ledger (Boxes & PPC)
-              </div>
+              <div className="bg-stone-100 px-6 py-2 border-y border-stone-200 font-bold text-stone-600 text-xs uppercase tracking-wider flex items-center gap-2"><Package className="w-4 h-4"/> Finished Goods Ledger (Boxes & PPC)</div>
               <div className="grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-stone-200">
-                <div className="p-4 bg-white">
-                  <p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-stone-500">{m.fg.opening.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-blue-50/30">
-                  <p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Factory className="w-3 h-3"/> 2. Produced (+)</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.produced.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-blue-700">{m.fg.produced.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-orange-50/30">
-                  <p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Truck className="w-3 h-3"/> 3. Sales/Disp (-)</p>
-                  <p className="text-2xl font-bold text-stone-800">₹{m.fg.sales.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-medium text-orange-700">{m.fg.sales.kg.toFixed(1)} kg</p>
-                </div>
-                <div className="p-4 bg-green-50/30">
-                  <p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p>
-                  <p className="text-3xl font-bold text-green-700">₹{m.fg.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-                  <p className="text-sm font-bold text-stone-600">{m.fg.closing.kg.toFixed(1)} kg</p>
-                </div>
+                <div className="p-4 bg-white"><p className="text-xs text-stone-500 uppercase tracking-wider mb-2 font-bold">1. Opening</p><p className="text-2xl font-bold text-stone-800">₹{m.fg.opening.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-stone-500">{m.fg.opening.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-blue-50/30"><p className="text-xs text-blue-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Factory className="w-3 h-3"/> 2. Produced (+)</p><p className="text-2xl font-bold text-stone-800">₹{m.fg.produced.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-blue-700">{m.fg.produced.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-orange-50/30"><p className="text-xs text-orange-600 uppercase tracking-wider mb-2 font-bold flex items-center gap-1"><Truck className="w-3 h-3"/> 3. Sales/Disp (-)</p><p className="text-2xl font-bold text-stone-800">₹{m.fg.sales.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-medium text-orange-700">{m.fg.sales.kg.toFixed(1)} kg</p></div>
+                <div className="p-4 bg-green-50/30"><p className="text-xs text-green-700 uppercase tracking-wider mb-2 font-bold">4. Closing Stock</p><p className="text-3xl font-bold text-green-700">₹{m.fg.closing.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p><p className="text-sm font-bold text-stone-600">{m.fg.closing.kg.toFixed(1)} kg</p></div>
               </div>
             </div>
           );
@@ -1102,6 +1020,9 @@ function CostingView() {
     id: Date.now(),
     partName: 'Main Box',
     qtyPerSet: 1,
+    calcMode: 'auto', // 'auto' or 'manual'
+    manualWeight: '',
+    manualRate: '',
     itemType: 'Box',
     size: '',
     plyCount: 3,
@@ -1113,7 +1034,7 @@ function CostingView() {
 
   const addPart = () => {
     setParts([...parts, {
-      id: Date.now(), partName: `Part ${parts.length + 1}`, qtyPerSet: 1, itemType: 'Partition', size: '', plyCount: 3, conversionCost: 0, pocketsLength: 3, pocketsWidth: 2, plyDetails: generatePlies(3)
+      id: Date.now(), partName: `Part ${parts.length + 1}`, qtyPerSet: 1, calcMode: 'auto', manualWeight: '', manualRate: '', itemType: 'Partition', size: '', plyCount: 3, conversionCost: 0, pocketsLength: 3, pocketsWidth: 2, plyDetails: generatePlies(3)
     }]);
   };
 
@@ -1152,6 +1073,21 @@ function CostingView() {
 
   // --- LIVE MATH ENGINE ---
   const calculatedParts = parts.map(part => {
+    const qty = parseInt(part.qtyPerSet) || 1;
+
+    // DIRECT WEIGHT ENTRY BYPASS
+    if (part.calcMode === 'manual') {
+      const singleWeightKg = parseFloat(part.manualWeight) || 0;
+      const singleMaterialCost = singleWeightKg * (parseFloat(part.manualRate) || 0);
+      const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
+      
+      return { 
+        ...part, boardAreaSqM: 0, uiDetails: {}, singleWeightKg, singleMaterialCost, singleTotalCost,
+        totalWeightKg: singleWeightKg * qty, totalCost: singleTotalCost * qty
+      };
+    }
+
+    // AUTO-GEOMETRY CALCULATION
     const dims = part.size.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
     const L = dims[0] || 0; const W = dims[1] || 0; const H = dims[2] || 0;
     
@@ -1184,7 +1120,6 @@ function CostingView() {
     });
 
     const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
-    const qty = parseInt(part.qtyPerSet) || 1;
 
     return { 
       ...part, boardAreaSqM, uiDetails, singleWeightKg, singleMaterialCost, singleTotalCost,
@@ -1225,101 +1160,139 @@ function CostingView() {
             </div>
 
             {/* PART CONFIGURATION */}
-            <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 border-b border-stone-100">
-               <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-stone-500 mb-1">Item Type</label>
-                      <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-bold" value={part.itemType} onChange={e => handlePartChange(part.id, 'itemType', e.target.value)}>
-                        <option value="Box">Standard Box</option><option value="Tray">Tray</option><option value="Partition">Partition (Divider)</option><option value="Sheet">Flat Sheet</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-stone-500 mb-1">Number of Plies</label>
-                      <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={part.plyCount} onChange={e => handlePartChange(part.id, 'plyCount', e.target.value)}>
-                        <option value={2}>2 Ply</option><option value={3}>3 Ply</option><option value={5}>5 Ply</option><option value={7}>7 Ply</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-stone-500 mb-1">
-                      {part.itemType === 'Partition' ? 'Inner Box Size (L x W x H) mm' : (part.itemType === 'Sheet' ? 'Size (L x W) mm' : 'Size (L x W x H) mm')}
-                    </label>
-                    <input type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.size} onChange={e => handlePartChange(part.id, 'size', e.target.value)} />
-                  </div>
-
-                  {part.itemType === 'Partition' && (
-                    <div className="grid grid-cols-2 gap-4 bg-blue-50 p-3 rounded border border-blue-100">
-                      <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Length</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsLength} onChange={e => handlePartChange(part.id, 'pocketsLength', e.target.value)} /></div>
-                      <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Width</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsWidth} onChange={e => handlePartChange(part.id, 'pocketsWidth', e.target.value)} /></div>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-xs font-medium text-stone-500 mb-1">Conversion/Mfg Cost (Per 1 Piece)</label>
-                    <input type="number" step="0.01" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
-                  </div>
+            <div className="p-6 border-b border-stone-100">
+               
+               {/* CALCULATION MODE TOGGLE */}
+               <div className="flex items-center gap-6 mb-6 pb-4 border-b border-stone-200">
+                 <label className="flex items-center gap-2 cursor-pointer">
+                   <input type="radio" checked={part.calcMode === 'auto'} onChange={() => handlePartChange(part.id, 'calcMode', 'auto')} className="accent-stone-900 w-4 h-4" />
+                   <span className="text-sm font-bold text-stone-700">Calculate from Plies & Dimensions</span>
+                 </label>
+                 <label className="flex items-center gap-2 cursor-pointer">
+                   <input type="radio" checked={part.calcMode === 'manual'} onChange={() => handlePartChange(part.id, 'calcMode', 'manual')} className="accent-stone-900 w-4 h-4" />
+                   <span className="text-sm font-bold text-stone-700">Direct Weight Entry</span>
+                 </label>
                </div>
 
-               {/* DYNAMIC METRICS READOUT */}
-               <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 flex flex-col justify-center">
-                  <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 border-b border-stone-200 pb-2">Single Piece Geometry</p>
-                  {part.boardAreaSqM > 0 ? (
-                    <div className="space-y-2">
-                       {part.itemType === 'Partition' ? (
-                         <>
-                           <p className="flex justify-between text-sm"><span className="text-stone-500">Longitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.longPieces} pcs</span></p>
-                           <p className="flex justify-between text-sm"><span className="text-stone-500">Latitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.latPieces} pcs</span></p>
-                         </>
-                       ) : (
-                         <>
-                           <p className="flex justify-between text-sm"><span className="text-stone-500">Board Length:</span> <span className="font-mono text-stone-900">{part.uiDetails.bl?.toFixed(1)} mm</span></p>
-                           <p className="flex justify-between text-sm"><span className="text-stone-500">Board Width:</span> <span className="font-mono text-stone-900">{part.uiDetails.bw?.toFixed(1)} mm</span></p>
-                         </>
-                       )}
-                       <p className="flex justify-between text-base font-bold pt-2 border-t border-stone-200 mt-2"><span className="text-stone-700">Total Flat Area:</span> <span className="font-mono text-blue-700">{part.boardAreaSqM.toFixed(4)} m²</span></p>
-                       <p className="flex justify-between text-sm font-bold"><span className="text-stone-700">Single Piece Wt:</span> <span className="font-mono text-orange-700">{part.singleWeightKg.toFixed(3)} kg</span></p>
-                    </div>
-                  ) : (
-                    <p className="text-stone-400 text-sm text-center italic">Enter dimensions to calculate geometry.</p>
-                  )}
-               </div>
+               {part.calcMode === 'manual' ? (
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                   <div>
+                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Weight per Piece (KG)</label>
+                     <input type="number" step="0.001" className="w-full p-3 border border-orange-300 rounded-md bg-orange-50 font-mono text-orange-900 font-bold text-lg" placeholder="e.g. 0.450" value={part.manualWeight} onChange={e => handlePartChange(part.id, 'manualWeight', e.target.value)} />
+                   </div>
+                   <div>
+                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Blended Material Rate (₹/KG)</label>
+                     <input type="number" step="0.01" className="w-full p-3 border border-stone-300 rounded-md bg-white font-mono text-lg" placeholder="e.g. 42.50" value={part.manualRate} onChange={e => handlePartChange(part.id, 'manualRate', e.target.value)} />
+                   </div>
+                   <div>
+                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Conversion/Mfg Cost (₹)</label>
+                     <input type="number" step="0.01" className="w-full p-3 border border-stone-300 rounded-md bg-white font-mono text-lg" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
+                   </div>
+                 </div>
+               ) : (
+                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                   <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-stone-500 mb-1">Item Type</label>
+                          <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-bold" value={part.itemType} onChange={e => handlePartChange(part.id, 'itemType', e.target.value)}>
+                            <option value="Box">Standard Box</option><option value="Tray">Tray</option><option value="Partition">Partition (Divider)</option><option value="Sheet">Flat Sheet</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-stone-500 mb-1">Number of Plies</label>
+                          <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={part.plyCount} onChange={e => handlePartChange(part.id, 'plyCount', e.target.value)}>
+                            <option value={2}>2 Ply</option><option value={3}>3 Ply</option><option value={5}>5 Ply</option><option value={7}>7 Ply</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-stone-500 mb-1">
+                          {part.itemType === 'Partition' ? 'Inner Box Size (L x W x H) mm' : (part.itemType === 'Sheet' ? 'Size (L x W) mm' : 'Size (L x W x H) mm')}
+                        </label>
+                        <input type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.size} onChange={e => handlePartChange(part.id, 'size', e.target.value)} />
+                      </div>
+
+                      {part.itemType === 'Partition' && (
+                        <div className="grid grid-cols-2 gap-4 bg-blue-50 p-3 rounded border border-blue-100">
+                          <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Length</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsLength} onChange={e => handlePartChange(part.id, 'pocketsLength', e.target.value)} /></div>
+                          <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Width</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsWidth} onChange={e => handlePartChange(part.id, 'pocketsWidth', e.target.value)} /></div>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-xs font-medium text-stone-500 mb-1">Conversion/Mfg Cost (Per Piece)</label>
+                        <input type="number" step="0.01" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
+                      </div>
+                   </div>
+
+                   <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 flex flex-col justify-center">
+                      <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 border-b border-stone-200 pb-2">Single Piece Geometry</p>
+                      {part.boardAreaSqM > 0 ? (
+                        <div className="space-y-2">
+                           {part.itemType === 'Partition' ? (
+                             <>
+                               <p className="flex justify-between text-sm"><span className="text-stone-500">Longitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.longPieces} pcs</span></p>
+                               <p className="flex justify-between text-sm"><span className="text-stone-500">Latitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.latPieces} pcs</span></p>
+                             </>
+                           ) : (
+                             <>
+                               <p className="flex justify-between text-sm"><span className="text-stone-500">Board Length:</span> <span className="font-mono text-stone-900">{part.uiDetails.bl?.toFixed(1)} mm</span></p>
+                               <p className="flex justify-between text-sm"><span className="text-stone-500">Board Width:</span> <span className="font-mono text-stone-900">{part.uiDetails.bw?.toFixed(1)} mm</span></p>
+                             </>
+                           )}
+                           <p className="flex justify-between text-base font-bold pt-2 border-t border-stone-200 mt-2"><span className="text-stone-700">Total Flat Area:</span> <span className="font-mono text-blue-700">{part.boardAreaSqM.toFixed(4)} m²</span></p>
+                        </div>
+                      ) : (
+                        <p className="text-stone-400 text-sm text-center italic">Enter dimensions to calculate geometry.</p>
+                      )}
+                   </div>
+                 </div>
+               )}
             </div>
 
-            {/* PLY TABLE */}
-            <div className="overflow-x-auto p-4">
-              <table className="w-full text-left">
-                <thead className="text-stone-400 text-xs uppercase tracking-wider">
-                  <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {part.plyDetails.map((ply, idx) => {
-                    const plyCost = (part.boardAreaSqM * ply.gsm * ply.factor / 1000) * ply.rate;
-                    return (
-                      <tr key={ply.id} className="hover:bg-stone-50">
-                        <td className="p-2 text-sm font-medium text-stone-600">{ply.name}</td>
-                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.gsm} onChange={e => handlePlyChange(part.id, idx, 'gsm', e.target.value)} /></td>
-                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.bf} onChange={e => handlePlyChange(part.id, idx, 'bf', e.target.value)} /></td>
-                        <td className="p-1"><input type="number" step="0.1" className="w-16 p-1.5 border rounded text-xs" value={ply.factor} onChange={e => handlePlyChange(part.id, idx, 'factor', e.target.value)} /></td>
-                        <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.rate} onChange={e => handlePlyChange(part.id, idx, 'rate', e.target.value)} /></td>
-                        <td className="p-2 text-right text-sm font-mono font-bold text-stone-800">{plyCost > 0 ? `₹${plyCost.toFixed(2)}` : '-'}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {/* PLY TABLE (ONLY VISIBLE IF NOT MANUAL) */}
+            {part.calcMode === 'auto' && (
+              <div className="overflow-x-auto p-4 bg-white">
+                <table className="w-full text-left">
+                  <thead className="text-stone-400 text-xs uppercase tracking-wider">
+                    <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {part.plyDetails.map((ply, idx) => {
+                      const plyCost = (part.boardAreaSqM * ply.gsm * ply.factor / 1000) * ply.rate;
+                      return (
+                        <tr key={ply.id} className="hover:bg-stone-50">
+                          <td className="p-2 text-sm font-medium text-stone-600">{ply.name}</td>
+                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.gsm} onChange={e => handlePlyChange(part.id, idx, 'gsm', e.target.value)} /></td>
+                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.bf} onChange={e => handlePlyChange(part.id, idx, 'bf', e.target.value)} /></td>
+                          <td className="p-1"><input type="number" step="0.1" className="w-16 p-1.5 border rounded text-xs" value={ply.factor} onChange={e => handlePlyChange(part.id, idx, 'factor', e.target.value)} /></td>
+                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.rate} onChange={e => handlePlyChange(part.id, idx, 'rate', e.target.value)} /></td>
+                          <td className="p-2 text-right text-sm font-mono font-bold text-stone-800">{plyCost > 0 ? `₹${plyCost.toFixed(2)}` : '-'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-            {/* PART TOTAL FOOTER */}
-            <div className="bg-stone-800 text-white p-4 flex flex-wrap justify-between items-center">
-               <div className="text-sm">
-                  <span className="text-stone-400 mr-2">Single Piece Cost:</span> 
-                  <span className="font-mono font-bold text-green-400">₹{part.singleTotalCost.toFixed(2)}</span>
+            {/* PART TOTAL FOOTER (SHOWS UNIT WEIGHT) */}
+            <div className="bg-stone-800 text-white p-4 flex flex-wrap justify-between items-center gap-4">
+               <div className="text-sm flex flex-wrap items-center gap-4 md:gap-8">
+                  <div>
+                    <span className="text-stone-400 mr-2 uppercase text-[10px] tracking-wider block">Unit Cost</span> 
+                    <span className="font-mono font-bold text-green-400 text-lg">₹{part.singleTotalCost.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-stone-400 mr-2 uppercase text-[10px] tracking-wider block">Unit Weight</span> 
+                    <span className="font-mono font-bold text-orange-400 text-lg">{part.singleWeightKg.toFixed(3)} kg</span>
+                  </div>
                </div>
-               <div className="text-base font-bold">
-                  <span className="text-stone-400 mr-2 uppercase text-xs tracking-wider">Subtotal ({part.qtyPerSet}x):</span> 
-                  <span className="font-mono text-xl">₹{part.totalCost.toFixed(2)}</span>
+               <div className="text-right">
+                  <span className="text-stone-400 mr-2 uppercase text-xs tracking-wider block mb-1">Subtotal ({part.qtyPerSet}x Qty)</span> 
+                  <span className="font-mono text-2xl font-bold">₹{part.totalCost.toFixed(2)}</span>
                </div>
             </div>
           </div>
@@ -1339,17 +1312,27 @@ function CostingView() {
                <h4 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-4 border-b border-stone-700 pb-2">Set Composition</h4>
                <ul className="space-y-3 mb-6">
                  {calculatedParts.map((p, i) => (
-                    <li key={p.id} className="flex justify-between items-center text-sm">
-                       <span className="text-stone-300 font-medium">
-                         <span className="text-stone-500 mr-2">{p.qtyPerSet}x</span> {p.partName || `Part ${i+1}`}
-                       </span>
-                       <span className="font-mono font-bold text-white">₹{p.totalCost.toFixed(2)}</span>
+                    <li key={p.id} className="flex justify-between items-start text-sm border-b border-stone-800 pb-3 last:border-0 last:pb-0">
+                       <div className="flex flex-col">
+                         <span className="text-stone-200 font-medium">
+                           <span className="text-stone-500 mr-2">{p.qtyPerSet}x</span> {p.partName || `Part ${i+1}`}
+                         </span>
+                         <span className="text-stone-500 text-[11px] mt-1 font-mono">
+                           Unit: {p.singleWeightKg.toFixed(3)} kg
+                         </span>
+                       </div>
+                       <div className="text-right flex flex-col items-end">
+                         <span className="font-mono font-bold text-white">₹{p.totalCost.toFixed(2)}</span>
+                         <span className="text-stone-500 text-[11px] mt-1 font-mono">
+                           Total: {p.totalWeightKg.toFixed(3)} kg
+                         </span>
+                       </div>
                     </li>
                  ))}
                </ul>
 
                <div className="bg-stone-800 p-4 rounded-lg border border-stone-700">
-                  <p className="flex justify-between text-sm mb-1"><span className="text-stone-400">Total Set Weight:</span> <span className="font-mono text-white font-bold">{grandTotalWeight.toFixed(3)} kg</span></p>
+                  <p className="flex justify-between text-sm mb-1"><span className="text-stone-400">Total Set Weight:</span> <span className="font-mono text-white font-bold text-lg">{grandTotalWeight.toFixed(3)} kg</span></p>
                   <p className="flex justify-between text-sm"><span className="text-stone-400">Total Pieces:</span> <span className="font-mono text-white">{calculatedParts.reduce((s, p) => s + parseInt(p.qtyPerSet||0), 0)}</span></p>
                </div>
             </div>
@@ -1506,7 +1489,6 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
 }
 
 // --- INVENTORY VIEW ---
-// --- INVENTORY VIEW ---
 function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [] }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
@@ -1589,7 +1571,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       const batch = writeBatch(db);
       let count = 0;
       reelsInput.forEach(reel => {
-        if (!reel.reelNo) return;
+        if (!reel.reelNo) return; // Prevent saving completely blank reels
         const newDocRef = doc(getColRef('inventory'));
         batch.set(newDocRef, { ...commonData, ...reel, category: 'Paper' });
         count++;
@@ -1655,15 +1637,26 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   const paperInventoryData = inventory.filter(i => !i.category || i.category === 'Paper');
   
-  const balances = {};
+  // --- THE FIX: Unique ID Tracking for Duplicate & Blank CSV Reels ---
+  const balances = {}; 
   const usageStats = {}; 
+  const reelNoToIds = {}; 
+
   paperInventoryData.forEach(reel => {
+    const id = reel.id; // Using Firebase unique ID instead of text name
     const rNo = String(reel.reelNo || '').trim().toLowerCase();
+    
     const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-    balances[rNo] = parseFloat(reel.receivedQty || 0) - initialIssued;
-    usageStats[rNo] = { issued: 0, log: [] };
+    balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
+    usageStats[id] = { issued: 0, log: [] };
+    
     if (initialIssued > 0) {
-        usageStats[rNo].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
+        usageStats[id].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
+    }
+
+    if (rNo) {
+        if (!reelNoToIds[rNo]) reelNoToIds[rNo] = [];
+        reelNoToIds[rNo].push(id);
     }
   });
 
@@ -1677,12 +1670,26 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     if (p.consumedReels && p.consumedReels.length > 0) {
       p.consumedReels.forEach(cr => {
          const rNo = String(cr.reelNo || '').trim().toLowerCase();
-         const deduct = parseFloat(cr.weight || 0);
-         if (deduct > 0) {
-           balances[rNo] = (balances[rNo] || 0) - deduct;
-           if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
-           usageStats[rNo].issued += deduct;
-           usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+         let remainingDeduct = parseFloat(cr.weight || 0);
+         
+         if (remainingDeduct > 0 && reelNoToIds[rNo]) {
+             for (const id of reelNoToIds[rNo]) {
+                 if (remainingDeduct <= 0) break;
+                 const available = balances[id] || 0;
+                 if (available > 0) {
+                     const deduct = Math.min(available, remainingDeduct);
+                     balances[id] -= deduct;
+                     usageStats[id].issued += deduct;
+                     usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                     remainingDeduct -= deduct;
+                 }
+             }
+             if (remainingDeduct > 0) {
+                 const lastId = reelNoToIds[rNo][reelNoToIds[rNo].length - 1];
+                 balances[lastId] -= remainingDeduct;
+                 usageStats[lastId].issued += remainingDeduct;
+                 usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
+             }
          }
       });
     } else {
@@ -1690,28 +1697,35 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
       if (pReels.length === 0) return;
       let remainingUse = parseFloat(p.useKg || 0);
+      
       pReels.forEach((rNo, index) => {
-        if (remainingUse <= 0) return;
-        let deduct = 0;
-        if (index === pReels.length - 1) { deduct = remainingUse; } 
-        else {
-          const available = balances[rNo] || 0;
-          deduct = Math.min(Math.max(available, 0), remainingUse);
-        }
-        if (deduct > 0) {
-          balances[rNo] = (balances[rNo] || 0) - deduct;
-          if (!usageStats[rNo]) usageStats[rNo] = { issued: 0, log: [] };
-          usageStats[rNo].issued += deduct;
-          usageStats[rNo].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-          remainingUse -= deduct;
+        if (remainingUse <= 0 || !reelNoToIds[rNo]) return;
+        const isLast = (index === pReels.length - 1);
+        
+        for (const id of reelNoToIds[rNo]) {
+            if (remainingUse <= 0) break;
+            const available = balances[id] || 0;
+            let deduct = 0;
+            if (isLast) {
+                deduct = remainingUse; 
+            } else {
+                if (available <= 0) continue;
+                deduct = Math.min(available, remainingUse);
+            }
+            if (deduct > 0) {
+                balances[id] -= deduct;
+                usageStats[id].issued += deduct;
+                usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                remainingUse -= deduct;
+            }
         }
       });
     }
   });
 
   const inventoryWithUsage = paperInventoryData.map(reel => {
-    const rNo = String(reel.reelNo || '').trim().toLowerCase();
-    const stats = usageStats[rNo] || { issued: 0, log: [] };
+    const id = reel.id;
+    const stats = usageStats[id] || { issued: 0, log: [] };
     const initialIssued = parseFloat(reel.initialIssuedQty || 0);
     const issuedQty = stats.issued + initialIssued;
     const received = parseFloat(reel.receivedQty || 0);
@@ -2097,6 +2111,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     </div>
   );
 }
+
 // --- PRODUCTION VIEW ---
 function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -2107,38 +2122,28 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   const [editingId, setEditingId] = useState(null);
   const [suggestedKg, setSuggestedKg] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set()); // Bulk delete state
   
-  // New State for Granular Reel Entry
   const [consumedReels, setConsumedReels] = useState([{ reelNo: '', weight: '' }]);
-  
   const [newRecord, setNewRecord] = useState({ 
-    date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', 
-    linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
+    date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' 
   });
 
   const availableMills = [...new Set(inventory.filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId)).map(i => i.millName).filter(Boolean))];
 
-  // ==========================================
-  // LIVE MATH ENGINE: Auto-Suggest Use KG
-  // ==========================================
   useEffect(() => {
     if (!newRecord.usedForItem) {
       setSuggestedKg(null);
       return;
     }
-
     const item = items.find(i => i.name === newRecord.usedForItem || i.Item_Name === newRecord.usedForItem);
     if (!item) return;
 
     const sizeStr = String(item.size || item.Size_mm || '0x0x0').toLowerCase().replace(/\*/g, 'x');
     const dims = sizeStr.split('x').map(s => parseFloat(s.trim()) || 0);
-    const L = dims[0] || 0;
-    const W = dims[1] || 0;
-    const H = dims[2] || 0;
-
+    const L = dims[0] || 0; const W = dims[1] || 0; const H = dims[2] || 0;
     const type = item.itemType || item.Item_Type || 'Box';
     let totalAreaSqM = 0;
-
     let targetSheets = parseFloat(newRecord.linerQty || 0);
 
     if (targetSheets === 0 && newRecord.orderId) {
@@ -2148,29 +2153,18 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
           const orderQty = parseFloat(ord.orderQty || 0);
           const cPerSet = Math.max(1, parseInt(ord.commonPerSet || 2) - 1);
           const sPerSet = Math.max(1, parseInt(ord.smallPerSet || 2) - 1);
-          const baseC = parseInt(ord.commonUps || 1);
-          const baseS = parseInt(ord.smallUps || 1);
-          const pUpsC = parseInt(ord.plannedUpsCommon || 1);
-          const pUpsS = parseInt(ord.plannedUpsSmall || 1);
-
-          const cNeeded = cPerSet * orderQty;
-          const sNeeded = sPerSet * orderQty;
-          const cPiecesPerCSheet = baseC * pUpsC;
-          const sPiecesPerCSheet = baseC * pUpsC;
+          const baseC = parseInt(ord.commonUps || 1); const baseS = parseInt(ord.smallUps || 1);
+          const pUpsC = parseInt(ord.plannedUpsCommon || 1); const pUpsS = parseInt(ord.plannedUpsSmall || 1);
+          const cNeeded = cPerSet * orderQty; const sNeeded = sPerSet * orderQty;
+          const cPiecesPerCSheet = baseC * pUpsC; const sPiecesPerCSheet = baseC * pUpsC; 
           const sPiecesPerSSheet = baseS * pUpsS * 2;
-
           const cSheetsNeeded = Math.ceil(cNeeded / cPiecesPerCSheet);
           const sAcquired = cSheetsNeeded * sPiecesPerCSheet;
           const remainingS = Math.max(0, sNeeded - sAcquired);
           const sSheetsNeeded = Math.ceil(remainingS / sPiecesPerSSheet);
-
           targetSheets = cSheetsNeeded + sSheetsNeeded;
-
-          const cWidth = H * baseC;
-          const cLength = ((L + W) * pUpsC) + 10;
-          const sWidth = cWidth;
-          const sLength = (W * 2 * pUpsS) + 10;
-
+          const cWidth = H * baseC; const cLength = ((L + W) * pUpsC) + 10;
+          const sWidth = cWidth; const sLength = (W * 2 * pUpsS) + 10;
           totalAreaSqM = ((cSheetsNeeded * cWidth * cLength) + (sSheetsNeeded * sWidth * sLength)) / 1000000;
         } else {
           const ups = parseFloat(newRecord.numberOfUps || 1);
@@ -2185,45 +2179,27 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         if (type === 'Box') { boardLength = (L + W) * 2 + 50; boardWidth = W + H + 20; }
         else if (type === 'Tray' || type === 'Lid') { boardLength = (L + W * 2) + 10; boardWidth = (W + 2 * H) + 10; }
         else { boardLength = L; boardWidth = W; }
-
         totalAreaSqM = (boardLength * boardWidth / 1000000) * targetSheets;
       }
-
       const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120);
-      const isFlute = newRecord.paperUsedFor === 'Paper';
-      const factor = isFlute ? 1.4 : 1.0;
-
-      const expectedKg = totalAreaSqM * (gsm / 1000) * factor;
-      setSuggestedKg(expectedKg.toFixed(1));
+      const factor = newRecord.paperUsedFor === 'Paper' ? 1.4 : 1.0;
+      setSuggestedKg((totalAreaSqM * (gsm / 1000) * factor).toFixed(1));
     } else {
       setSuggestedKg(null);
     }
   }, [newRecord.usedForItem, newRecord.orderId, newRecord.numberOfUps, newRecord.paperUsedFor, newRecord.linerQty, items, orders]);
 
   const handleOrderLink = (orderId) => {
-    if (!orderId) {
-      setNewRecord({...newRecord, orderId: ''});
-      return;
-    }
+    if (!orderId) { setNewRecord({...newRecord, orderId: ''}); return; }
     const ord = orders.find(o => o.id === orderId);
-    if (ord) {
-      setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
-    }
+    if (ord) setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
   };
 
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
-    
-    // Auto-calculate the total and generate the backward-compatible string
     const totalKg = consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0);
     const reelNosStr = consumedReels.map(r => r.reelNo.toUpperCase()).filter(Boolean).join(', ');
-    
-    const finalRecord = { 
-      ...newRecord, 
-      consumedReels: consumedReels, 
-      useKg: totalKg.toFixed(1), 
-      reelNos: reelNosStr 
-    };
+    const finalRecord = { ...newRecord, consumedReels: consumedReels, useKg: totalKg.toFixed(1), reelNos: reelNosStr };
 
     if (editingId) {
       await updateDoc(getDocRef('production', editingId), finalRecord);
@@ -2233,27 +2209,19 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       await addDoc(getColRef('production'), finalRecord);
       addLog(`Added production record: Reels ${reelNosStr}`);
     }
-    
     setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
     setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
   const handleEdit = (record) => {
-    setEditingId(record.id);
-    setNewRecord(record);
-    
-    // Load granular reels if they exist, otherwise adapt the old sequential format
-    if (record.consumedReels && record.consumedReels.length > 0) {
-      setConsumedReels(record.consumedReels);
-    } else if (record.reelNos) {
-      setConsumedReels([{ reelNo: record.reelNos, weight: record.useKg }]);
-    }
+    setEditingId(record.id); setNewRecord(record);
+    if (record.consumedReels && record.consumedReels.length > 0) setConsumedReels(record.consumedReels);
+    else if (record.reelNos) setConsumedReels([{ reelNo: record.reelNos, weight: record.useKg }]);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
-    setEditingId(null);
-    setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
+    setEditingId(null); setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
     setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
@@ -2261,6 +2229,32 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     if(window.confirm(`Delete production record for Reels ${reelNos}?`)) {
       await deleteDoc(getDocRef('production', id));
       addLog(`Deleted production record: Reels ${reelNos}`);
+    }
+  };
+
+  // --- BULK DELETE LOGIC ---
+  const toggleSelection = (id) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  const toggleAllInGroup = (records) => {
+    const recordIds = records.map(r => r.id);
+    const allSelected = recordIds.every(id => selectedIds.has(id));
+    const newSet = new Set(selectedIds);
+    if (allSelected) recordIds.forEach(id => newSet.delete(id));
+    else recordIds.forEach(id => newSet.add(id));
+    setSelectedIds(newSet);
+  };
+
+  const handleBulkDelete = async () => {
+    if (role !== 'admin') return;
+    if (window.confirm(`Are you sure you want to completely delete the ${selectedIds.size} selected records?`)) {
+        await Promise.all(Array.from(selectedIds).map(id => deleteDoc(getDocRef('production', id))));
+        addLog(`Bulk deleted ${selectedIds.size} production records`);
+        setSelectedIds(new Set());
     }
   };
 
@@ -2295,8 +2289,13 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Production Log</h2>
         <div className="flex gap-2">
+          {role === 'admin' && selectedIds.size > 0 && (
+            <button onClick={handleBulkDelete} className="flex items-center gap-2 bg-red-100 text-red-700 px-4 py-2 rounded-lg hover:bg-red-200 font-bold text-sm transition shadow-sm border border-red-200">
+              <Trash2 className="w-4 h-4"/> Delete Selected ({selectedIds.size})
+            </button>
+          )}
           <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-            Export to Excel
+            <Download className="w-4 h-4"/> Export to Excel
           </button>
         </div>
       </div>
@@ -2321,24 +2320,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date</label><input required type="date" className="w-full p-2 border rounded" value={newRecord.date} onChange={e => setNewRecord({...newRecord, date: e.target.value})} /></div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company (For Report)</label><select required className="w-full p-2 border rounded" value={newRecord.companyId} onChange={e => setNewRecord({...newRecord, companyId: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          
-          <div className="col-span-1 md:col-span-3">
-            <label className="block text-xs text-stone-500 mb-1">Mill Name</label>
-            <input required list="mill-options" className="w-full p-2 border rounded bg-white" placeholder="Type or select mill..." value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} />
-            <datalist id="mill-options">
-               {availableMills.map((m, i) => <option key={i} value={m} />)}
-            </datalist>
-          </div>
-
-          <div className="col-span-1 md:col-span-2">
-            <label className="block text-xs font-bold text-stone-700 mb-1">Paper Used For</label>
-            <select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}>
-              <option value="Paper">Paper (1-Ply / Fluting)</option>
-              <option value="Liner">Liner (2-Ply / Flat)</option>
-              <option value="Board">Board (Combined)</option>
-            </select>
-          </div>
-
+          <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Mill Name</label><input required list="mill-options" className="w-full p-2 border rounded bg-white" placeholder="Type or select mill..." value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} /><datalist id="mill-options">{availableMills.map((m, i) => <option key={i} value={m} />)}</datalist></div>
+          <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold text-stone-700 mb-1">Paper Used For</label><select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}><option value="Paper">Paper (1-Ply / Fluting)</option><option value="Liner">Liner (2-Ply / Flat)</option><option value="Board">Board (Combined)</option></select></div>
           <div className="col-span-1 md:col-span-4"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
           
           <div className="col-span-1 md:col-span-6 bg-stone-50 p-4 rounded-lg border border-stone-200 shadow-inner">
@@ -2348,25 +2331,13 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             </div>
             {consumedReels.map((reel, idx) => (
               <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end mb-2">
-                <div className="flex-1">
-                  <label className="block text-[10px] text-stone-500 mb-1">Reel No.</label>
-                  <input required type="text" className="w-full p-2 border border-stone-300 rounded text-sm uppercase bg-white" value={reel.reelNo} onChange={e => { const upd = [...consumedReels]; upd[idx].reelNo = e.target.value; setConsumedReels(upd); }} />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-[10px] text-stone-500 mb-1">KG Consumed</label>
-                  <input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded text-sm bg-orange-50" value={reel.weight} onChange={e => { const upd = [...consumedReels]; upd[idx].weight = e.target.value; setConsumedReels(upd); }} />
-                </div>
-                {consumedReels.length > 1 && (
-                  <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 bg-red-100 text-red-600 hover:bg-red-200 rounded mb-0.5"><Trash2 className="w-4 h-4"/></button>
-                )}
+                <div className="flex-1"><label className="block text-[10px] text-stone-500 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-stone-300 rounded text-sm uppercase bg-white" value={reel.reelNo} onChange={e => { const upd = [...consumedReels]; upd[idx].reelNo = e.target.value; setConsumedReels(upd); }} /></div>
+                <div className="flex-1"><label className="block text-[10px] text-stone-500 mb-1">KG Consumed</label><input required type="number" step="0.1" className="w-full p-2 border border-stone-300 rounded text-sm bg-orange-50" value={reel.weight} onChange={e => { const upd = [...consumedReels]; upd[idx].weight = e.target.value; setConsumedReels(upd); }} /></div>
+                {consumedReels.length > 1 && <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 bg-red-100 text-red-600 hover:bg-red-200 rounded mb-0.5"><Trash2 className="w-4 h-4"/></button>}
               </div>
             ))}
             <button type="button" onClick={() => setConsumedReels([...consumedReels, { reelNo: '', weight: '' }])} className="text-[10px] font-bold text-stone-600 bg-stone-200 px-3 py-1.5 rounded hover:bg-stone-300 mt-1">+ Add Another Reel</button>
-            
-            <div className="mt-4 pt-3 border-t border-stone-200 flex justify-end items-center gap-4">
-              <span className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Consumed:</span>
-              <span className="text-xl font-bold text-orange-600">{consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0).toFixed(1)} KG</span>
-            </div>
+            <div className="mt-4 pt-3 border-t border-stone-200 flex justify-end items-center gap-4"><span className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Consumed:</span><span className="text-xl font-bold text-orange-600">{consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0).toFixed(1)} KG</span></div>
           </div>
 
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Good Qty (Sheets)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-blue-50" value={newRecord.linerQty} onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} /></div>
@@ -2388,23 +2359,41 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         </form>
       </div>
 
-      {(() => {
-        const itemTotals = visibleProduction.reduce((acc, record) => {
-          if (record.usedForItem) acc[record.usedForItem] = (acc[record.usedForItem] || 0) + (parseFloat(record.useKg) || 0);
-          return acc;
-        }, {});
-        if (Object.keys(itemTotals).length === 0) return null;
-        return (
-          <div className="bg-white rounded-xl shadow-sm border border-stone-200 mb-8 overflow-hidden">
-            <div className="bg-stone-100 p-4 border-b border-stone-200"><h3 className="font-bold text-stone-800">Total Paper Usage by Item</h3></div>
-            <div className="p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {Object.entries(itemTotals).sort((a,b) => b[1] - a[1]).map(([itemName, totalKg]) => (
-                <div key={itemName} className="bg-stone-50 p-3 rounded-lg border border-stone-200 text-center"><p className="text-xs text-stone-500 truncate mb-1" title={itemName}>{itemName}</p><p className="font-bold text-lg text-stone-900">{totalKg.toFixed(1)} <span className="text-sm font-normal text-stone-500">KG</span></p></div>
+      {/* DUAL SUMMARY METRICS */}
+      {visibleProduction.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          
+          {/* USAGE BY COMPANY */}
+          <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+            <div className="bg-stone-100 p-4 border-b border-stone-200 flex items-center gap-2"><Building2 className="w-4 h-4 text-stone-500"/><h3 className="font-bold text-stone-800">Usage by Company</h3></div>
+            <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-4">
+              {Object.entries(visibleProduction.reduce((acc, record) => { const cId = record.companyId || 'unassigned'; acc[cId] = (acc[cId] || 0) + (parseFloat(record.useKg) || 0); return acc; }, {})).sort((a,b) => b[1] - a[1]).map(([cId, totalKg]) => {
+                const compName = cId === 'unassigned' ? 'Unassigned' : companies.find(c => c.id === cId)?.name || 'Unknown';
+                return (
+                  <div key={cId} className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-center">
+                    <p className="text-[10px] font-bold text-blue-800 uppercase tracking-wider truncate mb-1" title={compName}>{compName}</p>
+                    <p className="font-bold text-lg text-blue-900">{totalKg.toFixed(1)} <span className="text-[10px] font-normal">KG</span></p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* USAGE BY ITEM */}
+          <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+            <div className="bg-stone-100 p-4 border-b border-stone-200 flex items-center gap-2"><Package className="w-4 h-4 text-stone-500"/><h3 className="font-bold text-stone-800">Usage by Item</h3></div>
+            <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-4 max-h-[300px] overflow-y-auto">
+              {Object.entries(visibleProduction.reduce((acc, record) => { if (record.usedForItem) acc[record.usedForItem] = (acc[record.usedForItem] || 0) + (parseFloat(record.useKg) || 0); return acc; }, {})).sort((a,b) => b[1] - a[1]).map(([itemName, totalKg]) => (
+                <div key={itemName} className="bg-stone-50 p-3 rounded-lg border border-stone-200 text-center">
+                  <p className="text-[10px] font-bold text-stone-600 uppercase tracking-wider truncate mb-1" title={itemName}>{itemName}</p>
+                  <p className="font-bold text-lg text-stone-900">{totalKg.toFixed(1)} <span className="text-[10px] font-normal">KG</span></p>
+                </div>
               ))}
             </div>
           </div>
-        );
-      })()}
+          
+        </div>
+      )}
 
       {sortedCompanyIds.length === 0 && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-stone-200 text-center text-stone-500">
@@ -2414,7 +2403,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
       {sortedCompanyIds.map(compId => {
         const compName = compId === 'unassigned' ? 'Unassigned / Unknown Client' : (companies.find(c => c.id === compId)?.name || 'Unknown Company');
-        const records = groupedProduction[compId];
+        const records = groupedProduction[compId].sort((a,b) => (new Date(b.date).getTime() || 0) - (new Date(a.date).getTime() || 0));
 
         return (
           <div key={compId} className="mb-8">
@@ -2423,6 +2412,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
               <table className="w-full text-left min-w-[1100px]">
                 <thead className="bg-stone-100 text-stone-600 text-sm">
                   <tr>
+                    {role === 'admin' && <th className="p-4 w-12"><input type="checkbox" className="accent-stone-900 w-4 h-4 cursor-pointer" onChange={() => toggleAllInGroup(records)} checked={records.length > 0 && records.every(r => selectedIds.has(r.id))} title="Select all in this group"/></th>}
                     <th className="p-4">Date</th>
                     <th className="p-4">Item Details</th>
                     <th className="p-4">Reels Consumed</th>
@@ -2433,19 +2423,15 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200">
-                  {[...records].sort((a,b) => {
-                     const dateA = new Date(a.date).getTime();
-                     const dateB = new Date(b.date).getTime();
-                     return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-                  }).map(record => {
+                  {records.map(record => {
                     const itemObj = items.find(i => (i.name === record.usedForItem) || (i.Item_Name === record.usedForItem));
                     const isRecordPpc = itemObj?.itemType === 'PPC' || itemObj?.Item_Type === 'PPC';
-
                     let upsDisplay = `${record.numberOfUps || 1} Ups`;
                     if (isRecordPpc) upsDisplay = `Ups: ${record.commonUps || '-'}C / ${record.smallUps || '-'}S`;
 
                     return (
-                    <tr key={record.id} className="hover:bg-stone-50">
+                    <tr key={record.id} className={`hover:bg-stone-50 ${selectedIds.has(record.id) ? 'bg-red-50/30' : ''}`}>
+                      {role === 'admin' && <td className="p-4"><input type="checkbox" className="accent-stone-900 w-4 h-4 cursor-pointer" checked={selectedIds.has(record.id)} onChange={() => toggleSelection(record.id)} /></td>}
                       <td className="p-4 whitespace-nowrap">{record.date}</td>
                       <td className="p-4">
                         <p className="font-bold text-stone-900">{record.usedForItem || '-'}</p>
@@ -2471,8 +2457,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                         <p className="text-[10px] text-stone-500 mt-1 font-bold bg-stone-200 px-1 py-0.5 rounded inline-block">{upsDisplay}</p>
                       </td>
                       <td className="p-4 text-right whitespace-nowrap">
-                        <button onClick={() => handleEdit(record)} className="text-blue-500 hover:text-blue-700 mr-3" title="Edit">Edit</button>
-                        {role === 'admin' && <button onClick={() => handleDelete(record.id, record.reelNos || record.reelNo)} className="text-red-500 hover:text-red-700" title="Delete">Delete</button>}
+                        <button onClick={() => handleEdit(record)} className="text-blue-600 hover:text-blue-800 mr-4 font-bold text-sm" title="Edit">Edit</button>
+                        {role === 'admin' && <button onClick={() => handleDelete(record.id, record.reelNos || record.reelNo)} className="text-red-500 hover:text-red-700 font-bold text-sm" title="Delete">Delete</button>}
                       </td>
                     </tr>
                     );
@@ -2487,7 +2473,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
   );
 }
 
-// --- ORDERS VIEW ---
+
 // --- ORDERS VIEW ---
 function OrdersView({ orders, production, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
@@ -2498,7 +2484,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
   const [newOrder, setNewOrder] = useState({
     orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0,
     commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '',
-    openingFgQty: '' // <-- Added for Legacy Stock
+    openingFgQty: '' 
   });
 
   const handleAdd = async (e) => {
@@ -2507,18 +2493,10 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
     const orderData = { ...newOrder, itemName: item?.name || item?.Item_Name || 'Unknown Item' };
     
     if (item?.itemType !== 'PPC' && item?.Item_Type !== 'PPC') {
-        delete orderData.commonPerSet;
-        delete orderData.smallPerSet;
-        delete orderData.commonUps;
-        delete orderData.smallUps;
-        delete orderData.plannedUpsCommon;
-        delete orderData.plannedUpsSmall;
+        delete orderData.commonPerSet; delete orderData.smallPerSet; delete orderData.commonUps; delete orderData.smallUps; delete orderData.plannedUpsCommon; delete orderData.plannedUpsSmall;
     }
 
-    // Auto-complete status if the legacy stock fulfills the order
-    if (parseInt(orderData.openingFgQty || 0) >= parseInt(orderData.orderQty || 0)) {
-        orderData.status = 'Completed';
-    }
+    if (parseInt(orderData.openingFgQty || 0) >= parseInt(orderData.orderQty || 0)) orderData.status = 'Completed';
 
     await addDoc(getColRef('orders'), orderData);
     addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
@@ -2544,6 +2522,87 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
       Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Legacy_Stock_Loaded: order.openingFgQty || 0, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
     }));
     downloadCSV(exportData, 'orders');
+  };
+
+  // --- PDF JOB CARD GENERATOR ---
+  const generateJobCard = (order) => {
+    try {
+      const doc = new jsPDF();
+      const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown Client';
+      const item = items.find(i => i.id === order.itemId) || {};
+      const isPpc = item.itemType === 'PPC' || item.Item_Type === 'PPC';
+
+      // Header
+      doc.setFontSize(24);
+      doc.setFont("helvetica", "bold");
+      doc.text("PRODUCTION JOB CARD", 105, 20, null, null, "center");
+
+      // Text-based Barcode
+      doc.setFont("courier", "bold");
+      doc.setFontSize(14);
+      doc.text(`*JOB-${order.id.substring(0, 8).toUpperCase()}*`, 105, 30, null, null, "center");
+
+      // Dates
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(`Order Date: ${order.orderDate}`, 15, 45);
+      doc.text(`Target Delivery: ${order.deliveryDate || 'N/A'}`, 15, 52);
+
+      // Main Info Box
+      doc.setDrawColor(0);
+      doc.setFillColor(245, 245, 245);
+      doc.rect(15, 60, 180, 40, 'FD');
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(`Client: ${compName}`, 20, 70);
+      doc.text(`Item: ${order.itemName || order.Item_Name}`, 20, 78);
+      
+      doc.setFontSize(12);
+      doc.text(`Target Quantity: ${order.orderQty} ${isPpc ? 'Sets' : 'Boxes'}`, 20, 88);
+      doc.text(`Planned Ups: ${isPpc ? `${order.plannedUpsCommon}C / ${order.plannedUpsSmall}S` : order.plannedUps}`, 120, 88);
+
+      // Item Specs
+      doc.setFontSize(12);
+      doc.text("Manufacturing Specifications", 15, 115);
+      
+      autoTable(doc, {
+        startY: 120,
+        head: [['Dimension (mm)', 'Ply', 'Paper Specs', 'Est. Box Weight']],
+        body: [[
+          item.size || item.Size_mm || 'N/A',
+          `${item.ply || item.Ply || '-'} Ply`,
+          `${item.paperGsm || '-'} GSM / ${item.paperBf || '-'} BF`,
+          `${item.weight || item.Weight_g ? item.weight+'g' : 'Dynamic'}`
+        ]],
+        theme: 'grid',
+        headStyles: { fillColor: [41, 37, 36] }
+      });
+
+      // Routing / Sign-off Table
+      doc.setFontSize(12);
+      doc.text("Routing & Sign-off", 15, doc.lastAutoTable.finalY + 15);
+
+      autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 20,
+        head: [['Process', 'Machine/Operator', 'Good Qty', 'Waste (KG)', 'Sign']],
+        body: [
+          ['1. Corrugation', '', '', '', ''],
+          ['2. Pasting / Lamination', '', '', '', ''],
+          ['3. Creasing / Slotting', '', '', '', ''],
+          ['4. Stitching / Gluing', '', '', '', ''],
+          ['5. Bundling & QA', '', '', '', '']
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [240, 240, 240], textColor: 0 },
+        styles: { minCellHeight: 15, valign: 'middle' }
+      });
+
+      doc.save(`JobCard_${compName}_${order.itemName}.pdf`);
+    } catch(err) {
+      console.error(err);
+      alert("Error generating Job Card.");
+    }
   };
 
   const selectedItemObj = items.find(i => i.id === newOrder.itemId);
@@ -2600,7 +2659,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
               <th className="p-4">Rate & Value (₹)</th>
               <th className="p-4 bg-green-50 text-green-800">Ready Qty</th>
               <th className="p-4 bg-red-50 text-red-800">Pending Qty</th>
-              <th className="p-4">Status</th>
+              <th className="p-4">Status & Job Card</th>
               {role === 'admin' && <th className="p-4 text-right">Actions</th>}
             </tr>
           </thead>
@@ -2625,9 +2684,7 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
                   const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
 
-                  let totalCommonPieces = 0;
-                  let totalSmallPieces = 0;
-                  
+                  let totalCommonPieces = 0; let totalSmallPieces = 0;
                   pLogs.forEach(p => {
                       const sheets = parseFloat(p.linerQty || 0);
                       const cUps = parseInt(p.commonUps || order.commonUps || 0);
@@ -2636,19 +2693,13 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                       totalSmallPieces += sheets * sUps;
                   });
 
-                  const possibleFromCommon = Math.floor(totalCommonPieces / cPiecesPerSet);
-                  const possibleFromSmall = Math.floor(totalSmallPieces / sPiecesPerSet);
-                  producedQty = Math.min(possibleFromCommon, possibleFromSmall);
+                  producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
                   if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
 
                   const orderQty = parseInt(order.orderQty || 0);
-                  const totalCNeeded = cPiecesPerSet * orderQty;
-                  const totalSNeeded = sPiecesPerSet * orderQty;
-
-                  const baseC = parseInt(order.commonUps || 1);
-                  const baseS = parseInt(order.smallUps || 1);
-                  const pUpsC = parseInt(order.plannedUpsCommon || 1);
-                  const pUpsS = parseInt(order.plannedUpsSmall || 1);
+                  const totalCNeeded = cPiecesPerSet * orderQty; const totalSNeeded = sPiecesPerSet * orderQty;
+                  const baseC = parseInt(order.commonUps || 1); const baseS = parseInt(order.smallUps || 1);
+                  const pUpsC = parseInt(order.plannedUpsCommon || 1); const pUpsS = parseInt(order.plannedUpsSmall || 1);
 
                   const commonPiecesPerCommonSheet = Math.max(1, baseC * pUpsC);
                   const smallPiecesPerCommonSheet = Math.max(1, baseC * pUpsC); 
@@ -2659,12 +2710,9 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   const remainingSmallNeeded = Math.max(0, totalSNeeded - smallPiecesAcquired);
                   const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
 
-                  const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
-
                   targetSheetsDisplay = (
                       <span className="text-[10px] text-blue-600 font-bold block mt-1 leading-tight">
-                          Needs ~{targetSheets} Shts<br/>
-                          ({commonSheetsNeeded}C + {smallSheetsNeeded}S)
+                          Needs ~{commonSheetsNeeded + smallSheetsNeeded} Shts<br/>({commonSheetsNeeded}C + {smallSheetsNeeded}S)
                       </span>
                   );
               } else {
@@ -2685,7 +2733,6 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
               }
 
-              // --- ADD LEGACY STOCK TO PRODUCED QTY ---
               producedQty += parseInt(order.openingFgQty || 0);
               
               const pendingQty = Math.max(0, order.orderQty - producedQty);
@@ -2697,21 +2744,15 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
                   <td className="p-4 font-bold text-stone-900">{compName}</td>
                   <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
-                  <td className="p-4">
-                      <p className="font-bold text-lg">{order.orderQty}</p>
-                      {targetSheetsDisplay}
-                  </td>
-                  <td className="p-4">
-                     <p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p>
-                     <p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p>
-                  </td>
-                  <td className="p-4 bg-green-50/30">
-                     <p className="font-bold text-green-600 text-lg">{producedQty}</p>
-                     {parseInt(order.openingFgQty || 0) > 0 && <p className="text-[10px] text-blue-600 font-bold">Includes {order.openingFgQty} legacy</p>}
-                  </td>
+                  <td className="p-4"><p className="font-bold text-lg">{order.orderQty}</p>{targetSheetsDisplay}</td>
+                  <td className="p-4"><p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p><p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p></td>
+                  <td className="p-4 bg-green-50/30"><p className="font-bold text-green-600 text-lg">{producedQty}</p>{parseInt(order.openingFgQty || 0) > 0 && <p className="text-[10px] text-blue-600 font-bold">Includes {order.openingFgQty} legacy</p>}</td>
                   <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
                   <td className="p-4">
-                    <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
+                    <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors mb-2 block ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
+                    {order.status !== 'Completed' && (
+                        <button onClick={() => generateJobCard(order)} className="text-[10px] font-bold text-stone-700 bg-stone-200 hover:bg-stone-300 px-2 py-1 rounded">Print Job Card</button>
+                    )}
                   </td>
                   {role === 'admin' && (
                     <td className="p-4 text-right">
@@ -2734,6 +2775,7 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
   const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
 
   const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
+  const [editHistory, setEditHistory] = useState({ orderId: null, idx: -1, qty: '' });
 
   // Helper to cleanly calculate stock levels for a specific order
   const getOrderStockDetails = (order) => {
@@ -2774,7 +2816,6 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
         producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
     }
 
-    // --- ADD LEGACY STOCK TO PRODUCED QTY ---
     producedQty += parseInt(order.openingFgQty || 0);
 
     const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
@@ -2812,10 +2853,37 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
     });
     
     addLog(`Dispatched ${qty} boxes for Order: ${order.itemName}`);
+    generatePDFChallan(order, qty, getOrderStockDetails(order));
     if (e) e.target.reset(); 
   };
 
-  // --- DELETE RECORD FEATURE ---
+  // --- DISPATCH HISTORY EDIT/DELETE LOGIC ---
+  const handleDeleteHistory = async (order, idx) => {
+    if (!window.confirm('Delete this dispatch record? The stock will be returned to your inventory.')) return;
+    const historyItem = order.dispatchHistory[idx];
+    const newHistory = order.dispatchHistory.filter((_, i) => i !== idx);
+    const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - historyItem.qty);
+    
+    await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
+    addLog(`Deleted dispatch record of ${historyItem.qty} for ${order.itemName || order.Item_Name}`);
+  };
+
+  const handleUpdateHistory = async (e, order, idx) => {
+    e.preventDefault();
+    const newQty = parseInt(editHistory.qty);
+    if (isNaN(newQty) || newQty <= 0) return;
+    
+    const oldQty = order.dispatchHistory[idx].qty;
+    const newHistory = [...order.dispatchHistory];
+    newHistory[idx] = { ...newHistory[idx], qty: newQty };
+    
+    const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - oldQty + newQty);
+    
+    await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
+    addLog(`Updated dispatch record from ${oldQty} to ${newQty} for ${order.itemName || order.Item_Name}`);
+    setEditHistory({ orderId: null, idx: -1, qty: '' });
+  };
+
   const handleDeleteRecord = async (id, itemName) => {
     if(window.confirm(`Delete the stock record for ${itemName}? This will completely remove it from the database.`)) {
       try {
@@ -2828,9 +2896,49 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
     }
   };
 
-  // ==========================================
-  // DEDICATED LEGACY STOCK IMPORTER
-  // ==========================================
+  // --- PDF DELIVERY CHALLAN GENERATOR ---
+  const generatePDFChallan = (order, dispatchQty, stockInfo) => {
+    try {
+      const doc = new jsPDF();
+      const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown Client';
+      const dateStr = new Date().toLocaleDateString();
+      const challanNo = `DC-${Math.floor(1000 + Math.random() * 9000)}-${new Date().getFullYear()}`;
+
+      doc.setFontSize(22);
+      doc.setFont("helvetica", "bold");
+      doc.text("DELIVERY CHALLAN", 105, 20, null, null, "center");
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Challan No: ${challanNo}`, 15, 35);
+      doc.text(`Date: ${dateStr}`, 15, 42);
+      doc.setFont("helvetica", "bold");
+      doc.text("Billed To:", 130, 35);
+      doc.setFont("helvetica", "normal");
+      doc.text(compName, 130, 42);
+
+      const tableBody = [
+        [ 1, order.itemName || order.Item_Name, `${stockInfo.item?.size || stockInfo.item?.Size_mm || '-'} (${stockInfo.item?.ply || stockInfo.item?.Ply || '-'} Ply)`, dispatchQty, `${(dispatchQty * stockInfo.avgWeightKg).toFixed(2)} kg` ]
+      ];
+
+      autoTable(doc, {
+        startY: 55,
+        head: [['Sr No.', 'Item Description', 'Specifications', 'Quantity', 'Total Weight']],
+        body: tableBody,
+        theme: 'grid',
+        headStyles: { fillColor: [41, 37, 36], textColor: 255, fontStyle: 'bold' },
+        styles: { fontSize: 10, cellPadding: 5 }
+      });
+
+      const finalY = doc.lastAutoTable.finalY + 30;
+      doc.text("Receiver's Signature", 15, finalY);
+      doc.text("Authorized Signatory", 140, finalY);
+      doc.save(`${compName}_Challan_${dateStr.replace(/\//g, '-')}.pdf`);
+    } catch (err) {
+      console.error("PDF Generation Error:", err);
+      alert("Failed to generate PDF. Check browser console.");
+    }
+  };
+
   const handleLegacyStockImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -2857,7 +2965,6 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
         };
 
         const headers = parseRow(rows[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-        
         const idxClient = headers.findIndex(h => h.includes('client') || h.includes('company'));
         const idxItem = headers.findIndex(h => h.includes('item') || h.includes('product'));
         const idxStock = headers.findIndex(h => h.includes('stock') || h.includes('qty'));
@@ -2888,10 +2995,7 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
             continue;
           }
 
-          const item = items.find(itm => 
-            (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && 
-            itm.companyId === comp.id
-          );
+          const item = items.find(itm => (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && itm.companyId === comp.id);
           if (!item) {
             errors.push(`Row ${i+1}: Item "${itemName}" not found under client "${clientName}".`);
             continue;
@@ -2902,37 +3006,20 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
           if (isNaN(rate)) rate = 0;
 
           await addDoc(getColRef('orders'), {
-            orderDate: new Date().toISOString().split('T')[0],
-            companyId: comp.id || '',
-            itemId: item.id || '',
-            itemName: item.name || item.Item_Name || 'Unknown Item',
-            orderQty: stockQty || 0,
-            openingFgQty: stockQty || 0, 
-            status: 'Completed',
-            plannedUps: '1',
-            deliveryDate: new Date().toISOString().split('T')[0],
-            rate: rate || 0,
-            dispatchedQty: 0
+            orderDate: new Date().toISOString().split('T')[0], companyId: comp.id || '', itemId: item.id || '', itemName: item.name || item.Item_Name || 'Unknown Item', orderQty: stockQty || 0, openingFgQty: stockQty || 0, status: 'Completed', plannedUps: '1', deliveryDate: new Date().toISOString().split('T')[0], rate: rate || 0, dispatchedQty: 0
           });
           successCount++;
         }
 
         addLog(`Imported ${successCount} legacy stock items.`);
-        
-        if (errors.length > 0) {
-           alert(`Imported ${successCount} items successfully, but skipped ${errors.length} rows due to spelling mismatches:\n\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...and more.' : ''}`);
-        } else if (successCount > 0) {
-           alert(`Successfully matched and imported all ${successCount} items!`);
-        } else {
-           alert(`0 items imported. Check your spelling or ensure the Current_Stock column has numbers.`);
-        }
+        if (errors.length > 0) alert(`Imported ${successCount} items successfully, but skipped ${errors.length} rows due to spelling mismatches:\n\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...and more.' : ''}`);
+        else if (successCount > 0) alert(`Successfully matched and imported all ${successCount} items!`);
+        else alert(`0 items imported. Check your spelling or ensure the Current_Stock column has numbers.`);
 
       } catch (err) {
         console.error("Parse Error Details:", err);
         alert(`Failed to save to database. Error details logged to browser console.`);
-      } finally {
-        e.target.value = null; 
-      }
+      } finally { e.target.value = null; }
     };
     reader.readAsText(file);
   };
@@ -2956,39 +3043,25 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
       try {
         const text = event.target.result;
         const rawRows = text.split(/\r?\n/);
-
         const parseCSVLine = (line) => {
-          const result = [];
-          let currentVal = '';
-          let inQuotes = false;
+          const result = []; let currentVal = ''; let inQuotes = false;
           for (let i = 0; i < line.length; i++) {
             const char = line[i];
-            if (char === '"' && line[i+1] === '"') { currentVal += '"'; i++; } 
-            else if (char === '"') { inQuotes = !inQuotes; } 
-            else if (char === ',' && !inQuotes) { result.push(currentVal.trim()); currentVal = ''; } 
-            else { currentVal += char; }
+            if (char === '"' && line[i+1] === '"') { currentVal += '"'; i++; } else if (char === '"') { inQuotes = !inQuotes; } else if (char === ',' && !inQuotes) { result.push(currentVal.trim()); currentVal = ''; } else { currentVal += char; }
           }
-          result.push(currentVal.trim());
-          return result;
+          result.push(currentVal.trim()); return result;
         };
 
-        let headers = [];
-        let headerRowIndex = -1;
-
+        let headers = []; let headerRowIndex = -1;
         for (let i = 0; i < rawRows.length; i++) {
           if (!rawRows[i].trim()) continue;
           const cols = parseCSVLine(rawRows[i]);
-          if (cols.some(c => c.trim() !== '')) {
-            headers = cols.map(h => h.trim().toLowerCase());
-            headerRowIndex = i;
-            break;
-          }
+          if (cols.some(c => c.trim() !== '')) { headers = cols.map(h => h.trim().toLowerCase()); headerRowIndex = i; break; }
         }
 
         if (headerRowIndex === -1) return alert("Invalid CSV structure.");
 
         let updateCount = 0;
-
         for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
           if (!rawRows[i].trim()) continue;
           const values = parseCSVLine(rawRows[i]);
@@ -3000,39 +3073,22 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
           const orderId = rowObj['order_id'];
           const dispatchQtyRaw = String(rowObj['dispatch_qty_to_add'] || rowObj['dispatch qty to add'] || '').replace(/,/g, '');
           const dispatchQty = parseInt(dispatchQtyRaw);
-          
           let dispatchDate = rowObj['dispatch_date'] || rowObj['dispatch date'];
-          if (!dispatchDate || dispatchDate.trim() === '') {
-            dispatchDate = new Date().toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-          }
+          if (!dispatchDate || dispatchDate.trim() === '') dispatchDate = new Date().toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
           if (orderId && !isNaN(dispatchQty) && dispatchQty > 0) {
             const order = orders.find(o => o.id === orderId);
             if (order) {
               const currentDispatched = parseInt(order.dispatchedQty || 0);
-              const newHistory = [...(order.dispatchHistory || []), {
-                date: dispatchDate,
-                qty: dispatchQty
-              }];
-              
-              await updateDoc(getDocRef('orders', order.id), {
-                dispatchedQty: currentDispatched + dispatchQty,
-                dispatchHistory: newHistory
-              });
+              const newHistory = [...(order.dispatchHistory || []), { date: dispatchDate, qty: dispatchQty }];
+              await updateDoc(getDocRef('orders', order.id), { dispatchedQty: currentDispatched + dispatchQty, dispatchHistory: newHistory });
               updateCount++;
             }
           }
         }
-
         addLog(`Bulk dispatched ${updateCount} orders via CSV`);
         alert(`Successfully recorded ${updateCount} dispatches!`);
-
-      } catch (err) {
-         console.error(err);
-         alert("Error processing CSV.");
-      } finally {
-         e.target.value = null;
-      }
+      } catch (err) { console.error(err); alert("Error processing CSV."); } finally { e.target.value = null; }
     };
     reader.readAsText(file);
   };
@@ -3098,12 +3154,32 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
                     <p className="font-bold text-lg text-orange-600">{stock.dispatchedQty}</p>
                     <p className="text-xs font-bold text-stone-800">₹{stock.dispatchedValue.toFixed(2)}</p>
                     <p className="text-xs font-medium text-orange-600 mb-1">{stock.dispatchedWeight.toFixed(1)} kg</p>
+                    
                     {order.dispatchHistory && order.dispatchHistory.length > 0 && (
                       <div className="mt-2 pt-2 border-t border-orange-200">
                         <p className="text-[10px] font-bold text-orange-800 mb-1">Dispatch History:</p>
-                        <ul className="text-[10px] space-y-0.5 text-orange-700">
+                        <ul className="text-[10px] space-y-1 text-orange-800">
                           {order.dispatchHistory.map((h, i) => (
-                            <li key={i}>{h.date}: <span className="font-bold">{h.qty}</span></li>
+                            editHistory.orderId === order.id && editHistory.idx === i ? (
+                                <form key={i} onSubmit={(e) => handleUpdateHistory(e, order, i)} className="flex items-center gap-1">
+                                  <input type="number" min="1" className="w-14 p-0.5 border border-orange-400 rounded text-[10px]" value={editHistory.qty} onChange={e => setEditHistory({...editHistory, qty: e.target.value})} autoFocus />
+                                  <button type="submit" className="bg-green-600 text-white px-2 py-0.5 rounded text-[9px] hover:bg-green-700">Save</button>
+                                  <button type="button" onClick={() => setEditHistory({orderId: null, idx: -1, qty: ''})} className="bg-stone-300 px-2 py-0.5 rounded text-[9px] hover:bg-stone-400">Cancel</button>
+                                </form>
+                            ) : (
+                                <li key={i} className="flex justify-between items-center group relative cursor-pointer hover:bg-orange-100 p-0.5 rounded -mx-0.5 px-0.5 transition-colors">
+                                  <span>{h.date}: <span className="font-bold text-orange-900">{h.qty}</span></span>
+                                  <div className="hidden group-hover:flex items-center gap-1 ml-2">
+                                    {currentUser?.role === 'admin' && (
+                                      <>
+                                        <button onClick={() => setEditHistory({orderId: order.id, idx: i, qty: h.qty})} className="text-blue-600 hover:text-blue-800" title="Edit Dispatch"><Edit2 className="w-3 h-3"/></button>
+                                        <button onClick={() => handleDeleteHistory(order, i)} className="text-red-500 hover:text-red-700 mx-1" title="Delete Dispatch"><Trash2 className="w-3 h-3"/></button>
+                                      </>
+                                    )}
+                                    <button onClick={() => generatePDFChallan(order, h.qty, stock)} className="text-[9px] bg-stone-800 text-white px-1.5 py-0.5 rounded shadow-sm hover:bg-stone-700">PDF</button>
+                                  </div>
+                                </li>
+                            )
                           ))}
                         </ul>
                       </div>
@@ -3115,24 +3191,30 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
                     <p className="text-xs font-medium text-green-600">{stock.stockWeight.toFixed(1)} kg</p>
                   </td>
                   <td className="p-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {stock.inStock > 0 ? (
-                        <form onSubmit={(e) => handleDispatch(e, order, stock.inStock)} className="flex items-center gap-2">
-                          <input required type="number" min="1" max={stock.inStock} name="dispatchQty" className={`w-20 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
-                          <button type="submit" className="bg-stone-900 text-white px-3 py-2 rounded text-xs font-bold hover:bg-stone-800">
-                            Dispatch
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="flex items-center justify-end gap-2">
+                        {stock.inStock > 0 ? (
+                          <form onSubmit={(e) => handleDispatch(e, order, stock.inStock)} className="flex items-center gap-2">
+                            <input required type="number" min="1" max={stock.inStock} name="dispatchQty" className={`w-20 p-2 border border-stone-300 rounded text-sm bg-white focus:ring-2 focus:ring-stone-800 focus:outline-none ${dispatchForm.orderId === order.id ? 'ring-2 ring-blue-500' : ''}`} placeholder="Qty..." value={dispatchForm.orderId === order.id ? dispatchForm.qty : undefined} onChange={dispatchForm.orderId === order.id ? (e) => setDispatchForm({...dispatchForm, qty: e.target.value}) : undefined} />
+                            <button type="submit" className="bg-stone-900 text-white px-3 py-2 rounded text-xs font-bold hover:bg-stone-800 flex items-center gap-1">
+                              <Download className="w-3 h-3" /> Dispatch
+                            </button>
+                            {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
+                          </form>
+                        ) : (
+                          <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
+                        )}
+                        
+                        {currentUser?.role === 'admin' && (
+                          <button onClick={() => handleDeleteRecord(order.id, order.itemName || order.Item_Name)} className="ml-2 text-red-500 hover:bg-red-50 p-2 rounded transition-colors" title="Delete Entire Record">
+                            <Trash2 className="w-4 h-4" />
                           </button>
-                          {dispatchForm.orderId === order.id && <button type="button" onClick={() => setDispatchForm({orderId: null, qty: ''})} className="bg-stone-200 px-2 py-1.5 rounded text-xs">Cancel</button>}
-                        </form>
-                      ) : (
-                        <span className="text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1.5 rounded">No Stock</span>
-                      )}
+                        )}
+                      </div>
                       
-                      {currentUser?.role === 'admin' && (
-                        <button onClick={() => handleDeleteRecord(order.id, order.itemName || order.Item_Name)} className="ml-2 text-red-500 hover:bg-red-50 p-2 rounded transition-colors" title="Delete Entire Record">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button onClick={() => generatePDFChallan(order, stock.dispatchedQty || 0, stock)} className="text-[10px] font-bold text-stone-600 bg-stone-200 hover:bg-stone-300 px-3 py-1.5 rounded flex items-center gap-1 transition-colors mt-1">
+                         Generate Total PDF
+                      </button>
                     </div>
                   </td>
                 </tr>
