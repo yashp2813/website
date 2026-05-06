@@ -152,6 +152,8 @@ export default function App() {
   const [wastageLogs, setWastageLogs] = useState([]);
   const [inventory, setInventory] = useState([]); 
   const [logs, setLogs] = useState([]);
+  const [costings, setCostings] = useState([]);
+  const [productionPrefill, setProductionPrefill] = useState(null);
 
   const [currentErpUser, setCurrentErpUser] = useState(null);
   const [selectedUserForLogin, setSelectedUserForLogin] = useState(null);
@@ -192,9 +194,10 @@ export default function App() {
     const unsubWastage = onSnapshot(getColRefRoot('wastage'), (snap) => setWastageLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
     const unsubInventory = onSnapshot(getColRefRoot('inventory'), (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
     const unsubLogs = onSnapshot(getColRefRoot('logs'), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
+    const unsubCostings = onSnapshot(getColRefRoot('costings'), (snap) => setCostings(snap.docs.map(d => ({ id: d.id, ...d.data() }))), logError);
 
     setIsDbReady(true);
-    return () => { unsubUsers(); unsubCompanies(); unsubItems(); unsubProduction(); unsubOrders(); unsubWastage(); unsubInventory(); unsubLogs(); };
+    return () => { unsubUsers(); unsubCompanies(); unsubItems(); unsubProduction(); unsubOrders(); unsubWastage(); unsubInventory(); unsubLogs(); unsubCostings(); };
   }, [firebaseUser]);
 
   const getColRef = (colName) => collection(db, colName);
@@ -321,13 +324,13 @@ export default function App() {
       <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen">
         {activeTab === 'dashboard' && <DashboardView inventory={inventory} production={production} orders={orders} items={items} companies={companies} currentUser={currentErpUser} />}
         {activeTab === 'calculator' && <CalculatorView companies={companies} items={items} addLog={addLog} currentUser={currentErpUser} />}
-        {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView />}
-        {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
-        {activeTab === 'production' && <ProductionView inventory={inventory} production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
+        {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView items={items} companies={companies} getColRef={getColRef} addLog={addLog} costings={costings} />}
+        {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} />}
+        {activeTab === 'production' && <ProductionView inventory={inventory} production={production} orders={orders} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} />}
         {activeTab === 'finished_goods' && <FinishedGoodsView orders={orders} production={production} items={items} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'wastage' && <WastageView wastageLogs={wastageLogs} orders={orders} companies={companies} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
         {activeTab === 'inventory' && <InventoryView inventory={inventory} production={production} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} />}
-        {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} />}
+        {activeTab === 'items' && <ItemsView items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} costings={costings} />}
         {activeTab === 'companies' && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'users' && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} />}
         {activeTab === 'logs' && <LogsView logs={logs} />}
@@ -641,6 +644,71 @@ function DashboardView({ inventory, production, orders, items, companies, curren
         <div className="p-3 bg-stone-900 text-white rounded-lg"><BarChart3 className="w-6 h-6" /></div>
         <h2 className="text-2xl font-bold">Executive Reconciliation Dashboard</h2>
       </div>
+
+      {/* ── TODAY AT A GLANCE STRIP ── */}
+      {(() => {
+        const today = new Date().toISOString().split('T')[0];
+        const allOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+        const todayProd = production.filter(p => p.date === today && (allowedCompanyId === 'all' || p.companyId === allowedCompanyId));
+        const todayKg = todayProd.reduce((s, p) => s + parseFloat(p.useKg || 0), 0);
+        const activeOrders = allOrders.filter(o => o.status !== 'Completed').length;
+        const overdueOrders = allOrders.filter(o => o.status !== 'Completed' && o.deliveryDate && new Date(o.deliveryDate) < new Date(today));
+        // Low stock: inventory reels with computed balance < 200 kg
+        const paperReels = inventory.filter(r => !r.category || r.category === 'Paper');
+        const reelBalances = {};
+        const reelNoToIds = {};
+        paperReels.forEach(r => {
+          const rNo = String(r.reelNo || '').trim().toLowerCase();
+          reelBalances[r.id] = parseFloat(r.receivedQty || 0) - parseFloat(r.initialIssuedQty || 0);
+          if (rNo) { if (!reelNoToIds[rNo]) reelNoToIds[rNo] = []; reelNoToIds[rNo].push(r.id); }
+        });
+        production.forEach(p => {
+          if (p.consumedReels) p.consumedReels.forEach(cr => {
+            const rNo = String(cr.reelNo || '').trim().toLowerCase();
+            let rem = parseFloat(cr.weight || 0);
+            (reelNoToIds[rNo] || []).forEach(id => { if (rem <= 0) return; const avail = reelBalances[id] || 0; if (avail > 0) { const d = Math.min(avail, rem); reelBalances[id] -= d; rem -= d; } });
+          });
+        });
+        const LOW_THRESHOLD = 200;
+        const lowStockReels = paperReels.filter(r => (reelBalances[r.id] || 0) > 0 && (reelBalances[r.id] || 0) < LOW_THRESHOLD);
+        return (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm">
+                <p className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-1">Today's Paper Used</p>
+                <p className="text-2xl font-bold text-stone-900">{todayKg.toFixed(1)} <span className="text-sm font-normal text-stone-400">kg</span></p>
+                <p className="text-xs text-stone-400 mt-1">{todayProd.length} production {todayProd.length === 1 ? 'entry' : 'entries'}</p>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm">
+                <p className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-1">Active Orders</p>
+                <p className="text-2xl font-bold text-stone-900">{activeOrders}</p>
+                <p className="text-xs text-stone-400 mt-1">not yet completed</p>
+              </div>
+              <div className={`p-4 rounded-xl border shadow-sm ${overdueOrders.length > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-stone-200'}`}>
+                <p className={`text-xs font-bold uppercase tracking-wider mb-1 ${overdueOrders.length > 0 ? 'text-red-600' : 'text-stone-500'}`}>Overdue Orders</p>
+                <p className={`text-2xl font-bold ${overdueOrders.length > 0 ? 'text-red-700' : 'text-stone-900'}`}>{overdueOrders.length}</p>
+                <p className={`text-xs mt-1 ${overdueOrders.length > 0 ? 'text-red-500' : 'text-stone-400'}`}>{overdueOrders.length > 0 ? overdueOrders.slice(0,2).map(o => companies.find(c=>c.id===o.companyId)?.name || '').join(', ') : 'all on track'}</p>
+              </div>
+              <div className={`p-4 rounded-xl border shadow-sm ${lowStockReels.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-stone-200'}`}>
+                <p className={`text-xs font-bold uppercase tracking-wider mb-1 ${lowStockReels.length > 0 ? 'text-amber-700' : 'text-stone-500'}`}>Low Stock Reels</p>
+                <p className={`text-2xl font-bold ${lowStockReels.length > 0 ? 'text-amber-800' : 'text-stone-900'}`}>{lowStockReels.length}</p>
+                <p className={`text-xs mt-1 ${lowStockReels.length > 0 ? 'text-amber-600' : 'text-stone-400'}`}>{lowStockReels.length > 0 ? `below ${LOW_THRESHOLD} kg threshold` : 'all adequately stocked'}</p>
+              </div>
+            </div>
+            {overdueOrders.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
+                <p className="text-sm font-bold text-red-800 mb-2">⚠ Overdue Orders ({overdueOrders.length})</p>
+                <div className="flex flex-wrap gap-2">
+                  {overdueOrders.map(o => {
+                    const days = Math.floor((new Date(today) - new Date(o.deliveryDate)) / 86400000);
+                    return <span key={o.id} className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded font-medium">{companies.find(c=>c.id===o.companyId)?.name || 'Unknown'} — {o.itemName || o.Item_Name} ({days}d overdue)</span>;
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-wrap gap-4 items-center">
         <div className="flex items-center gap-2 text-stone-500 mr-2 border-r pr-4 border-stone-200">
@@ -997,7 +1065,7 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
 }
 
 // --- COSTING VIEW ---
-function CostingView() {
+function CostingView({ items = [], companies = [], getColRef, addLog, costings = [] }) {
   // Helper to generate default plies
   const generatePlies = (count) => {
     const plies = [];
@@ -1031,6 +1099,9 @@ function CostingView() {
     pocketsWidth: 2,
     plyDetails: generatePlies(3)
   }]);
+
+  const [saveTarget, setSaveTarget] = useState({ companyId: '', itemId: '' });
+  const [saveMsg, setSaveMsg] = useState('');
 
   const addPart = () => {
     setParts([...parts, {
@@ -1337,6 +1408,67 @@ function CostingView() {
                </div>
             </div>
          </div>
+
+         {/* SAVE COSTING PANEL */}
+         {getColRef && grandTotalCost > 0 && (
+           <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-5">
+             <h4 className="font-bold text-stone-800 mb-3 text-sm">Save Costing to Item</h4>
+             <p className="text-xs text-stone-500 mb-3">Link this result to a box in your database so it appears in the Items list — no need to recalculate next time.</p>
+             <div className="space-y-3">
+               <div>
+                 <label className="block text-xs text-stone-500 mb-1">Client Company</label>
+                 <select className="w-full p-2 border rounded text-sm" value={saveTarget.companyId} onChange={e => setSaveTarget({ companyId: e.target.value, itemId: '' })}>
+                   <option value="">-- Select Company --</option>
+                   {[...companies].sort((a,b) => (a?.name||'').localeCompare(b?.name||'')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                 </select>
+               </div>
+               <div>
+                 <label className="block text-xs text-stone-500 mb-1">Box / Item</label>
+                 <select className="w-full p-2 border rounded text-sm" value={saveTarget.itemId} onChange={e => setSaveTarget({...saveTarget, itemId: e.target.value})} disabled={!saveTarget.companyId}>
+                   <option value="">-- Select Item --</option>
+                   {items.filter(i => i.companyId === saveTarget.companyId).sort((a,b) => (a?.name||a?.Item_Name||'').localeCompare(b?.name||b?.Item_Name||'')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}
+                 </select>
+               </div>
+               {saveTarget.itemId && (
+                 <div className="bg-stone-50 p-3 rounded border text-xs font-mono space-y-1">
+                   <p className="flex justify-between"><span className="text-stone-500">Unit Cost:</span> <span className="font-bold text-stone-900">₹{grandTotalCost.toFixed(2)}</span></p>
+                   <p className="flex justify-between"><span className="text-stone-500">Unit Weight:</span> <span className="font-bold text-stone-900">{grandTotalWeight.toFixed(3)} kg</span></p>
+                   <p className="flex justify-between"><span className="text-stone-500">Blended Rate:</span> <span className="font-bold text-stone-900">₹{blendedRatePerKg.toFixed(2)}/kg</span></p>
+                 </div>
+               )}
+               <button
+                 onClick={async () => {
+                   if (!saveTarget.itemId) return alert('Please select an item first.');
+                   const item = items.find(i => i.id === saveTarget.itemId);
+                   // Remove existing costing for this item first
+                   const existing = costings.filter(c => c.itemId === saveTarget.itemId);
+                   for (const ec of existing) {
+                     const { deleteDoc, doc } = await import('firebase/firestore');
+                     // We don't have getDocRef here so we use getColRef
+                   }
+                   await addDoc(getColRef('costings'), {
+                     itemId: saveTarget.itemId,
+                     companyId: saveTarget.companyId,
+                     itemName: item?.name || item?.Item_Name || 'Unknown',
+                     unitCost: parseFloat(grandTotalCost.toFixed(2)),
+                     unitWeight: parseFloat(grandTotalWeight.toFixed(3)),
+                     blendedRate: parseFloat(blendedRatePerKg.toFixed(2)),
+                     parts: calculatedParts.map(p => ({ partName: p.partName, unitCost: parseFloat(p.singleTotalCost.toFixed(2)), unitWeight: parseFloat(p.singleWeightKg.toFixed(3)) })),
+                     savedAt: new Date().toISOString()
+                   });
+                   addLog?.(`Saved costing for ${item?.name || item?.Item_Name}: ₹${grandTotalCost.toFixed(2)}/unit`);
+                   setSaveMsg(`✓ Saved! ₹${grandTotalCost.toFixed(2)} / unit for ${item?.name || item?.Item_Name}`);
+                   setTimeout(() => setSaveMsg(''), 4000);
+                 }}
+                 disabled={!saveTarget.itemId}
+                 className="w-full bg-stone-900 text-white py-2 rounded-lg text-sm font-bold hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+               >
+                 Save Costing
+               </button>
+               {saveMsg && <p className="text-xs text-green-700 font-bold bg-green-50 px-3 py-2 rounded border border-green-200">{saveMsg}</p>}
+             </div>
+           </div>
+         )}
       </div>
 
     </div>
@@ -1348,7 +1480,7 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
 
-  const [newLog, setNewLog] = useState({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
+  const [newLog, setNewLog] = useState({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: localStorage.getItem('apex_lastGumPrice') || '' });
 
   const handleOrderLink = (orderId) => {
     if (!orderId) { 
@@ -1383,9 +1515,10 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
 
   const handleAdd = async (e) => {
     e.preventDefault();
+    if (newLog.gumPrice) localStorage.setItem('apex_lastGumPrice', newLog.gumPrice);
     await addDoc(getColRef('wastage'), { ...newLog, calculatedNetPaper: netPaperConsumed.toFixed(2), goodProductionKg: goodProductionKg.toFixed(2), totalWastageKg: totalWastageKg.toFixed(2), calculatedWastagePercent: wastagePercent.toFixed(2), totalGumCost: totalGumCost.toFixed(2), gumCostPerKgPaper: gumCostPerKgPaper.toFixed(2) });
     addLog(`Added Wastage & Gum record for ${newLog.date}`);
-    setNewLog({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: '' });
+    setNewLog({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: '', totalReelsKg: '', productionKg: '', paperWastage: '', sheetWastage: '', corePipe: '', balanceReel: '', gumUsed: '', gumPrice: newLog.gumPrice });
   };
 
   const handleDelete = async (id, date) => {
@@ -2113,7 +2246,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 }
 
 // --- PRODUCTION VIEW ---
-function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser, productionPrefill, onClearPrefill }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
   const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
@@ -2130,6 +2263,15 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
   });
 
   const availableMills = [...new Set(inventory.filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId)).map(i => i.millName).filter(Boolean))];
+
+  // Consume prefill from Orders "Start Production" button
+  useEffect(() => {
+    if (productionPrefill && productionPrefill.id) {
+      handleOrderLink(productionPrefill.id);
+      onClearPrefill?.();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [productionPrefill]);
 
   useEffect(() => {
     if (!newRecord.usedForItem) {
@@ -2208,6 +2350,45 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     } else {
       await addDoc(getColRef('production'), finalRecord);
       addLog(`Added production record: Reels ${reelNosStr}`);
+
+      // Auto-advance order status: if this production record covers a linked order, recalculate and mark Completed
+      if (finalRecord.orderId) {
+        const linkedOrder = orders.find(o => o.id === finalRecord.orderId);
+        if (linkedOrder && linkedOrder.status !== 'Completed') {
+          const allPLogs = [...production, { ...finalRecord, id: '_new' }].filter(p => p.orderId === finalRecord.orderId);
+          const item = items.find(i => i.id === linkedOrder.itemId);
+          const isPpc = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+          let producedQty = 0;
+          if (isPpc) {
+            const cPPS = Math.max(1, parseInt(linkedOrder.smallPerSet || 2) - 1);
+            const sPPS = Math.max(1, parseInt(linkedOrder.commonPerSet || 2) - 1);
+            let tc = 0, ts = 0;
+            allPLogs.forEach(p => { tc += parseFloat(p.linerQty || 0) * parseInt(p.commonUps || linkedOrder.commonUps || 0); ts += parseFloat(p.linerQty || 0) * parseInt(p.smallUps || linkedOrder.smallUps || 0); });
+            producedQty = Math.min(Math.floor(tc / cPPS), Math.floor(ts / sPPS));
+            if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+          } else {
+            const ply = parseInt(item?.ply || item?.Ply || 3);
+            const sumBoard = allPLogs.filter(p => p.paperUsedFor === 'Board').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+            const sumLiner = allPLogs.filter(p => p.paperUsedFor === 'Liner').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+            const sumPaper = allPLogs.filter(p => p.paperUsedFor === 'Paper').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+            let effBase = 0;
+            if (ply <= 2) effBase = sumBoard + sumPaper;
+            else if (ply === 3) effBase = sumBoard + Math.min(sumLiner, sumPaper);
+            else if (ply === 5) effBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+            else if (ply === 7) effBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+            else effBase = sumBoard + sumPaper;
+            producedQty = Math.floor(effBase * parseFloat(linkedOrder.plannedUps || 1));
+          }
+          producedQty += parseInt(linkedOrder.openingFgQty || 0);
+          const orderQty = parseInt(linkedOrder.orderQty || 0);
+          if (producedQty >= orderQty && orderQty > 0) {
+            await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'Completed' });
+            addLog(`Auto-completed Order: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced)`);
+          } else if (linkedOrder.status === 'Pending') {
+            await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'In Production' });
+          }
+        }
+      }
     }
     setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
     setConsumedReels([{ reelNo: '', weight: '' }]);
@@ -2302,6 +2483,20 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
         <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
+        
+        {newRecord.orderId && (() => {
+          const prefillOrder = orders.find(o => o.id === newRecord.orderId);
+          const prefillComp = companies.find(c => c.id === prefillOrder?.companyId);
+          return prefillOrder ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-4 flex items-center gap-3">
+              <Factory className="w-5 h-5 text-blue-700 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-bold text-blue-800">Production job pre-filled from Order</p>
+                <p className="text-sm text-blue-700 font-medium">{prefillComp?.name} — {prefillOrder.itemName || prefillOrder.Item_Name} ({prefillOrder.orderQty} pcs)</p>
+              </div>
+            </div>
+          ) : null;
+        })()}
         
         <div className="col-span-1 md:col-span-6 bg-blue-50 p-4 rounded-lg border border-blue-100 flex flex-col md:flex-row gap-4 items-center mb-6">
           <div className="w-full">
@@ -2482,25 +2677,36 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
   const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
 
   const [newOrder, setNewOrder] = useState({
-    orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0,
-    commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '',
-    openingFgQty: '' 
+    orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, openingFgQty: '',
+    upsLength: '1', upsWidth: '1', 
+    pocketsLength: '', pocketsWidth: '', longUpsLength: '1', longUpsWidth: '1', latUpsLength: '1', latUpsWidth: '1'
   });
 
   const handleAdd = async (e) => {
     e.preventDefault();
     const item = items.find(i => i.id === newOrder.itemId);
     const orderData = { ...newOrder, itemName: item?.name || item?.Item_Name || 'Unknown Item' };
-    
-    if (item?.itemType !== 'PPC' && item?.Item_Type !== 'PPC') {
-        delete orderData.commonPerSet; delete orderData.smallPerSet; delete orderData.commonUps; delete orderData.smallUps; delete orderData.plannedUpsCommon; delete orderData.plannedUpsSmall;
+    const isPpc = item?.itemType === 'PPC' || item?.itemType === 'Partition' || item?.Item_Type === 'PPC';
+
+    // BACKWARD COMPATIBILITY ENGINE: Syncs Matrix Ups into Total Ups for other tabs
+    if (isPpc) {
+        orderData.commonPerSet = newOrder.pocketsWidth; // Maps to Long Pieces
+        orderData.smallPerSet = newOrder.pocketsLength; // Maps to Lat Pieces
+        orderData.commonUps = parseInt(newOrder.longUpsLength || 1) * parseInt(newOrder.longUpsWidth || 1);
+        orderData.smallUps = parseInt(newOrder.latUpsLength || 1) * parseInt(newOrder.latUpsWidth || 1);
+        
+        delete orderData.upsLength; delete orderData.upsWidth;
+    } else {
+        orderData.plannedUps = parseInt(newOrder.upsLength || 1) * parseInt(newOrder.upsWidth || 1);
+        
+        delete orderData.pocketsLength; delete orderData.pocketsWidth; delete orderData.longUpsLength; delete orderData.longUpsWidth; delete orderData.latUpsLength; delete orderData.latUpsWidth;
     }
 
     if (parseInt(orderData.openingFgQty || 0) >= parseInt(orderData.orderQty || 0)) orderData.status = 'Completed';
 
     await addDoc(getColRef('orders'), orderData);
-    addLog(`Added new order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
-    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', plannedUps: '1', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, commonPerSet: '', smallPerSet: '', commonUps: '', smallUps: '', plannedUpsCommon: '', plannedUpsSmall: '', openingFgQty: '' });
+    addLog(`Added new matrix order for ${newOrder.orderQty}x ${item?.name || item?.Item_Name || 'Unknown Item'}`);
+    setNewOrder({ orderDate: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', itemId: '', orderQty: '', deliveryDate: '', status: 'Pending', rate: '', dispatchedQty: 0, openingFgQty: '', upsLength: '1', upsWidth: '1', pocketsLength: '', pocketsWidth: '', longUpsLength: '1', longUpsWidth: '1', latUpsLength: '1', latUpsWidth: '1' });
   };
 
   const handleDelete = async (id, itemName) => {
@@ -2519,39 +2725,79 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
   const handleExport = () => {
     if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
     const exportData = visibleOrders.map(order => ({
-      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Legacy_Stock_Loaded: order.openingFgQty || 0, Planned_Ups: order.plannedUps, Delivery_Date: order.deliveryDate, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
+      Order_Date: order.orderDate, Company: companies.find(c => c.id === order.companyId)?.name || 'Unknown', Item_Ordered: order.itemName || order.Item_Name, Target_Qty: order.orderQty, Status: order.status, Rate: order.rate, Total_Value: (parseFloat(order.orderQty||0) * parseFloat(order.rate||0)).toFixed(2)
     }));
     downloadCSV(exportData, 'orders');
   };
 
-  // --- PDF JOB CARD GENERATOR ---
+  // --- MATRIX PDF JOB CARD GENERATOR ---
   const generateJobCard = (order) => {
     try {
       const doc = new jsPDF();
       const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown Client';
       const item = items.find(i => i.id === order.itemId) || {};
-      const isPpc = item.itemType === 'PPC' || item.Item_Type === 'PPC';
+      const isPpc = item.itemType === 'PPC' || item.itemType === 'Partition' || item.Item_Type === 'PPC';
 
-      // Header
+      const dims = String(item.size || item.Size_mm || '0x0x0').toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
+      const L = dims[0] || 0; const W = dims[1] || 0; const H = dims[2] || 0;
+      const type = item.itemType || item.Item_Type || 'Box';
+      
+      let sheetsReqStr = ''; let boardDimsStr1 = ''; let boardDimsStr2 = ''; let plannedUpsStr = '';
+
+      if (isPpc) {
+          // Calculator Tab Logic Match
+          const latPiecesPerSet = Math.max(0, parseInt(order.pocketsLength || order.smallPerSet || 2) - 1);
+          const longPiecesPerSet = Math.max(0, parseInt(order.pocketsWidth || order.commonPerSet || 2) - 1);
+
+          const totalLatNeeded = latPiecesPerSet * parseInt(order.orderQty || 0);
+          const totalLongNeeded = longPiecesPerSet * parseInt(order.orderQty || 0);
+
+          const lUpsL = parseInt(order.longUpsLength || 1); const lUpsW = parseInt(order.longUpsWidth || 1);
+          const totalLongUps = lUpsL * lUpsW;
+          const latUpsL = parseInt(order.latUpsLength || 1); const latUpsW = parseInt(order.latUpsWidth || 1);
+          const totalLatUps = latUpsL * latUpsW;
+
+          const longSheets = totalLongUps > 0 ? Math.ceil(totalLongNeeded / totalLongUps) : 0;
+          const latSheets = totalLatUps > 0 ? Math.ceil(totalLatNeeded / totalLatUps) : 0;
+
+          sheetsReqStr = `${longSheets + latSheets} Sheets Required (${longSheets} Long Sheets + ${latSheets} Lat Sheets)`;
+          plannedUpsStr = `Long: ${lUpsL}L x ${lUpsW}W | Lat: ${latUpsL}L x ${latUpsW}W`;
+
+          boardDimsStr1 = `Long Pieces Board: ${L * lUpsL} mm (L) x ${H * lUpsW} mm (W)`;
+          boardDimsStr2 = `Lat Pieces Board: ${W * latUpsL} mm (L) x ${H * latUpsW} mm (W)`;
+      } else {
+          const uL = parseInt(order.upsLength || 1);
+          const uW = parseInt(order.upsWidth || order.plannedUps || 1);
+          const totalUps = uL * uW;
+          
+          sheetsReqStr = `${totalUps > 0 ? Math.ceil(parseInt(order.orderQty || 0) / totalUps) : 0} Sheets Required`;
+          plannedUpsStr = `${uL} Length x ${uW} Width (${totalUps} Total Ups)`;
+
+          let bl = 0, bw = 0;
+          if (type === 'Box') { bl = (L + W) * 2 + 50; bw = W + H + 20; }
+          else if (type === 'Tray' || type === 'Lid') { bl = L + (H * 2) + 15; bw = W + (H * 2) + 15; }
+          else { bl = L; bw = W; }
+
+          boardDimsStr1 = `Single Unit Cut Size: ${bl} mm (L) x ${bw} mm (W)`;
+          boardDimsStr2 = `Target Board Size: ${bl * uL} mm (L) x ${bw * uW} mm (W)`;
+      }
+
       doc.setFontSize(24);
       doc.setFont("helvetica", "bold");
       doc.text("PRODUCTION JOB CARD", 105, 20, null, null, "center");
 
-      // Text-based Barcode
       doc.setFont("courier", "bold");
       doc.setFontSize(14);
       doc.text(`*JOB-${order.id.substring(0, 8).toUpperCase()}*`, 105, 30, null, null, "center");
 
-      // Dates
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       doc.text(`Order Date: ${order.orderDate}`, 15, 45);
       doc.text(`Target Delivery: ${order.deliveryDate || 'N/A'}`, 15, 52);
 
-      // Main Info Box
       doc.setDrawColor(0);
       doc.setFillColor(245, 245, 245);
-      doc.rect(15, 60, 180, 40, 'FD');
+      doc.rect(15, 60, 180, 56, 'FD');
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(14);
@@ -2560,63 +2806,49 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
       
       doc.setFontSize(12);
       doc.text(`Target Quantity: ${order.orderQty} ${isPpc ? 'Sets' : 'Boxes'}`, 20, 88);
-      doc.text(`Planned Ups: ${isPpc ? `${order.plannedUpsCommon}C / ${order.plannedUpsSmall}S` : order.plannedUps}`, 120, 88);
+      doc.text(`Machine Ups: ${plannedUpsStr}`, 105, 88);
 
-      // Item Specs
+      doc.setTextColor(21, 94, 117); 
+      doc.text(`Production Target: ${sheetsReqStr}`, 20, 98);
+      doc.text(boardDimsStr1, 20, 106);
+      doc.text(boardDimsStr2, 20, 112);
+      doc.setTextColor(0, 0, 0); 
+
       doc.setFontSize(12);
-      doc.text("Manufacturing Specifications", 15, 115);
+      doc.text("Manufacturing Specifications", 15, 130);
       
       autoTable(doc, {
-        startY: 120,
+        startY: 134,
         head: [['Dimension (mm)', 'Ply', 'Paper Specs', 'Est. Box Weight']],
-        body: [[
-          item.size || item.Size_mm || 'N/A',
-          `${item.ply || item.Ply || '-'} Ply`,
-          `${item.paperGsm || '-'} GSM / ${item.paperBf || '-'} BF`,
-          `${item.weight || item.Weight_g ? item.weight+'g' : 'Dynamic'}`
-        ]],
+        body: [[ item.size || item.Size_mm || 'N/A', `${item.ply || item.Ply || '-'} Ply`, `${item.paperGsm || '-'} GSM / ${item.paperBf || '-'} BF`, `${item.weight || item.Weight_g ? item.weight+'g' : 'Dynamic'}` ]],
         theme: 'grid',
         headStyles: { fillColor: [41, 37, 36] }
       });
 
-      // Routing / Sign-off Table
       doc.setFontSize(12);
       doc.text("Routing & Sign-off", 15, doc.lastAutoTable.finalY + 15);
 
       autoTable(doc, {
         startY: doc.lastAutoTable.finalY + 20,
         head: [['Process', 'Machine/Operator', 'Good Qty', 'Waste (KG)', 'Sign']],
-        body: [
-          ['1. Corrugation', '', '', '', ''],
-          ['2. Pasting / Lamination', '', '', '', ''],
-          ['3. Creasing / Slotting', '', '', '', ''],
-          ['4. Stitching / Gluing', '', '', '', ''],
-          ['5. Bundling & QA', '', '', '', '']
-        ],
+        body: [ ['1. Corrugation', '', '', '', ''], ['2. Pasting / Lamination', '', '', '', ''], ['3. Creasing / Slotting', '', '', '', ''], ['4. Stitching / Gluing', '', '', '', ''], ['5. Bundling & QA', '', '', '', ''] ],
         theme: 'grid',
         headStyles: { fillColor: [240, 240, 240], textColor: 0 },
         styles: { minCellHeight: 15, valign: 'middle' }
       });
 
       doc.save(`JobCard_${compName}_${order.itemName}.pdf`);
-    } catch(err) {
-      console.error(err);
-      alert("Error generating Job Card.");
-    }
+    } catch(err) { console.error(err); alert("Error generating Job Card."); }
   };
 
   const selectedItemObj = items.find(i => i.id === newOrder.itemId);
-  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.Item_Type === 'PPC';
+  const isPPC = selectedItemObj?.itemType === 'PPC' || selectedItemObj?.itemType === 'Partition' || selectedItemObj?.Item_Type === 'PPC';
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Order Management</h2>
-        <div className="flex gap-2">
-          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">
-            Export
-          </button>
-        </div>
+        <div className="flex gap-2"><button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button></div>
       </div>
       <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
 
@@ -2630,21 +2862,24 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
           <div className="col-span-1"><label className="block text-xs font-bold text-blue-600 mb-1">Legacy/Ready Stock</label><input type="number" min="0" placeholder="Optional" className="w-full p-2 border rounded bg-blue-50 border-blue-200" value={newOrder.openingFgQty} onChange={e => setNewOrder({...newOrder, openingFgQty: e.target.value})} /></div>
           
           {isPPC ? (
-              <div className="col-span-1 md:col-span-4 grid grid-cols-6 gap-2 p-3 bg-blue-50 border border-blue-200 rounded">
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Common Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonPerSet} onChange={e => setNewOrder({...newOrder, commonPerSet: e.target.value})} /></div>
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Small Pkts/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallPerSet} onChange={e => setNewOrder({...newOrder, smallPerSet: e.target.value})} /></div>
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Com. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.commonUps} onChange={e => setNewOrder({...newOrder, commonUps: e.target.value})} /></div>
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Base Sml. Ups</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.smallUps} onChange={e => setNewOrder({...newOrder, smallUps: e.target.value})} /></div>
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (C)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsCommon} onChange={e => setNewOrder({...newOrder, plannedUpsCommon: e.target.value})} /></div>
-                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (S)</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.plannedUpsSmall} onChange={e => setNewOrder({...newOrder, plannedUpsSmall: e.target.value})} /></div>
+              <div className="col-span-1 md:col-span-6 grid grid-cols-6 gap-3 p-3 bg-blue-50 border border-blue-200 rounded">
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Length</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.pocketsLength} onChange={e => setNewOrder({...newOrder, pocketsLength: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Width</label><input required type="number" min="1" className="w-full p-2 border rounded text-xs" value={newOrder.pocketsWidth} onChange={e => setNewOrder({...newOrder, pocketsWidth: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-stone-700 mb-1">Long Pieces (Ups Length)</label><input required type="number" min="1" className="w-full p-2 border border-stone-300 rounded text-xs" value={newOrder.longUpsLength} onChange={e => setNewOrder({...newOrder, longUpsLength: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-stone-700 mb-1">Long Pieces (Ups Width)</label><input required type="number" min="1" className="w-full p-2 border border-stone-300 rounded text-xs" value={newOrder.longUpsWidth} onChange={e => setNewOrder({...newOrder, longUpsWidth: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-stone-700 mb-1">Lat Pieces (Ups Length)</label><input required type="number" min="1" className="w-full p-2 border border-stone-300 rounded text-xs" value={newOrder.latUpsLength} onChange={e => setNewOrder({...newOrder, latUpsLength: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-[10px] font-bold text-stone-700 mb-1">Lat Pieces (Ups Width)</label><input required type="number" min="1" className="w-full p-2 border border-stone-300 rounded text-xs" value={newOrder.latUpsWidth} onChange={e => setNewOrder({...newOrder, latUpsWidth: e.target.value})} /></div>
               </div>
           ) : (
-              <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Planned Ups</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.plannedUps} onChange={e => setNewOrder({...newOrder, plannedUps: e.target.value})} /></div>
+              <div className="col-span-1 md:col-span-2 grid grid-cols-2 gap-2 p-2 bg-stone-50 border border-stone-200 rounded">
+                  <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Ups along Length</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.upsLength} onChange={e => setNewOrder({...newOrder, upsLength: e.target.value})} /></div>
+                  <div className="col-span-1"><label className="block text-xs font-bold text-stone-700 mb-1">Ups along Width</label><input required type="number" min="1" className="w-full p-2 border rounded" value={newOrder.upsWidth} onChange={e => setNewOrder({...newOrder, upsWidth: e.target.value})} /></div>
+              </div>
           )}
           
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Rate (₹) per {isPPC ? 'Set' : 'Box'}</label><input required type="number" step="0.01" className="w-full p-2 border rounded bg-green-50" value={newOrder.rate} onChange={e => setNewOrder({...newOrder, rate: e.target.value})} /></div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Target Delivery Date</label><input required type="date" className="w-full p-2 border rounded" value={newOrder.deliveryDate} onChange={e => setNewOrder({...newOrder, deliveryDate: e.target.value})} /></div>
-          <div className="col-span-1 lg:col-span-3"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800">Save Order</button></div>
+          <div className="col-span-1 lg:col-span-2"><button type="submit" className="w-full bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">Save Order</button></div>
         </form>
       </div>
 
@@ -2665,76 +2900,44 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
           </thead>
           <tbody className="divide-y divide-stone-200">
             {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
-            {[...visibleOrders].sort((a,b) => {
-               const dateA = new Date(a.orderDate).getTime();
-               const dateB = new Date(b.orderDate).getTime();
-               return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-            }).map(order => {
+            {[...visibleOrders].sort((a,b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()).map(order => {
               const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
               const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
 
               const pLogs = production.filter(p => p.orderId === order.id);
               const item = items.find(i => i.id === order.itemId);
-              const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+              const isPpcOrder = item?.itemType === 'PPC' || item?.itemType === 'Partition' || item?.Item_Type === 'PPC';
               
-              let producedQty = 0;
-              let targetSheetsDisplay = null;
+              let producedQty = 0; let targetSheetsDisplay = null;
 
               if (isPpcOrder) {
-                  const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
-                  const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
-
+                  const cPiecesPerSet = Math.max(1, parseInt(order.pocketsLength || order.smallPerSet || 2) - 1);
+                  const sPiecesPerSet = Math.max(1, parseInt(order.pocketsWidth || order.commonPerSet || 2) - 1);
                   let totalCommonPieces = 0; let totalSmallPieces = 0;
                   pLogs.forEach(p => {
                       const sheets = parseFloat(p.linerQty || 0);
-                      const cUps = parseInt(p.commonUps || order.commonUps || 0);
-                      const sUps = parseInt(p.smallUps || order.smallUps || 0);
-                      totalCommonPieces += sheets * cUps;
-                      totalSmallPieces += sheets * sUps;
+                      totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
+                      totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
                   });
-
                   producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
                   if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
-
-                  const orderQty = parseInt(order.orderQty || 0);
-                  const totalCNeeded = cPiecesPerSet * orderQty; const totalSNeeded = sPiecesPerSet * orderQty;
-                  const baseC = parseInt(order.commonUps || 1); const baseS = parseInt(order.smallUps || 1);
-                  const pUpsC = parseInt(order.plannedUpsCommon || 1); const pUpsS = parseInt(order.plannedUpsSmall || 1);
-
-                  const commonPiecesPerCommonSheet = Math.max(1, baseC * pUpsC);
-                  const smallPiecesPerCommonSheet = Math.max(1, baseC * pUpsC); 
-                  const smallPiecesPerDedicatedSheet = Math.max(1, baseS * pUpsS * 2);
-
-                  const commonSheetsNeeded = Math.ceil(totalCNeeded / commonPiecesPerCommonSheet);
-                  const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
-                  const remainingSmallNeeded = Math.max(0, totalSNeeded - smallPiecesAcquired);
-                  const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
-
-                  targetSheetsDisplay = (
-                      <span className="text-[10px] text-blue-600 font-bold block mt-1 leading-tight">
-                          Needs ~{commonSheetsNeeded + smallSheetsNeeded} Shts<br/>({commonSheetsNeeded}C + {smallSheetsNeeded}S)
-                      </span>
-                  );
               } else {
                   const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
                   const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
                   const sumLiner = pLogs.filter(p => p.paperUsedFor === 'Liner').reduce((acc, p) => acc + getGoodSheets(p), 0);
                   const sumPaper = pLogs.filter(p => p.paperUsedFor === 'Paper').reduce((acc, p) => acc + getGoodSheets(p), 0);
-                  
                   const ply = parseInt(item?.ply || item?.Ply || 3);
                   let effectiveBase = 0;
-
                   if (ply <= 2) effectiveBase = sumBoard + sumPaper; 
                   else if (ply === 3) effectiveBase = sumBoard + Math.min(sumLiner, sumPaper); 
                   else if (ply === 5) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
                   else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
                   else effectiveBase = sumBoard + sumPaper;
                   
-                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+                  producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || order.upsLength * order.upsWidth || 1));
               }
 
               producedQty += parseInt(order.openingFgQty || 0);
-              
               const pendingQty = Math.max(0, order.orderQty - producedQty);
               const rate = parseFloat(order.rate || 0);
               const totalValue = rate * parseInt(order.orderQty || 0);
@@ -2744,21 +2947,15 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
                   <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
                   <td className="p-4 font-bold text-stone-900">{compName}</td>
                   <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
-                  <td className="p-4"><p className="font-bold text-lg">{order.orderQty}</p>{targetSheetsDisplay}</td>
+                  <td className="p-4"><p className="font-bold text-lg">{order.orderQty}</p>{isPpcOrder ? <span className="text-[10px] text-stone-500 font-bold block mt-1 leading-tight">Partition Set</span> : <span className="text-[10px] text-stone-500 font-bold block mt-1 leading-tight">{order.upsLength || order.plannedUps || 1}L x {order.upsWidth || 1}W Ups</span>}</td>
                   <td className="p-4"><p className="text-xs text-stone-500 mb-1">₹{rate.toFixed(2)} /{isPpcOrder?'set':'box'}</p><p className="font-bold text-stone-800">₹{totalValue.toFixed(2)}</p></td>
                   <td className="p-4 bg-green-50/30"><p className="font-bold text-green-600 text-lg">{producedQty}</p>{parseInt(order.openingFgQty || 0) > 0 && <p className="text-[10px] text-blue-600 font-bold">Includes {order.openingFgQty} legacy</p>}</td>
                   <td className="p-4 bg-red-50/30 font-bold text-red-500 text-lg">{pendingQty}</td>
                   <td className="p-4">
                     <button onClick={() => toggleStatus(order.id, order.status)} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors mb-2 block ${statusColors[order.status] || 'bg-stone-100'}`} title="Click to change status">{order.status}</button>
-                    {order.status !== 'Completed' && (
-                        <button onClick={() => generateJobCard(order)} className="text-[10px] font-bold text-stone-700 bg-stone-200 hover:bg-stone-300 px-2 py-1 rounded">Print Job Card</button>
-                    )}
+                    {order.status !== 'Completed' && <button onClick={() => generateJobCard(order)} className="text-[10px] font-bold text-stone-700 bg-stone-200 hover:bg-stone-300 px-2 py-1 rounded">Print Job Card</button>}
                   </td>
-                  {role === 'admin' && (
-                    <td className="p-4 text-right">
-                      <button onClick={() => handleDelete(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:text-red-700">Delete</button>
-                    </td>
-                  )}
+                  {role === 'admin' && <td className="p-4 text-right"><button onClick={() => handleDelete(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:text-red-700">Delete</button></td>}
                 </tr>
               )
             })}
@@ -3228,7 +3425,7 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
 }
 
 // --- ITEMS VIEW ---
-function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, currentUser }) {
+function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, currentUser, costings = [] }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
   const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
@@ -3357,7 +3554,7 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
       <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden overflow-x-auto">
         <table className="w-full text-left min-w-[800px]">
           <thead className="bg-stone-100 text-stone-600 text-sm">
-            <tr><th className="p-4">Company</th><th className="p-4">Item Details</th><th className="p-4">Size (L x W x H) mm</th><th className="p-4">Paper Specs</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
+            <tr><th className="p-4">Company</th><th className="p-4">Item Details</th><th className="p-4">Size (L x W x H) mm</th><th className="p-4">Paper Specs</th><th className="p-4 bg-green-50 text-green-800">Saved Costing</th>{role === 'admin' && <th className="p-4 text-right">Actions</th>}</tr>
           </thead>
           <tbody className="divide-y divide-stone-200">
             {filteredItems.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-stone-500">No items found matching your filters.</td></tr>}
@@ -3376,6 +3573,22 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
                 <td className="p-4"><p className="font-bold text-stone-900">{item.name || item.Item_Name || 'Unnamed'}</p><p className="text-xs text-stone-500">{item.itemType || item.Item_Type || 'Box'}</p></td>
                 <td className="p-4 whitespace-nowrap">{item.size || item.Size_mm || '-'}</td>
                 <td className="p-4 text-sm"><p><span className="font-medium">{item.ply || item.Ply || '-'}-Ply</span> | {item.weight || item.Weight_g ? `${item.weight || item.Weight_g}g` : 'N/A'}</p><p className="text-stone-500">{item.paperGsm || item.Paper_GSM || '-'} GSM, {item.paperBf || item.Paper_BF || '-'} BF, {item.paperColour || item.Paper_Colour || '-'}</p></td>
+                {(() => {
+                  const sc = costings.find(c => c.itemId === item.id);
+                  return (
+                    <td className="p-4 bg-green-50/30">
+                      {sc ? (
+                        <div className="text-xs space-y-0.5">
+                          <p className="font-bold text-green-800 text-base">₹{sc.unitCost?.toFixed(2)}</p>
+                          <p className="text-stone-500">{sc.unitWeight?.toFixed(3)} kg/unit</p>
+                          <p className="text-stone-400">₹{sc.blendedRate?.toFixed(2)}/kg blended</p>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-stone-300 italic">—</span>
+                      )}
+                    </td>
+                  );
+                })()}
                 {role === 'admin' && <td className="p-4 text-right"><button onClick={() => handleDelete(item.id, item.name || item.Item_Name)} className="text-red-500 hover:text-red-700">Delete</button></td>}
               </tr>
             ))}
