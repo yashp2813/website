@@ -11,7 +11,7 @@ import autoTable from 'jspdf-autotable';
 // ==========================================
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch, runTransaction } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
 import './index.css'; 
@@ -322,7 +322,7 @@ export default function App() {
       </aside>
 
       <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen">
-        {activeTab === 'dashboard' && <DashboardView inventory={inventory} production={production} orders={orders} items={items} companies={companies} currentUser={currentErpUser} />}
+        {activeTab === 'dashboard' && <DashboardView inventory={inventory} production={production} orders={orders} items={items} companies={companies} wastageLogs={wastageLogs} currentUser={currentErpUser} />}
         {activeTab === 'calculator' && <CalculatorView companies={companies} items={items} addLog={addLog} currentUser={currentErpUser} />}
         {activeTab === 'costing' && currentErpUser.role === 'admin' && <CostingView items={items} companies={companies} getColRef={getColRef} addLog={addLog} costings={costings} />}
         {activeTab === 'orders' && <OrdersView orders={orders} production={production} items={items} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} />}
@@ -349,7 +349,7 @@ function NavButton({ icon, label, isActive, onClick }) {
 }
 
 // --- DASHBOARD VIEW ---
-function DashboardView({ inventory, production, orders, items, companies, currentUser }) {
+function DashboardView({ inventory, production, orders, items, companies, wastageLogs = [], currentUser }) {
   const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
   
   const now = new Date();
@@ -638,6 +638,23 @@ function DashboardView({ inventory, production, orders, items, companies, curren
     return { name: m.name.length > 12 ? m.name.substring(0, 12) + '...' : m.name, Sales: m.fg.sales.val, ClosingValue: totalClosing, ProductionKg: m.rm.outward.kg };
   }).filter(d => d.Sales > 0 || d.ClosingValue > 0 || d.ProductionKg > 0);
 
+  // Wastage trend: last 6 months average wastage %
+  const wastageChartData = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const mo = d.getMonth(); const yr = d.getFullYear();
+    const label = months[mo].substring(0, 3) + ' ' + String(yr).slice(2);
+    const monthLogs = wastageLogs.filter(w => {
+      const wd = new Date(w.date);
+      return wd.getMonth() === mo && wd.getFullYear() === yr &&
+        (allowedCompanyId === 'all' || w.companyId === allowedCompanyId || !w.companyId);
+    });
+    const avg = monthLogs.length > 0
+      ? monthLogs.reduce((s, w) => s + parseFloat(w.calculatedWastagePercent || 0), 0) / monthLogs.length
+      : 0;
+    wastageChartData.push({ month: label, WastagePct: parseFloat(avg.toFixed(2)), entries: monthLogs.length });
+  }
+
   return (
     <div className="max-w-7xl mx-auto pb-12">
       <div className="flex items-center gap-3 mb-6">
@@ -669,7 +686,7 @@ function DashboardView({ inventory, production, orders, items, companies, curren
             (reelNoToIds[rNo] || []).forEach(id => { if (rem <= 0) return; const avail = reelBalances[id] || 0; if (avail > 0) { const d = Math.min(avail, rem); reelBalances[id] -= d; rem -= d; } });
           });
         });
-        const LOW_THRESHOLD = 200;
+        const LOW_THRESHOLD = parseInt(localStorage.getItem('apex_lowStockKg') || '200');
         const lowStockReels = paperReels.filter(r => (reelBalances[r.id] || 0) > 0 && (reelBalances[r.id] || 0) < LOW_THRESHOLD);
         return (
           <>
@@ -769,6 +786,26 @@ function DashboardView({ inventory, production, orders, items, companies, curren
               </BarChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      )}
+
+      {wastageChartData.some(d => d.WastagePct > 0) && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 h-72 mb-10">
+          <h3 className="text-sm font-bold text-stone-800 mb-1">Monthly Avg Wastage % (Last 6 Months)</h3>
+          <p className="text-xs text-stone-400 mb-3">Colour guide: green &lt;5% | amber 5–8% | red &gt;8%</p>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={wastageChartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+              <XAxis dataKey="month" tick={{fontSize: 11}} />
+              <YAxis tickFormatter={(v) => `${v}%`} tick={{fontSize: 11}} domain={[0, 'auto']} />
+              <RechartsTooltip formatter={(v, n, props) => [`${v}% (${props.payload.entries} logs)`, 'Avg Wastage']} />
+              <Bar dataKey="WastagePct" radius={[4, 4, 0, 0]} name="Avg Wastage %"
+                label={{ position: 'top', fontSize: 10, formatter: (v) => v > 0 ? `${v}%` : '' }}
+                fill="#22c55e"
+                isAnimationActive={true}
+              />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       )}
 
@@ -1529,6 +1566,23 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
   };
 
   const visibleWastage = allowedCompanyId === 'all' ? wastageLogs : wastageLogs.filter(w => w.companyId === allowedCompanyId || !w.companyId);
+  const draftWastage = visibleWastage.filter(w => w.isDraft);
+  const completedWastage = visibleWastage.filter(w => !w.isDraft);
+
+  const loadDraftIntoForm = (draft) => {
+    setNewLog({
+      date: draft.date || new Date().toISOString().split('T')[0],
+      orderId: draft.orderId || '',
+      companyId: draft.companyId || '',
+      totalReelsKg: draft.totalReelsKg || '',
+      productionKg: '', paperWastage: '', sheetWastage: '',
+      corePipe: '', balanceReel: '',
+      gumUsed: '', gumPrice: draft.gumPrice || localStorage.getItem('apex_lastGumPrice') || ''
+    });
+    // Delete the draft so it doesn't duplicate
+    deleteDoc(getDocRef('wastage', draft.id));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
@@ -1536,6 +1590,32 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
         <h2 className="text-2xl font-bold">Wastage & Gum Calculator (Order-Wise)</h2>
         <button onClick={() => downloadCSV(visibleWastage, 'wastage_logs')} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition"><Download className="w-4 h-4" /> Export to Excel</button>
       </div>
+
+      {draftWastage.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 mb-6">
+          <p className="text-sm font-bold text-amber-800 mb-3">⚡ {draftWastage.length} Draft Wastage Entr{draftWastage.length === 1 ? 'y' : 'ies'} Awaiting Completion</p>
+          <div className="space-y-2">
+            {draftWastage.map(draft => {
+              const ordName = orders.find(o => o.id === draft.orderId)?.itemName || 'Unknown Order';
+              const compName = companies.find(c => c.id === draft.companyId)?.name || '';
+              return (
+                <div key={draft.id} className="flex items-center justify-between bg-white border border-amber-200 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="font-bold text-stone-900 text-sm">{draft.date} — {compName && `${compName}: `}{ordName}</p>
+                    <p className="text-xs text-amber-700 font-medium">{draft.totalReelsKg} kg issued — needs paper wastage + gum data</p>
+                  </div>
+                  <button
+                    onClick={() => loadDraftIntoForm(draft)}
+                    className="bg-amber-600 text-white text-xs font-bold px-3 py-1.5 rounded hover:bg-amber-700 whitespace-nowrap"
+                  >
+                    Complete Entry
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
         <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-stone-200">
@@ -1628,6 +1708,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   const [activeSubTab, setActiveSubTab] = useState('Paper'); 
   const [isScanning, setIsScanning] = useState(false);
+  const [lowStockThreshold, setLowStockThreshold] = useState(() => parseInt(localStorage.getItem('apex_lowStockKg') || '200'));
+  const handleThresholdChange = (val) => {
+    const n = parseInt(val) || 200;
+    setLowStockThreshold(n);
+    localStorage.setItem('apex_lowStockKg', String(n));
+  };
 
   const [editingId, setEditingId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -1874,8 +1960,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
     if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
     if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
-    if (filters.gsm && String(reel.gsm || '') !== String(filters.gsm)) return false;
-    if (filters.bf && String(reel.bf || '') !== String(filters.bf)) return false;
+    if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) return false;
+    if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) return false;
     if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
     if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
     if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
@@ -1910,6 +1996,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const activeReels = totalReels - emptyReels;
   const totalKgAvailable = filteredInventory.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
   const totalValueAvailable = filteredInventory.reduce((sum, r) => sum + (r.value || 0), 0);
+  const lowStockReels = filteredInventory.filter(r => (r.balanceQty || 0) > 0 && (r.balanceQty || 0) < lowStockThreshold);
 
   const handleAddConsumable = async (e) => {
     e.preventDefault();
@@ -2023,7 +2110,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
       {activeSubTab === 'Paper' ? (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
             <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
               <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">#</div>
               <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Reels (Active / Empty)</p><p className="text-2xl font-bold text-stone-900">{activeReels} <span className="text-stone-300">/</span> <span className="text-stone-400">{emptyReels}</span></p></div>
@@ -2036,7 +2123,32 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <div className="p-3 bg-yellow-50 text-yellow-600 rounded-lg">₹</div>
               <div><p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Available Stock Value</p><p className="text-2xl font-bold text-stone-900">₹{totalValueAvailable.toLocaleString('en-IN', {maximumFractionDigits:0})}</p></div>
             </div>
+            <div className={`p-4 rounded-xl border shadow-sm flex items-center gap-3 ${lowStockReels.length > 0 ? 'bg-amber-50 border-amber-300' : 'bg-white border-stone-200'}`}>
+              <div>
+                <p className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-1">Low Stock Alert</p>
+                <p className={`text-2xl font-bold ${lowStockReels.length > 0 ? 'text-amber-800' : 'text-stone-900'}`}>{lowStockReels.length} reels</p>
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-[10px] text-stone-500">Threshold:</span>
+                  <input type="number" min="1" className="w-16 text-[10px] border rounded px-1 py-0.5 font-bold" value={lowStockThreshold}
+                    onChange={e => handleThresholdChange(e.target.value)} />
+                  <span className="text-[10px] text-stone-500">kg</span>
+                </div>
+              </div>
+            </div>
           </div>
+
+          {lowStockReels.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 mb-4">
+              <p className="text-sm font-bold text-amber-800 mb-2">⚠ Low Stock Reels — below {lowStockThreshold} kg ({lowStockReels.length} reels)</p>
+              <div className="flex flex-wrap gap-2">
+                {lowStockReels.map(r => (
+                  <span key={r.id} className="text-xs bg-amber-100 text-amber-900 border border-amber-300 px-2 py-1 rounded font-medium">
+                    {r.reelNo} — {(r.balanceQty || 0).toFixed(1)} kg ({r.gsm} GSM, {r.bf} BF)
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
             <h3 className="font-bold mb-4 flex items-center gap-2">{editingId ? 'Edit Reel Entry' : 'Receive New Invoice'}</h3>
@@ -2255,7 +2367,9 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   const [editingId, setEditingId] = useState(null);
   const [suggestedKg, setSuggestedKg] = useState(null);
-  const [selectedIds, setSelectedIds] = useState(new Set()); // Bulk delete state
+  const [suggestedSheets, setSuggestedSheets] = useState(null);
+  const [quickEntryMode, setQuickEntryMode] = useState(() => localStorage.getItem('apex_quickEntry') === 'true');
+  const [selectedIds, setSelectedIds] = useState(new Set());
   
   const [consumedReels, setConsumedReels] = useState([{ reelNo: '', weight: '' }]);
   const [newRecord, setNewRecord] = useState({ 
@@ -2326,15 +2440,40 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120);
       const factor = newRecord.paperUsedFor === 'Paper' ? 1.4 : 1.0;
       setSuggestedKg((totalAreaSqM * (gsm / 1000) * factor).toFixed(1));
+      setSuggestedSheets(targetSheets > 0 ? Math.ceil(targetSheets) : null);
     } else {
       setSuggestedKg(null);
+      setSuggestedSheets(null);
     }
   }, [newRecord.usedForItem, newRecord.orderId, newRecord.numberOfUps, newRecord.paperUsedFor, newRecord.linerQty, items, orders]);
 
   const handleOrderLink = (orderId) => {
     if (!orderId) { setNewRecord({...newRecord, orderId: ''}); return; }
     const ord = orders.find(o => o.id === orderId);
-    if (ord) setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
+    if (!ord) return;
+    setNewRecord({ ...newRecord, orderId: orderId, companyId: ord.companyId, usedForItem: ord.itemName || ord.Item_Name, numberOfUps: ord.plannedUps || '1', commonUps: ord.commonUps || '', smallUps: ord.smallUps || '' });
+  };
+
+  // F3: Clone last production entry — copies all header fields, clears reel data
+  const cloneLastEntry = () => {
+    const lastEntry = [...visibleProduction]
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))[0];
+    if (!lastEntry) return;
+    setNewRecord(prev => ({
+      ...prev,
+      date: new Date().toISOString().split('T')[0],
+      orderId: lastEntry.orderId || '',
+      companyId: lastEntry.companyId || prev.companyId,
+      millName: lastEntry.millName || '',
+      paperUsedFor: lastEntry.paperUsedFor || 'Paper',
+      usedForItem: lastEntry.usedForItem || '',
+      numberOfUps: lastEntry.numberOfUps || '1',
+      commonUps: lastEntry.commonUps || '',
+      smallUps: lastEntry.smallUps || '',
+      linerQty: '',
+      wasteSheetsKg: '',
+    }));
+    setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
   const handleAddOrUpdate = async (e) => {
@@ -2351,7 +2490,24 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       await addDoc(getColRef('production'), finalRecord);
       addLog(`Added production record: Reels ${reelNosStr}`);
 
-      // Auto-advance order status: if this production record covers a linked order, recalculate and mark Completed
+      // F6: Auto-create draft wastage entry to eliminate double data entry
+      if (totalKg > 0 && finalRecord.orderId) {
+        await addDoc(getColRef('wastage'), {
+          date: finalRecord.date,
+          orderId: finalRecord.orderId,
+          companyId: finalRecord.companyId,
+          totalReelsKg: totalKg.toFixed(1),
+          productionKg: '', paperWastage: '', sheetWastage: '',
+          corePipe: '', balanceReel: '',
+          gumUsed: '', gumPrice: localStorage.getItem('apex_lastGumPrice') || '',
+          isDraft: true,
+          calculatedNetPaper: '0', goodProductionKg: '0',
+          totalWastageKg: '0', calculatedWastagePercent: '0',
+          totalGumCost: '0', gumCostPerKgPaper: '0'
+        });
+      }
+
+      // Auto-advance order status
       if (finalRecord.orderId) {
         const linkedOrder = orders.find(o => o.id === finalRecord.orderId);
         if (linkedOrder && linkedOrder.status !== 'Completed') {
@@ -2392,6 +2548,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     }
     setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', millName: '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
     setConsumedReels([{ reelNo: '', weight: '' }]);
+    setSuggestedSheets(null);
   };
 
   const handleEdit = (record) => {
@@ -2467,9 +2624,27 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
         <h2 className="text-2xl font-bold">Production Log</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {!editingId && visibleProduction.length > 0 && (
+            <button
+              type="button"
+              onClick={cloneLastEntry}
+              className="flex items-center gap-2 bg-amber-100 text-amber-800 border border-amber-300 px-4 py-2 rounded-lg hover:bg-amber-200 font-bold text-sm transition"
+            >
+              Clone Last Entry
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { const next = !quickEntryMode; setQuickEntryMode(next); localStorage.setItem('apex_quickEntry', next); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm transition border ${
+              quickEntryMode ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-stone-100 text-stone-700 border-stone-300 hover:bg-stone-200'
+            }`}
+          >
+            {quickEntryMode ? 'Quick Mode ON' : 'Quick Mode'}
+          </button>
           {role === 'admin' && selectedIds.size > 0 && (
             <button onClick={handleBulkDelete} className="flex items-center gap-2 bg-red-100 text-red-700 px-4 py-2 rounded-lg hover:bg-red-200 font-bold text-sm transition shadow-sm border border-red-200">
               <Trash2 className="w-4 h-4"/> Delete Selected ({selectedIds.size})
@@ -2515,14 +2690,36 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         <form onSubmit={handleAddOrUpdate} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Date</label><input required type="date" className="w-full p-2 border rounded" value={newRecord.date} onChange={e => setNewRecord({...newRecord, date: e.target.value})} /></div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs text-stone-500 mb-1">Company (For Report)</label><select required className="w-full p-2 border rounded" value={newRecord.companyId} onChange={e => setNewRecord({...newRecord, companyId: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Company --</option>{[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          <div className="col-span-1 md:col-span-3"><label className="block text-xs text-stone-500 mb-1">Mill Name</label><input required list="mill-options" className="w-full p-2 border rounded bg-white" placeholder="Type or select mill..." value={newRecord.millName} onChange={e => setNewRecord({...newRecord, millName: e.target.value})} /><datalist id="mill-options">{availableMills.map((m, i) => <option key={i} value={m} />)}</datalist></div>
+          <div className="col-span-1 md:col-span-3">
+            <label className="block text-xs text-stone-500 mb-1">Mill Name</label>
+            <select
+              className="w-full p-2 border rounded bg-white"
+              value={availableMills.includes(newRecord.millName) ? newRecord.millName : (newRecord.millName ? '__other__' : '')}
+              onChange={e => {
+                if (e.target.value === '__other__') setNewRecord({...newRecord, millName: ''});
+                else setNewRecord({...newRecord, millName: e.target.value});
+              }}
+            >
+              <option value="">-- Select Mill --</option>
+              {availableMills.map((m, i) => <option key={i} value={m}>{m}</option>)}
+              <option value="__other__">Other (type below)</option>
+            </select>
+            <input
+              type="text"
+              required
+              className="w-full p-2 border rounded bg-white mt-1"
+              placeholder={availableMills.includes(newRecord.millName) ? newRecord.millName : 'Type mill name...'}
+              value={availableMills.includes(newRecord.millName) ? '' : newRecord.millName}
+              onChange={e => setNewRecord({...newRecord, millName: e.target.value})}
+              style={{ display: availableMills.includes(newRecord.millName) ? 'none' : 'block' }}
+            />
+          </div>
           <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold text-stone-700 mb-1">Paper Used For</label><select required className="w-full p-2 border border-stone-400 bg-stone-50 rounded font-medium" value={newRecord.paperUsedFor} onChange={e => setNewRecord({...newRecord, paperUsedFor: e.target.value})}><option value="Paper">Paper (1-Ply / Fluting)</option><option value="Liner">Liner (2-Ply / Flat)</option><option value="Board">Board (Combined)</option></select></div>
           <div className="col-span-1 md:col-span-4"><label className="block text-xs text-stone-500 mb-1">Used For Item</label><select required className="w-full p-2 border rounded" value={newRecord.usedForItem} onChange={e => setNewRecord({...newRecord, usedForItem: e.target.value})} disabled={!!newRecord.orderId}><option value="">-- Select Item --</option>{[...visibleItems].filter(i => i.companyId === newRecord.companyId || !newRecord.companyId).sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.name || i.Item_Name}>{i.name || i.Item_Name}</option>)}</select></div>
           
           <div className="col-span-1 md:col-span-6 bg-stone-50 p-4 rounded-lg border border-stone-200 shadow-inner">
             <div className="flex justify-between items-center mb-3">
               <label className="text-xs font-bold text-stone-700 uppercase tracking-wider">Granular Reel Consumption</label>
-              {suggestedKg && <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-1 rounded font-bold shadow-sm">Target: ~{suggestedKg} kg</span>}
             </div>
             {consumedReels.map((reel, idx) => (
               <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end mb-2">
@@ -2535,7 +2732,21 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             <div className="mt-4 pt-3 border-t border-stone-200 flex justify-end items-center gap-4"><span className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Consumed:</span><span className="text-xl font-bold text-orange-600">{consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0).toFixed(1)} KG</span></div>
           </div>
 
-          <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Good Qty (Sheets)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-blue-50" value={newRecord.linerQty} onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} /></div>
+          <div className="col-span-1">
+            <label className="block text-xs text-stone-500 mb-1 flex items-center justify-between">
+              <span>Good Qty (Sheets)</span>
+              {suggestedSheets && !newRecord.linerQty && (
+                <button type="button" onClick={() => setNewRecord({...newRecord, linerQty: String(suggestedSheets)})}
+                  className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-bold hover:bg-blue-700">
+                  Use {suggestedSheets}
+                </button>
+              )}
+            </label>
+            <input type="number" step="0.1" className={`w-full p-2 border rounded ${suggestedSheets && !newRecord.linerQty ? 'border-blue-300 bg-blue-50' : 'bg-blue-50'}`}
+              value={newRecord.linerQty}
+              placeholder={suggestedSheets ? `Target: ${suggestedSheets} sheets` : ''}
+              onChange={e => setNewRecord({...newRecord, linerQty: e.target.value})} />
+          </div>
           <div className="col-span-1"><label className="block text-xs text-stone-500 mb-1">Waste (KG)</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-red-50" value={newRecord.wasteSheetsKg} onChange={e => setNewRecord({...newRecord, wasteSheetsKg: e.target.value})} /></div>
           
           {isPPC ? (
@@ -2681,6 +2892,13 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
     upsLength: '1', upsWidth: '1', 
     pocketsLength: '', pocketsWidth: '', longUpsLength: '1', longUpsWidth: '1', latUpsLength: '1', latUpsWidth: '1'
   });
+
+  const [showOverdueOnly, setShowOverdueOnly] = useState(false);
+  const todayStr = new Date().toISOString().split('T')[0];
+  const daysUntilDelivery = (deliveryDate) => {
+    if (!deliveryDate) return null;
+    return Math.ceil((new Date(deliveryDate) - new Date(todayStr)) / 86400000);
+  };
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -2848,7 +3066,17 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
     <div className="max-w-6xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold">Order Management</h2>
-        <div className="flex gap-2"><button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button></div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowOverdueOnly(v => !v)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm transition border ${
+              showOverdueOnly ? 'bg-red-600 text-white border-red-600' : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+            }`}
+          >
+            {showOverdueOnly ? 'Showing Overdue Only' : 'Show Overdue Only'}
+          </button>
+          <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button>
+        </div>
       </div>
       <p className="text-sm font-bold text-blue-600 mb-6 bg-blue-50 inline-block px-3 py-1 rounded">Database Link: Showing {visibleOrders.length} total records downloaded</p>
 
@@ -2899,10 +3127,25 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-200">
-            {visibleOrders.length === 0 && <tr><td colSpan="10" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
-            {[...visibleOrders].sort((a,b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()).map(order => {
+            {visibleOrders.length === 0 && <tr><td colSpan="11" className="p-4 text-center text-stone-500">No orders found.</td></tr>}
+            {[...visibleOrders]
+              .filter(o => !showOverdueOnly || (o.status !== 'Completed' && o.deliveryDate && new Date(o.deliveryDate) < new Date(todayStr)))
+              .sort((a, b) => {
+                const dA = daysUntilDelivery(a.deliveryDate);
+                const dB = daysUntilDelivery(b.deliveryDate);
+                const isOverdueA = dA !== null && dA < 0 && a.status !== 'Completed';
+                const isOverdueB = dB !== null && dB < 0 && b.status !== 'Completed';
+                if (isOverdueA && !isOverdueB) return -1;
+                if (!isOverdueA && isOverdueB) return 1;
+                if (dA !== null && dB !== null) return dA - dB;
+                return new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime();
+              })
+              .map(order => {
               const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown';
               const statusColors = { 'Pending': 'bg-yellow-100 text-yellow-800 border-yellow-200', 'In Production': 'bg-blue-100 text-blue-800 border-blue-200', 'Completed': 'bg-green-100 text-green-800 border-green-200' };
+              const days = daysUntilDelivery(order.deliveryDate);
+              const isOverdue = days !== null && days < 0 && order.status !== 'Completed';
+              const urgencyClass = isOverdue ? 'text-red-700 bg-red-100 border-red-300' : days !== null && days <= 3 ? 'text-amber-700 bg-amber-100 border-amber-300' : days !== null && days <= 7 ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-green-700 bg-green-50 border-green-200';
 
               const pLogs = production.filter(p => p.orderId === order.id);
               const item = items.find(i => i.id === order.itemId);
@@ -2943,8 +3186,15 @@ function OrdersView({ orders, production, items, companies, addLog, role, getCol
               const totalValue = rate * parseInt(order.orderQty || 0);
 
               return (
-                <tr key={order.id} className="hover:bg-stone-50">
-                  <td className="p-4 whitespace-nowrap">{order.orderDate}</td>
+                <tr key={order.id} className={`hover:bg-stone-50 ${isOverdue ? 'bg-red-50/20' : ''}`}>
+                  <td className="p-4 whitespace-nowrap">
+                    <div className="font-medium">{order.orderDate}</div>
+                    {days !== null && order.status !== 'Completed' && (
+                      <span className={`mt-1 inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${urgencyClass}`}>
+                        {isOverdue ? `${Math.abs(days)}d OVERDUE` : days === 0 ? 'Due TODAY' : `${days}d left`}
+                      </span>
+                    )}
+                  </td>
                   <td className="p-4 font-bold text-stone-900">{compName}</td>
                   <td className="p-4 font-medium text-stone-800">{order.itemName || order.Item_Name}</td>
                   <td className="p-4"><p className="font-bold text-lg">{order.orderQty}</p>{isPpcOrder ? <span className="text-[10px] text-stone-500 font-bold block mt-1 leading-tight">Partition Set</span> : <span className="text-[10px] text-stone-500 font-bold block mt-1 leading-tight">{order.upsLength || order.plannedUps || 1}L x {order.upsWidth || 1}W Ups</span>}</td>
@@ -3094,12 +3344,31 @@ function FinishedGoodsView({ orders, production, items, companies, addLog, getCo
   };
 
   // --- PDF DELIVERY CHALLAN GENERATOR ---
-  const generatePDFChallan = (order, dispatchQty, stockInfo) => {
+  const generatePDFChallan = async (order, dispatchQty, stockInfo, providedChallanNo = null) => {
     try {
+      let challanNo = providedChallanNo;
+      if (!challanNo) {
+        // F7: Sequential challan numbers via Firestore transaction
+        try {
+          const counterRef = doc(db, 'counters', 'challans');
+          const year = new Date().getFullYear();
+          await runTransaction(db, async (tx) => {
+            const snap = await tx.get(counterRef);
+            let nextNum = 1;
+            if (snap.exists() && snap.data().year === year) {
+              nextNum = (snap.data().count || 0) + 1;
+            }
+            tx.set(counterRef, { count: nextNum, year });
+            challanNo = `DC-${String(nextNum).padStart(5, '0')}-${year}`;
+          });
+        } catch {
+        challanNo = `DC-${Math.floor(1000 + Math.random() * 9000)}-${new Date().getFullYear()}`;
+        }
+      }
+
       const doc = new jsPDF();
       const compName = companies.find(c => c.id === order.companyId)?.name || 'Unknown Client';
       const dateStr = new Date().toLocaleDateString();
-      const challanNo = `DC-${Math.floor(1000 + Math.random() * 9000)}-${new Date().getFullYear()}`;
 
       doc.setFontSize(22);
       doc.setFont("helvetica", "bold");
