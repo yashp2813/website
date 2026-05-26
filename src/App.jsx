@@ -3857,6 +3857,64 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
 
   const [dispatchForm, setDispatchForm] = useState({ orderId: null, qty: '' });
   const [editHistory, setEditHistory] = useState({ orderId: null, idx: -1, qty: '' });
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editingOrderId, setEditingOrderId] = useState(null);
+  const [editItemForm, setEditItemForm] = useState({ name: '', size: '', ply: '', weight: '', paperGsm: '', paperBf: '', paperColour: 'Kraft', rate: '' });
+
+  const handleStartEditItem = (item, order) => {
+    setEditingItemId(item?.id || 'new');
+    setEditingOrderId(order.id);
+    setEditItemForm({
+      name: item?.name || item?.Item_Name || order.itemName || order.Item_Name || '',
+      size: item?.size || item?.Size_mm || '',
+      ply: item?.ply || item?.Ply || '',
+      weight: item?.weight || item?.Weight_g || '',
+      paperGsm: item?.paperGsm || item?.Paper_GSM || '',
+      paperBf: item?.paperBf || item?.Paper_BF || '',
+      paperColour: item?.paperColour || item?.Paper_Colour || 'Kraft',
+      rate: String(order.rate || item?.rate || 0)
+    });
+  };
+
+  const handleSaveItemSpecs = async (e, itemId, order) => {
+    e.preventDefault();
+    try {
+      let finalItemId = itemId;
+      const rateVal = parseFloat(editItemForm.rate) || 0;
+      
+      const itemData = {
+        name: editItemForm.name,
+        size: editItemForm.size,
+        ply: editItemForm.ply,
+        weight: editItemForm.weight ? parseFloat(editItemForm.weight) : '',
+        paperGsm: editItemForm.paperGsm ? parseFloat(editItemForm.paperGsm) : '',
+        paperBf: editItemForm.paperBf ? parseFloat(editItemForm.paperBf) : '',
+        paperColour: editItemForm.paperColour,
+        companyId: order.companyId
+      };
+
+      if (!finalItemId || finalItemId === 'new') {
+        const docRef = await addDoc(getColRef('items'), { ...itemData, itemType: 'Box' });
+        finalItemId = docRef.id;
+        addLog(`Created new box spec from Finished Goods: ${editItemForm.name}`);
+      } else {
+        await updateDoc(getDocRef('items', finalItemId), itemData);
+        addLog(`Updated box spec: ${editItemForm.name}`);
+      }
+
+      await updateDoc(getDocRef('orders', order.id), {
+        itemId: finalItemId,
+        itemName: editItemForm.name,
+        rate: rateVal
+      });
+
+      setEditingItemId(null);
+      setEditingOrderId(null);
+    } catch (err) {
+      console.error("Error saving item specs:", err);
+      alert("Failed to save item specifications: " + err.message);
+    }
+  };
 
   // Helper to cleanly calculate stock levels for a specific order
   const getOrderStockDetails = (order) => {
@@ -4201,18 +4259,48 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
             continue;
           }
 
-          const item = items.find(itm => (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && itm.companyId === comp.id);
-          if (!item) {
-            errors.push(`Row ${i+1}: Item "${itemName}" not found under client "${clientName}".`);
-            continue;
-          }
-
           let rate = parseFloat(rateRaw);
-          if (isNaN(rate)) rate = parseFloat(item.rate || 0);
           if (isNaN(rate)) rate = 0;
 
+          let itemId = '';
+          let finalItemName = itemName;
+
+          let item = items.find(itm => (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && itm.companyId === comp.id);
+          if (!item) {
+            const newItemRef = await addDoc(getColRef('items'), {
+              companyId: comp.id,
+              itemType: 'Box',
+              name: itemName,
+              size: '',
+              ply: '3',
+              weight: '',
+              paperGsm: '',
+              paperBf: '',
+              paperColour: 'Kraft',
+              rate: rate
+            });
+            itemId = newItemRef.id;
+            addLog(`Registered new box spec during CSV import: ${itemName}`);
+          } else {
+            itemId = item.id;
+            finalItemName = item.name || item.Item_Name || 'Unknown Item';
+            if (rate === 0) {
+              rate = parseFloat(item.rate || 0) || 0;
+            }
+          }
+
           await addDoc(getColRef('orders'), {
-            orderDate: new Date().toISOString().split('T')[0], companyId: comp.id || '', itemId: item.id || '', itemName: item.name || item.Item_Name || 'Unknown Item', orderQty: stockQty || 0, openingFgQty: stockQty || 0, status: 'Completed', plannedUps: '1', deliveryDate: new Date().toISOString().split('T')[0], rate: rate || 0, dispatchedQty: 0
+            orderDate: new Date().toISOString().split('T')[0],
+            companyId: comp.id || '',
+            itemId: itemId,
+            itemName: finalItemName,
+            orderQty: stockQty || 0,
+            openingFgQty: stockQty || 0,
+            status: 'Completed',
+            plannedUps: '1',
+            deliveryDate: new Date().toISOString().split('T')[0],
+            rate: rate,
+            dispatchedQty: 0
           });
           successCount++;
         }
@@ -4416,10 +4504,81 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                           <p className="text-[10px] text-stone-400">ID: {order.id.substring(0, 8).toUpperCase()}</p>
                         </td>
                         <td className="p-3">
-                          <p className="font-bold text-stone-900">{order.itemName || order.Item_Name}</p>
-                          <p className="text-[10px] text-stone-500">
-                            {stock.item?.size || stock.item?.Size_mm || '-'} | {stock.item?.ply || stock.item?.Ply || '-'} Ply | ₹{stock.rate.toFixed(2)}/{stock.isPpcOrder?'set':'box'}
-                          </p>
+                          {(editingItemId === (stock.item?.id || 'new') && editingOrderId === order.id) ? (
+                            <form onSubmit={(e) => handleSaveItemSpecs(e, stock.item?.id, order)} className="flex flex-col gap-1 p-2 bg-stone-50 rounded border border-stone-200 max-w-[220px]">
+                              <div>
+                                <label className="block text-[8px] font-bold uppercase text-stone-500">Item Name</label>
+                                <input type="text" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.name} onChange={e => setEditItemForm({...editItemForm, name: e.target.value})} required />
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">Size (mm)</label>
+                                  <input type="text" placeholder="e.g. 200x150x100" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.size} onChange={e => setEditItemForm({...editItemForm, size: e.target.value})} />
+                                </div>
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">Ply</label>
+                                  <select className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.ply} onChange={e => setEditItemForm({...editItemForm, ply: e.target.value})}>
+                                    <option value="">-</option>
+                                    <option value="2">2 Ply</option>
+                                    <option value="3">3 Ply</option>
+                                    <option value="5">5 Ply</option>
+                                    <option value="7">7 Ply</option>
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1">
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">Weight (g)</label>
+                                  <input type="number" step="0.1" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.weight} onChange={e => setEditItemForm({...editItemForm, weight: e.target.value})} />
+                                </div>
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">GSM</label>
+                                  <input type="number" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.paperGsm} onChange={e => setEditItemForm({...editItemForm, paperGsm: e.target.value})} />
+                                </div>
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">BF</label>
+                                  <input type="number" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.paperBf} onChange={e => setEditItemForm({...editItemForm, paperBf: e.target.value})} />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">Rate (₹)</label>
+                                  <input type="number" step="0.01" className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.rate} onChange={e => setEditItemForm({...editItemForm, rate: e.target.value})} />
+                                </div>
+                                <div>
+                                  <label className="block text-[8px] font-bold uppercase text-stone-500">Colour</label>
+                                  <select className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.paperColour} onChange={e => setEditItemForm({...editItemForm, paperColour: e.target.value})}>
+                                    <option value="Kraft">Kraft</option>
+                                    <option value="Golden">Golden</option>
+                                    <option value="White">White</option>
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="flex gap-1 mt-1">
+                                <button type="submit" className="flex-1 bg-stone-900 text-white py-1 rounded text-[10px] font-bold hover:bg-stone-800">Save</button>
+                                <button type="button" onClick={() => { setEditingItemId(null); setEditingOrderId(null); }} className="flex-1 bg-stone-200 text-stone-700 py-1 rounded text-[10px] hover:bg-stone-300">Cancel</button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="group relative pr-6">
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-bold text-stone-900">{order.itemName || order.Item_Name}</p>
+                                <button 
+                                  onClick={() => handleStartEditItem(stock.item, order)} 
+                                  className="opacity-0 group-hover:opacity-100 text-stone-400 hover:text-stone-700 transition-opacity p-0.5"
+                                  title="Edit Item Details"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                              <p className="text-[10px] text-stone-500 mt-0.5">
+                                {stock.item?.size || stock.item?.Size_mm || 'No Size'} | {stock.item?.ply || stock.item?.Ply || '-'} Ply | ₹{stock.rate.toFixed(2)}/{stock.isPpcOrder?'set':'box'}
+                              </p>
+                              <p className="text-[9px] text-stone-400 font-medium mt-0.5">
+                                Weight: {stock.item?.weight || stock.item?.Weight_g ? `${stock.item.weight || stock.item.Weight_g}g` : 'No Weight'} | GSM: {stock.item?.paperGsm || stock.item?.Paper_GSM || '-'} | BF: {stock.item?.paperBf || stock.item?.Paper_BF || '-'} | {stock.item?.paperColour || stock.item?.Paper_Colour || 'Kraft'}
+                              </p>
+                            </div>
+                          )}
                         </td>
                         <td className="p-3 bg-blue-50/20">
                           <p className="font-bold text-base text-blue-700">{stock.producedQty}</p>
