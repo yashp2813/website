@@ -1795,11 +1795,12 @@ function CostingView({ items = [], companies = [], getColRef, addLog, costings =
               <div className="overflow-x-auto p-4 bg-white">
                 <table className="w-full text-left">
                   <thead className="text-stone-400 text-xs uppercase tracking-wider">
-                    <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
+                    <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Weight (1 pc)</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
                     {part.plyDetails.map((ply, idx) => {
-                      const plyCost = (part.boardAreaSqM * ply.gsm * ply.factor / 1000) * ply.rate;
+                      const plyWeightKg = (part.boardAreaSqM * ply.gsm * ply.factor) / 1000;
+                      const plyCost = plyWeightKg * ply.rate;
                       return (
                         <tr key={ply.id} className="hover:bg-stone-50">
                           <td className="p-2 text-sm font-medium text-stone-600">{ply.name}</td>
@@ -1807,6 +1808,7 @@ function CostingView({ items = [], companies = [], getColRef, addLog, costings =
                           <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.bf} onChange={e => handlePlyChange(part.id, idx, 'bf', e.target.value)} /></td>
                           <td className="p-1"><input type="number" step="0.1" className="w-16 p-1.5 border rounded text-xs" value={ply.factor} onChange={e => handlePlyChange(part.id, idx, 'factor', e.target.value)} /></td>
                           <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.rate} onChange={e => handlePlyChange(part.id, idx, 'rate', e.target.value)} /></td>
+                          <td className="p-2 text-right text-sm font-mono text-stone-700">{plyWeightKg > 0 ? `${plyWeightKg.toFixed(3)} kg` : '-'}</td>
                           <td className="p-2 text-right text-sm font-mono font-bold text-stone-800">{plyCost > 0 ? `₹${plyCost.toFixed(2)}` : '-'}</td>
                         </tr>
                       )
@@ -3860,6 +3862,54 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingOrderId, setEditingOrderId] = useState(null);
   const [editItemForm, setEditItemForm] = useState({ name: '', size: '', ply: '', weight: '', paperGsm: '', paperBf: '', paperColour: 'Kraft', rate: '' });
+  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+
+  const handleSelectRow = (orderId, checked) => {
+    if (checked) {
+      setSelectedOrderIds(prev => [...prev, orderId]);
+    } else {
+      setSelectedOrderIds(prev => prev.filter(id => id !== orderId));
+    }
+  };
+
+  const handleSelectAllForUnit = (companyId, checked, activeOrders) => {
+    const orderIds = activeOrders.map(ao => ao.order.id);
+    if (checked) {
+      setSelectedOrderIds(prev => {
+        const newSelection = [...prev];
+        orderIds.forEach(id => {
+          if (!newSelection.includes(id)) newSelection.push(id);
+        });
+        return newSelection;
+      });
+    } else {
+      setSelectedOrderIds(prev => prev.filter(id => !orderIds.includes(id)));
+    }
+  };
+
+  const isAllSelectedForUnit = (companyId, activeOrders) => {
+    if (!activeOrders.length) return false;
+    return activeOrders.every(ao => selectedOrderIds.includes(ao.order.id));
+  };
+
+  const handleBulkDelete = async () => {
+    if (currentUser?.role !== 'admin') return;
+    if (!selectedOrderIds.length) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedOrderIds.length} stock records? This will completely remove them from the database.`)) {
+      try {
+        const batch = writeBatch(db);
+        selectedOrderIds.forEach(id => {
+          batch.delete(getDocRef('orders', id));
+        });
+        await batch.commit();
+        addLog(`Bulk deleted ${selectedOrderIds.length} finished goods records`);
+        setSelectedOrderIds([]);
+      } catch (err) {
+        console.error("Bulk delete error:", err);
+        alert("Failed to delete records: " + err.message);
+      }
+    }
+  };
 
   const handleStartEditItem = (item, order) => {
     setEditingItemId(item?.id || 'new');
@@ -4233,9 +4283,10 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
         const idxItem = headers.findIndex(h => h.includes('item') || h.includes('product'));
         const idxStock = headers.findIndex(h => h.includes('stock') || h.includes('qty'));
         const idxRate = headers.findIndex(h => h.includes('rate') || h.includes('price'));
+        const idxSize = headers.findIndex(h => h.includes('size') || h.includes('dimension') || h.includes('measure') || h.includes('spec'));
 
         if (idxClient === -1 || idxItem === -1 || idxStock === -1) {
-          return alert("Error: Could not find required columns. Please ensure your CSV has headers exactly like: Client, Item, Current_Stock, Rate");
+          return alert("Error: Could not find required columns. Please ensure your CSV has headers exactly like: Client, Item, Current_Stock, Rate, Size");
         }
 
         let successCount = 0;
@@ -4249,6 +4300,7 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
           const itemName = (cols[idxItem] || '').trim();
           const stockRaw = String(cols[idxStock] || '').replace(/,/g, ''); 
           const rateRaw = idxRate !== -1 ? String(cols[idxRate] || '').replace(/,/g, '') : '';
+          const sizeRaw = idxSize !== -1 ? (cols[idxSize] || '').trim() : '';
 
           const stockQty = parseInt(stockRaw);
           if (isNaN(stockQty) || stockQty <= 0) continue;
@@ -4265,13 +4317,20 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
           let itemId = '';
           let finalItemName = itemName;
 
-          let item = items.find(itm => (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase() && itm.companyId === comp.id);
+          let item = items.find(itm => {
+            const nameMatch = (itm?.name||itm?.Item_Name||'').toLowerCase().trim() === itemName.toLowerCase();
+            const itmSize = (itm?.size||itm?.Size_mm||'').toLowerCase().replace(/\s/g, '');
+            const csvSize = sizeRaw.toLowerCase().replace(/\s/g, '');
+            const sizeMatch = !csvSize || !itmSize || itmSize === csvSize;
+            return nameMatch && itm.companyId === comp.id && sizeMatch;
+          });
+
           if (!item) {
             const newItemRef = await addDoc(getColRef('items'), {
               companyId: comp.id,
               itemType: 'Box',
               name: itemName,
-              size: '',
+              size: sizeRaw,
               ply: '3',
               weight: '',
               paperGsm: '',
@@ -4280,12 +4339,15 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
               rate: rate
             });
             itemId = newItemRef.id;
-            addLog(`Registered new box spec during CSV import: ${itemName}`);
+            addLog(`Registered new box spec during CSV import: ${itemName} (${sizeRaw || 'No Size'})`);
           } else {
             itemId = item.id;
             finalItemName = item.name || item.Item_Name || 'Unknown Item';
             if (rate === 0) {
               rate = parseFloat(item.rate || 0) || 0;
+            }
+            if (sizeRaw && !(item.size || item.Size_mm)) {
+              await updateDoc(getDocRef('items', item.id), { size: sizeRaw });
             }
           }
 
@@ -4407,6 +4469,11 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
         <div className="flex gap-2">
+          {currentUser?.role === 'admin' && selectedOrderIds.length > 0 && (
+            <button onClick={handleBulkDelete} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm mr-2 cursor-pointer">
+              <Trash2 className="w-4 h-4" /> Bulk Delete ({selectedOrderIds.length})
+            </button>
+          )}
           <label className="flex items-center gap-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg hover:bg-blue-200 font-medium text-sm transition cursor-pointer shadow-sm">
             <Upload className="w-4 h-4" /> Import Legacy Stock (CSV)
             <input type="file" accept=".csv" className="hidden" onChange={handleLegacyStockImport} />
@@ -4488,6 +4555,16 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                 <table className="w-full text-left min-w-[1100px]">
                   <thead className="bg-stone-50 text-stone-600 text-xs border-b border-stone-200">
                     <tr>
+                      {currentUser?.role === 'admin' && (
+                        <th className="p-3 w-10 text-center">
+                          <input 
+                            type="checkbox" 
+                            checked={isAllSelectedForUnit(company.id, activeOrders)} 
+                            onChange={(e) => handleSelectAllForUnit(company.id, e.target.checked, activeOrders)} 
+                            className="w-4 h-4 accent-stone-950 cursor-pointer"
+                          />
+                        </th>
+                      )}
                       <th className="p-3 pl-4">Order Date</th>
                       <th className="p-3">Item Details</th>
                       <th className="p-3 bg-blue-50/20">Produced (Qty & Wt)</th>
@@ -4498,7 +4575,17 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                   </thead>
                   <tbody className="divide-y divide-stone-200 text-xs">
                     {activeOrders.map(({ order, stock }) => (
-                      <tr key={order.id} className={`hover:bg-stone-50/50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/30' : ''}`}>
+                      <tr key={order.id} className={`hover:bg-stone-50/50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/30' : ''} ${selectedOrderIds.includes(order.id) ? 'bg-red-50/20' : ''}`}>
+                        {currentUser?.role === 'admin' && (
+                          <td className="p-3 w-10 text-center align-middle">
+                            <input 
+                              type="checkbox" 
+                              checked={selectedOrderIds.includes(order.id)} 
+                              onChange={(e) => handleSelectRow(order.id, e.target.checked)} 
+                              className="w-4 h-4 accent-stone-950 cursor-pointer"
+                            />
+                          </td>
+                        )}
                         <td className="p-3 pl-4">
                           <p className="font-bold text-stone-800">Ordered: {order.orderDate}</p>
                           <p className="text-[10px] text-stone-400">ID: {order.id.substring(0, 8).toUpperCase()}</p>
