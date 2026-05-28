@@ -4305,8 +4305,13 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
           const weightRaw = idxWeight !== -1 ? (cols[idxWeight] || '').trim() : '';
           let weightVal = '';
           if (weightRaw) {
-            const parsedW = parseFloat(weightRaw);
-            if (!isNaN(parsedW)) weightVal = parsedW;
+            let parsedW = parseFloat(weightRaw);
+            if (!isNaN(parsedW)) {
+              if (weightRaw.toLowerCase().includes('kg')) {
+                parsedW = parsedW * 1000;
+              }
+              weightVal = parsedW;
+            }
           }
 
           const stockQty = parseInt(stockRaw);
@@ -4869,7 +4874,16 @@ function ItemsView({ items, companies, addLog, role, getColRef, getDocRef, curre
                     name: getVal(row, 'Item Name', 'Item', 'Product', 'Box Name', 'Code', 'Title', 'Description') || 'Unnamed Item',
                     size: getVal(row, 'Size ( L x W x H) mm', 'Size', 'Dimensions', 'L x W x H', 'Size mm', 'Measurements') || '',
                     ply: getVal(row, 'Ply', 'Layers', 'Board Ply', 'No of Plies') || '3',
-                    weight: getVal(row, 'weight', 'Weight g', 'Grams', 'Box Weight') || '',
+                    weight: (() => {
+                      const wRaw = getVal(row, 'weight', 'Weight g', 'Grams', 'Box Weight') || '';
+                      if (!wRaw) return '';
+                      let parsedW = parseFloat(wRaw);
+                      if (isNaN(parsedW)) return '';
+                      if (wRaw.toLowerCase().includes('kg')) {
+                        parsedW = parsedW * 1000;
+                      }
+                      return parsedW;
+                    })(),
                     paperGsm: getVal(row, 'paper gsm', 'GSM', 'Top GSM', 'Board GSM') || '',
                     paperBf: getVal(row, 'Paper bf', 'BF', 'Bursting Factor', 'Strength') || '',
                     paperColour: getVal(row, 'Colour', 'Color', 'Paper Color', 'Shade') || 'Kraft'
