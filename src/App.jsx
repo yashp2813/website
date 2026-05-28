@@ -4284,9 +4284,10 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
         const idxStock = headers.findIndex(h => h.includes('stock') || h.includes('qty'));
         const idxRate = headers.findIndex(h => h.includes('rate') || h.includes('price'));
         const idxSize = headers.findIndex(h => h.includes('size') || h.includes('dimension') || h.includes('measure') || h.includes('spec'));
+        const idxWeight = headers.findIndex(h => h.includes('weight') || h.includes('gram') || h.includes('wt'));
 
         if (idxClient === -1 || idxItem === -1 || idxStock === -1) {
-          return alert("Error: Could not find required columns. Please ensure your CSV has headers exactly like: Client, Item, Current_Stock, Rate, Size");
+          return alert("Error: Could not find required columns. Please ensure your CSV has headers exactly like: Client, Item, Current_Stock, Rate, Size, Weight");
         }
 
         let successCount = 0;
@@ -4301,6 +4302,12 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
           const stockRaw = String(cols[idxStock] || '').replace(/,/g, ''); 
           const rateRaw = idxRate !== -1 ? String(cols[idxRate] || '').replace(/,/g, '') : '';
           const sizeRaw = idxSize !== -1 ? (cols[idxSize] || '').trim() : '';
+          const weightRaw = idxWeight !== -1 ? (cols[idxWeight] || '').trim() : '';
+          let weightVal = '';
+          if (weightRaw) {
+            const parsedW = parseFloat(weightRaw);
+            if (!isNaN(parsedW)) weightVal = parsedW;
+          }
 
           const stockQty = parseInt(stockRaw);
           if (isNaN(stockQty) || stockQty <= 0) continue;
@@ -4332,22 +4339,30 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
               name: itemName,
               size: sizeRaw,
               ply: '3',
-              weight: '',
+              weight: weightVal,
               paperGsm: '',
               paperBf: '',
               paperColour: 'Kraft',
               rate: rate
             });
             itemId = newItemRef.id;
-            addLog(`Registered new box spec during CSV import: ${itemName} (${sizeRaw || 'No Size'})`);
+            addLog(`Registered new box spec during CSV import: ${itemName} (${sizeRaw || 'No Size'}, ${weightVal ? `${weightVal}g` : 'No Weight'})`);
           } else {
             itemId = item.id;
             finalItemName = item.name || item.Item_Name || 'Unknown Item';
             if (rate === 0) {
               rate = parseFloat(item.rate || 0) || 0;
             }
+            const updates = {};
             if (sizeRaw && !(item.size || item.Size_mm)) {
-              await updateDoc(getDocRef('items', item.id), { size: sizeRaw });
+              updates.size = sizeRaw;
+            }
+            if (weightVal && parseFloat(item.weight || item.Weight_g || 0) !== weightVal) {
+              updates.weight = weightVal;
+              addLog(`Updated box spec weight for ${finalItemName} to ${weightVal}g via CSV import`);
+            }
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(getDocRef('items', item.id), updates);
             }
           }
 
