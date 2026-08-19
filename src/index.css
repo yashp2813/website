@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -7,23 +7,24 @@
 /* ─── Design Tokens ──────────────────────────────── */
 :root {
   --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Mono', monospace;
 
   /* Neutral palette */
-  --bg-app:    #f5f4f2;
+  --bg-app:    #f0f2f5;
   --bg-card:   #ffffff;
-  --bg-hover:  #fafaf9;
-  --border:    #e7e5e0;
-  --border-md: #d6d3ce;
+  --bg-hover:  #f8fafc;
+  --border:    #e2e8f0;
+  --border-md: #cbd5e1;
 
   /* Text */
-  --text-primary:   #1a1917;
-  --text-secondary: #6b6560;
-  --text-muted:     #9c9690;
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
 
-  /* Brand — deep charcoal + warm amber accent */
-  --brand:          #1c1917;
-  --brand-hover:    #292524;
-  --accent:         #d97706;
+  /* Brand — deep slate + warm amber accent */
+  --brand:          #0f172a;
+  --brand-hover:    #1e293b;
+  --accent:         #f59e0b;
   --accent-light:   #fef3c7;
   --accent-border:  #fcd34d;
 
@@ -34,12 +35,40 @@
   --danger-bg:     #fff5f5;
   --danger-border: #fecaca;
   --info:  #2563eb;
-  --bg-secondary:  #fafaf9;
+  --bg-secondary:  #f8fafc;
 
   /* Shadows */
   --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / .07), 0 1px 2px -1px rgb(0 0 0 / .05);
   --shadow-md: 0 4px 12px -2px rgb(0 0 0 / .08), 0 2px 4px -1px rgb(0 0 0 / .05);
   --shadow-lg: 0 12px 28px -6px rgb(0 0 0 / .10), 0 4px 8px -3px rgb(0 0 0 / .06);
+
+  /* ── Dashboard dark theme tokens ─── */
+  --dash-bg:       #0f172a;
+  --dash-surface:  #1e293b;
+  --dash-card:     #1e293b;
+  --dash-card-2:   #253347;
+  --dash-border:   rgba(255,255,255,0.07);
+  --dash-border-md:rgba(255,255,255,0.12);
+  --dash-text:     #e2e8f0;
+  --dash-muted:    #64748b;
+  --dash-subtext:  #94a3b8;
+  --dash-accent:   #f59e0b;
+  --dash-green:    #22c55e;
+  --dash-blue:     #3b82f6;
+  --dash-red:      #ef4444;
+  --dash-purple:   #a855f7;
+
+  /* ── Inventory / Excel grid tokens ─── */
+  --grid-border:   #d0d7de;
+  --grid-header:   #f6f8fa;
+  --grid-stripe:   #fafbfc;
+  --grid-hover:    #f3f6f9;
+  --grid-low:      #fef2f2;
+  --grid-low-text: #dc2626;
+  --grid-mid:      #fffbeb;
+  --grid-mid-text: #92400e;
+  --grid-ok:       #f0fdf4;
+  --grid-ok-text:  #15803d;
 }
 
 /* ─── Base Reset ─────────────────────────────────── */
@@ -79,3 +108,119 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.02em;
 }
 p { margin: 0; }
+
+
+/* ─── PRINTABLE BARCODE & A4 STICKER SHEET RULES ─── */
+@media print {
+  /* 1. HIDE ALL ELEMENTS BY DEFAULT */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* 2. COMPLETELY COLLAPSE APP ROOT LAYOUT */
+  #root, #root > * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* 3. SHOW ONLY THE PRINT MODAL AND ITS CHILDREN */
+  .barcode-print-modal-overlay,
+  .barcode-print-modal-overlay * {
+    visibility: visible !important;
+  }
+
+  /* 4. HIDE UI CONTROLS & HEADERS INSIDE MODAL */
+  .barcode-print-modal-header,
+  .barcode-print-modal-header *,
+  .print-hidden,
+  .print-hide,
+  button,
+  input,
+  select {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* 5. A4 STICKER SHEET PHYSICAL POSITIONING */
+  @page {
+    size: A4 portrait;
+    margin: 8mm 6mm;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    width: 210mm !important;
+    height: 297mm !important;
+    overflow: visible !important;
+  }
+
+  .barcode-print-modal-overlay {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    z-index: 99999999 !important;
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  .barcode-print-modal-card {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 198mm !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  .a4-sticker-print-area {
+    display: grid !important;
+    grid-template-columns: 99mm 99mm !important;
+    grid-auto-rows: 34mm !important;
+    column-gap: 0mm !important;
+    row-gap: 0mm !important;
+    width: 198mm !important;
+    margin: 0 auto !important;
+    justify-content: start !important;
+    align-content: start !important;
+    page-break-inside: auto !important;
+  }
+
+  .a4-sticker-cell {
+    width: 99mm !important;
+    height: 34mm !important;
+    min-height: 34mm !important;
+    max-height: 34mm !important;
+    box-sizing: border-box !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    padding: 3mm 4mm !important;
+    border: none !important; /* NO BORDER on pre-cut sticker sheets */
+  }
+
+  .a4-sticker-cell-blank {
+    visibility: hidden !important;
+    border: none !important;
+    background: transparent !important;
+  }
+}
