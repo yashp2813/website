@@ -1,18 +1,27 @@
 import { createClient } from "@libsql/client/web";
 
-const url = import.meta.env.VITE_TURSO_DATABASE_URL;
-const authToken = import.meta.env.VITE_TURSO_AUTH_TOKEN;
+const TURSO_URL = import.meta.env.VITE_TURSO_DATABASE_URL || "libsql://erp-yash2813.aws-ap-south-1.turso.io";
+const TURSO_TOKEN = import.meta.env.VITE_TURSO_AUTH_TOKEN || "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODIzODEwMDMsImlkIjoiMDE5ZWRlN2EtYTAwMS03ODIzLTk2MmItMWMyMDk4MWIzOGE0IiwicmlkIjoiZjkzODExNGMtMTNiYS00YWI1LWI3ZjYtZDI1NWE5ZmEyYjRmIn0.IOtSSTQHPXkgy1BO8BUjhAC0NHfo3Tc6v2GQ0JAhR7cX_jgQy0JtzMbGw3cnxtSB4Sts2iEDZKE0XS_xi9qmAg";
 
-export const dbClient = createClient({
-  url: url || "",
-  authToken: authToken || ""
-});
+let client = null;
+try {
+  client = createClient({
+    url: TURSO_URL,
+    authToken: TURSO_TOKEN
+  });
+} catch (e) {
+  console.error("Failed to create Turso client:", e);
+}
+
+export const dbClient = client;
 
 export const executeQuery = async (sql, args = []) => {
+  if (!dbClient) throw new Error("Database client is not initialized. Please verify VITE_TURSO_DATABASE_URL.");
   return await dbClient.execute({ sql, args });
 };
 
 export const executeBatch = async (statements) => {
+  if (!dbClient) throw new Error("Database client is not initialized. Please verify VITE_TURSO_DATABASE_URL.");
   return await dbClient.batch(statements);
 };
 
