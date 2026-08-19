@@ -635,6 +635,85 @@ const getWipStages = (w) => {
   return [];
 };
 
+// Nashik vs Other Plants Process & WIP Stages Definitions
+export const isNashikPlant = (companyIdOrName, companies = []) => {
+  if (!companyIdOrName) return false;
+  const str = String(companyIdOrName).toLowerCase();
+  if (str.includes('nashik') || str.includes('nasik')) return true;
+  if (Array.isArray(companies)) {
+    const comp = companies.find(c => c.id === companyIdOrName || String(c.id) === String(companyIdOrName));
+    if (comp && comp.name) {
+      const compName = comp.name.toLowerCase();
+      if (compName.includes('nashik') || compName.includes('nasik')) return true;
+    }
+  }
+  return false;
+};
+
+export const NASHIK_WIP_STAGES = [
+  'Corrugation',
+  'Printing',
+  'Punching',
+  'Stitching/Gluing',
+  'Bundling/Ready'
+];
+
+export const OTHER_PLANTS_WIP_STAGES = [
+  'Paper Cutting (Top Paper)',
+  'Corrugation (2 Ply Liner)',
+  'Printing',
+  'Punching',
+  'Stitching/Gluing',
+  'Bundling/Ready'
+];
+
+export const ALL_COMBINED_WIP_STAGES = [
+  'Paper Cutting (Top Paper)',
+  'Corrugation (2 Ply Liner)',
+  'Corrugation',
+  'Printing',
+  'Punching',
+  'Stitching/Gluing',
+  'Bundling/Ready'
+];
+
+export const getPlantWipStages = (companyIdOrName, companies = []) => {
+  if (isNashikPlant(companyIdOrName, companies)) return NASHIK_WIP_STAGES;
+  return OTHER_PLANTS_WIP_STAGES;
+};
+
+export const isWipInStage = (wip, stage) => {
+  if (!wip) return false;
+  const cur = (wip.currentStage || '').trim();
+  if (!cur) {
+    return stage === 'Corrugation' || stage === 'Paper Cutting (Top Paper)';
+  }
+  if (stage === cur) return true;
+
+  if (stage === 'Paper Cutting (Top Paper)') {
+    return cur === 'Paper Cutting (Top Paper)' || cur === 'Paper Cutting' || cur === 'Top Paper Cutting' || cur === 'Top Paper' || cur === 'Cutting';
+  }
+  if (stage === 'Corrugation (2 Ply Liner)') {
+    return cur === 'Corrugation (2 Ply Liner)' || cur === '2 Ply Liner' || cur === '2 Ply Corrugation' || cur === '2-Ply Liner' || cur === '2 Ply' || cur === '2-Ply Corrugation';
+  }
+  if (stage === 'Corrugation') {
+    return cur === 'Corrugation' || cur === 'Corrugator' || cur === 'Auto Board Plant' || cur === 'Corrugation (Nashik)' || cur === 'Board Corrugation';
+  }
+  if (stage === 'Bundling/Ready') {
+    return cur === 'Bundling/Ready' || cur === 'Bundling' || cur === 'Ready in FG' || cur === 'Finished Goods' || cur === 'Packing' || cur === 'Completed';
+  }
+  if (stage === 'Stitching/Gluing') {
+    return cur === 'Stitching/Gluing' || cur === 'Stitching' || cur === 'Gluing' || cur === 'Stitching / Gluing';
+  }
+  if (stage === 'Punching') {
+    return cur === 'Punching' || cur === 'Die-Punching' || cur === 'Rotary / Slotter' || cur === 'Die-Cutting' || cur === 'Slotting';
+  }
+  if (stage === 'Printing') {
+    return cur === 'Printing' || cur === 'Pasting' || cur === 'Printing / Pasting' || cur === 'Flexo';
+  }
+  return cur.toLowerCase() === stage.toLowerCase();
+};
+
 const executeWithAutoMigrate = async (sql, values, table) => {
   let attempts = 0;
   while (attempts < 10) {
@@ -821,7 +900,7 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
 // ==========================================
 
 // --- ENHANCED BARCODE / QR SCANNER MODAL WITH LIVE CAMERA & USB GUN INPUT ---
-function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], plannedJobs = [], production = [], wipStages = [], onSelectReel, onSelectOrder, advanceWipStage, addLog, onAttachReel, prefilledJobId = '' }) {
+function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], plannedJobs = [], production = [], wipStages = [], companies = [], onSelectReel, onSelectOrder, advanceWipStage, addLog, onAttachReel, prefilledJobId = '' }) {
   const [scanTab, setScanTab] = useState('camera'); // 'camera' | 'usb'
   const [scanInput, setScanInput] = useState('');
   const [searchResult, setSearchResult] = useState(null);
@@ -977,9 +1056,9 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
 
   const handleAdvanceWip = async (wipData) => {
     if (!wipData || !advanceWipStage) return;
-    const stages = ['Corrugation','Flute B','Flute C','Printing','Slotting','Die-Cutting','Stitching','Packing','Completed'];
-    const currIdx = stages.indexOf(wipData.currentStage || 'Corrugation');
-    const nextStage = currIdx >= 0 && currIdx < stages.length - 1 ? stages[currIdx + 1] : 'Completed';
+    const stages = getPlantWipStages(wipData.companyId, companies);
+    const currIdx = stages.findIndex(st => isWipInStage(wipData, st));
+    const nextStage = currIdx >= 0 && currIdx < stages.length - 1 ? stages[currIdx + 1] : 'Bundling/Ready';
     if (window.confirm(`Advance "${wipData.itemName || wipData.id}" → "${nextStage}"?`)) {
       await advanceWipStage(wipData, nextStage);
       playBeepSound(); alert(`Advanced to ${nextStage}!`); onClose();
@@ -1436,16 +1515,18 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     alert(`Imported ${count} reels directly into inventory!`);
   };
 
-  const sortedInventory = [...inventory].sort((a, b) => {
-    let valA = a[sortConfig.key];
-    let valB = b[sortConfig.key];
-    if (valA === undefined || valA === null) valA = '';
-    if (valB === undefined || valB === null) valB = '';
-    if (typeof valA === 'number' && typeof valB === 'number') {
-      return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
-    }
-    return sortConfig.direction === 'asc' ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
-  });
+  const sortedInventory = useMemo(() => {
+    return [...(inventory || [])].sort((a, b) => {
+      let valA = a[sortConfig.key];
+      let valB = b[sortConfig.key];
+      if (valA === undefined || valA === null) valA = '';
+      if (valB === undefined || valB === null) valB = '';
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+      }
+      return sortConfig.direction === 'asc' ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
+    });
+  }, [inventory, sortConfig]);
 
   const requestSort = (key) => {
     let direction = 'asc';
@@ -1453,13 +1534,45 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     setSortConfig({ key, direction });
   };
 
-  const totalCount = sortedInventory.length;
-  const activeCount = sortedInventory.filter(r => (r.balanceQty || 0) > 0).length;
-  const sumReceived = sortedInventory.reduce((acc, r) => acc + (parseFloat(r.receivedQty) || 0), 0);
-  const sumBalance = sortedInventory.reduce((acc, r) => acc + (parseFloat(r.balanceQty) || 0), 0);
-  const sumValue = sortedInventory.reduce((acc, r) => acc + (parseFloat(r.value) || 0), 0);
-  const avgGsm = totalCount > 0 ? (sortedInventory.reduce((acc, r) => acc + (parseFloat(r.gsm) || 0), 0) / totalCount).toFixed(1) : 0;
-  const avgBf = totalCount > 0 ? (sortedInventory.reduce((acc, r) => acc + (parseFloat(r.bf) || 0), 0) / totalCount).toFixed(1) : 0;
+  const { totalCount, activeCount, sumReceived, sumBalance, sumValue, avgGsm, avgBf, freshMt, agingMt } = useMemo(() => {
+    const total = sortedInventory.length;
+    let active = 0;
+    let sumRec = 0;
+    let sumBal = 0;
+    let sumVal = 0;
+    let gsmTotal = 0;
+    let bfTotal = 0;
+    let freshBal = 0;
+    let agingBal = 0;
+    const now = Date.now();
+
+    for (let i = 0; i < total; i++) {
+      const r = sortedInventory[i];
+      const bal = parseFloat(r.balanceQty) || 0;
+      if (bal > 0) active++;
+      sumRec += parseFloat(r.receivedQty) || 0;
+      sumBal += bal;
+      sumVal += parseFloat(r.value) || 0;
+      gsmTotal += parseFloat(r.gsm) || 0;
+      bfTotal += parseFloat(r.bf) || 0;
+
+      const ageDays = Math.max(0, Math.floor((now - new Date(r.date || now).getTime()) / 86400000));
+      if (ageDays <= 30) freshBal += bal;
+      if (ageDays > 60) agingBal += bal;
+    }
+
+    return {
+      totalCount: total,
+      activeCount: active,
+      sumReceived: sumRec,
+      sumBalance: sumBal,
+      sumValue: sumVal,
+      avgGsm: total > 0 ? (gsmTotal / total).toFixed(1) : '0.0',
+      avgBf: total > 0 ? (bfTotal / total).toFixed(1) : '0.0',
+      freshMt: (freshBal / 1000).toFixed(1),
+      agingMt: (agingBal / 1000).toFixed(1)
+    };
+  }, [sortedInventory]);
 
 
   return (
@@ -1490,8 +1603,8 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
           <span>TOTAL STOCK: <strong style={{ color: '#4ade80', fontSize: 13 }}>{sumBalance.toFixed(1)} KG ({ (sumBalance/1000).toFixed(2) } MT)</strong></span>
           <span>TOTAL VALUE: <strong style={{ color: '#f59e0b', fontSize: 13 }}>₹{sumValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
-          <span>FRESH (&le;30d): <strong style={{ color: '#4ade80' }}>{(sortedInventory.filter(r => Math.max(0, Math.floor((Date.now() - new Date(r.date || Date.now()).getTime()) / 86400000)) <= 30).reduce((s, r) => s + (parseFloat(r.balanceQty) || 0), 0) / 1000).toFixed(1)} MT</strong></span>
-          <span>AGING (&gt;60d): <strong style={{ color: '#f87171' }}>{(sortedInventory.filter(r => Math.max(0, Math.floor((Date.now() - new Date(r.date || Date.now()).getTime()) / 86400000)) > 60).reduce((s, r) => s + (parseFloat(r.balanceQty) || 0), 0) / 1000).toFixed(1)} MT</strong></span>
+          <span>FRESH (&le;30d): <strong style={{ color: '#4ade80' }}>{freshMt} MT</strong></span>
+          <span>AGING (&gt;60d): <strong style={{ color: '#f87171' }}>{agingMt} MT</strong></span>
           <span>AVG GSM: <strong style={{ color: '#cbd5e1' }}>{avgGsm}</strong></span>
           <span>AVG BF: <strong style={{ color: '#cbd5e1' }}>{avgBf}</strong></span>
         </div>
@@ -1633,7 +1746,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                     {renderCell('vehicleNo', r.vehicleNo)}
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#2563eb', whiteSpace: 'nowrap' }}>
-                    {formatSystemReelId(r, sortedInventory)}
+                    {r.systemReelId || r.uniqueReelId || r.supplierReelNo || r.reelNo || '-'}
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {renderCell('reelNo', r.supplierReelNo || r.reelNo)}
@@ -2549,7 +2662,7 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={inventory} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} />
+      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={inventory} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} companies={companies} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} />
       <CreateDirectJobModal
         isOpen={createDirectJobModalOpen}
         onClose={() => setCreateDirectJobModalOpen(false)}
@@ -4234,120 +4347,122 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     }
   };
 
-  const paperInventoryData = inventory.filter(i => !i.category || i.category === 'Paper');
-  
-  // --- THE FIX: Unique ID Tracking for Duplicate & Blank CSV Reels ---
-  const balances = {}; 
-  const usageStats = {}; 
-  const reelNoToIds = {}; 
+  const inventoryWithUsage = useMemo(() => {
+    const paperInventoryData = (inventory || []).filter(i => !i.category || i.category === 'Paper');
+    const balances = {}; 
+    const usageStats = {}; 
+    const reelNoToIds = {}; 
 
-  paperInventoryData.forEach(reel => {
-    const id = reel.id; // Using Firebase unique ID instead of text name
-    const rNo = String(reel.reelNo || '').trim().toLowerCase();
-    
-    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-    balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
-    usageStats[id] = { issued: 0, log: [] };
-    
-    if (initialIssued > 0) {
+    paperInventoryData.forEach(reel => {
+      const id = reel.id;
+      const rNo = String(reel.reelNo || '').trim().toLowerCase();
+      const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+      balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
+      usageStats[id] = { issued: 0, log: [] };
+      
+      if (initialIssued > 0) {
         usageStats[id].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
-    }
+      }
 
-    if (rNo) {
+      if (rNo) {
         if (!reelNoToIds[rNo]) reelNoToIds[rNo] = [];
         reelNoToIds[rNo].push(id);
-    }
-  });
+      }
+    });
 
-  const sortedProd = [...production].sort((a,b) => {
+    const sortedProd = [...(production || [])].sort((a,b) => {
       const dateA = new Date(a.date || 0).getTime();
       const dateB = new Date(b.date || 0).getTime();
       return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-  });
-  
-  sortedProd.forEach(p => {
-    if (getConsumedReels(p).length > 0) {
-      getConsumedReels(p).forEach(cr => {
-         const rNo = String(cr.reelNo || '').trim().toLowerCase();
-         let remainingDeduct = parseFloat(cr.weight || 0);
-         
-         if (remainingDeduct > 0 && reelNoToIds[rNo]) {
-             for (const id of reelNoToIds[rNo]) {
-                 if (remainingDeduct <= 0) break;
-                 const available = balances[id] || 0;
-                 if (available > 0) {
-                     const deduct = Math.min(available, remainingDeduct);
-                     balances[id] -= deduct;
-                     usageStats[id].issued += deduct;
-                     usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-                     remainingDeduct -= deduct;
-                 }
-             }
-             if (remainingDeduct > 0) {
-                 const lastId = reelNoToIds[rNo][reelNoToIds[rNo].length - 1];
-                 balances[lastId] -= remainingDeduct;
-                 usageStats[lastId].issued += remainingDeduct;
-                 usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
-             }
-         }
-      });
-    } else {
-      if (!p.reelNos || !p.useKg) return;
-      const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
-      if (pReels.length === 0) return;
-      let remainingUse = parseFloat(p.useKg || 0);
-      
-      pReels.forEach((rNo, index) => {
-        if (remainingUse <= 0 || !reelNoToIds[rNo]) return;
-        const isLast = (index === pReels.length - 1);
+    });
+    
+    sortedProd.forEach(p => {
+      const consumed = getConsumedReels(p);
+      if (consumed.length > 0) {
+        consumed.forEach(cr => {
+          const rNo = String(cr.reelNo || '').trim().toLowerCase();
+          let remainingDeduct = parseFloat(cr.weight || 0);
+          
+          if (remainingDeduct > 0 && reelNoToIds[rNo]) {
+            for (const id of reelNoToIds[rNo]) {
+              if (remainingDeduct <= 0) break;
+              const available = balances[id] || 0;
+              if (available > 0) {
+                const deduct = Math.min(available, remainingDeduct);
+                balances[id] -= deduct;
+                usageStats[id].issued += deduct;
+                usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                remainingDeduct -= deduct;
+              }
+            }
+            if (remainingDeduct > 0) {
+              const lastId = reelNoToIds[rNo][reelNoToIds[rNo].length - 1];
+              balances[lastId] -= remainingDeduct;
+              usageStats[lastId].issued += remainingDeduct;
+              usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
+            }
+          }
+        });
+      } else {
+        if (!p.reelNos || !p.useKg) return;
+        const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
+        if (pReels.length === 0) return;
+        let remainingUse = parseFloat(p.useKg || 0);
         
-        for (const id of reelNoToIds[rNo]) {
+        pReels.forEach((rNo, index) => {
+          if (remainingUse <= 0 || !reelNoToIds[rNo]) return;
+          const isLast = (index === pReels.length - 1);
+          
+          for (const id of reelNoToIds[rNo]) {
             if (remainingUse <= 0) break;
             const available = balances[id] || 0;
             let deduct = 0;
             if (isLast) {
-                deduct = remainingUse; 
+              deduct = remainingUse; 
             } else {
-                if (available <= 0) continue;
-                deduct = Math.min(available, remainingUse);
+              if (available <= 0) continue;
+              deduct = Math.min(available, remainingUse);
             }
             if (deduct > 0) {
-                balances[id] -= deduct;
-                usageStats[id].issued += deduct;
-                usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-                remainingUse -= deduct;
+              balances[id] -= deduct;
+              usageStats[id].issued += deduct;
+              usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+              remainingUse -= deduct;
             }
-        }
-      });
-    }
-  });
+          }
+        });
+      }
+    });
 
-  const inventoryWithUsage = paperInventoryData.map((reel, idx) => {
-    const id = reel.id;
-    const stats = usageStats[id] || { issued: 0, log: [] };
-    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-    const issuedQty = stats.issued + initialIssued;
-    const received = parseFloat(reel.receivedQty || 0);
-    const balanceQty = Math.max(0, received - issuedQty);
-    const rate = parseFloat(reel.ratePerKg || 0);
-    const value = balanceQty * rate;
-    const systemReelId = formatSystemReelId(reel, paperInventoryData);
-    return { ...reel, systemReelId, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log || [] };
-  });
+    return paperInventoryData.map((reel) => {
+      const id = reel.id;
+      const stats = usageStats[id] || { issued: 0, log: [] };
+      const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+      const issuedQty = stats.issued + initialIssued;
+      const received = parseFloat(reel.receivedQty || 0);
+      const balanceQty = Math.max(0, received - issuedQty);
+      const rate = parseFloat(reel.ratePerKg || 0);
+      const value = balanceQty * rate;
+      const systemReelId = formatSystemReelId(reel, paperInventoryData);
+      return { ...reel, systemReelId, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log || [] };
+    });
+  }, [inventory, production]);
 
-  const filteredInventory = inventoryWithUsage.filter(reel => {
-    if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
-    if (filters.company && !(companies.find(c => c.id === reel.companyId)?.name || '').toLowerCase().includes(filters.company.toLowerCase())) return false;
-    if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
-    if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
-    if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
-    if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) return false;
-    if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) return false;
-    if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
-    if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
-    if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
-    return true;
-  });
+  const filteredInventory = useMemo(() => {
+    return inventoryWithUsage.filter(reel => {
+      if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
+      if (filters.company && !(companies.find(c => c.id === reel.companyId)?.name || '').toLowerCase().includes(filters.company.toLowerCase())) return false;
+      if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
+      if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
+      if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
+      if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) return false;
+      if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) return false;
+      if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
+      if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
+      if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
+      return true;
+    });
+  }, [inventoryWithUsage, allowedCompanyId, filters, companies]);
 
   const toggleSelection = (id) => {
     const newSet = new Set(selectedIds);
@@ -6622,6 +6737,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
               orders={orders}
               plannedJobs={plannedJobs}
               production={production}
+              companies={companies}
               prefilledJobId={newRecord.orderId || ''}
               onAttachReel={newRecord.orderId && onAttachReel ? (jobId, reel, stand) => {
                 // Persist attachment to DB via App-level handler
@@ -8143,7 +8259,9 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   const handleSaveOrders = async (e) => {
     e.preventDefault();
-    const cust = customers.find(c => c.id === orderHeader.customerId)?.name || '';
+    const selectedCust = customers.find(c => c.id === orderHeader.customerId);
+    const cust = selectedCust?.name || '';
+    const finalCustName = cust || (orderHeader.customerId ? 'Client' : 'Direct / Internal');
 
     try {
       if (editingId) {
@@ -8155,8 +8273,8 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         await updateDoc(getDocRef('orders', editingId), {
           orderDate: orderHeader.orderDate,
           companyId: orderHeader.companyId,
-          customerId: orderHeader.customerId,
-          customerName: cust,
+          customerId: orderHeader.customerId || '',
+          customerName: finalCustName,
           itemId: single.itemId || '',
           itemName: single.itemName,
           poNumber: single.poNumber || '',
@@ -8181,8 +8299,8 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
             orderNo: `ORD-${Date.now().toString().slice(-6)}`,
             orderDate: orderHeader.orderDate,
             companyId: orderHeader.companyId,
-            customerId: orderHeader.customerId,
-            customerName: cust,
+            customerId: orderHeader.customerId || '',
+            customerName: finalCustName,
             itemId: ord.itemId,
             itemName: ord.itemName,
             poNumber: ord.poNumber,
@@ -8201,7 +8319,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           alert("Please fill in at least one item name and quantity.");
           return;
         }
-        if (addLog) addLog(`Added ${count} orders for client ${cust || 'Client'}`);
+        if (addLog) addLog(`Added ${count} orders${cust ? ` for client ${cust}` : ''}`);
         setOrdersInput([{ ...emptyOrderRow }]);
         setShowBatchForm(false);
         alert(`✓ Saved ${count} order(s) successfully.`);
@@ -8374,7 +8492,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
             <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
               {editingId ? 'Edit Order' : `➕ Multi-Row Order Inwarding (${ordersInput.length} Items)`}
             </h3>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Select customer/unit header &amp; enter order rows below</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Select customer (optional)/unit &amp; enter order rows below</span>
           </div>
 
           <form onSubmit={handleSaveOrders}>
@@ -8385,9 +8503,9 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                 <input required type="date" className="apex-input" value={orderHeader.orderDate} onChange={e => setOrderHeader({ ...orderHeader, orderDate: e.target.value })} />
               </div>
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Customer / Client *</label>
-                <select required className="apex-select" value={orderHeader.customerId} onChange={e => setOrderHeader({ ...orderHeader, customerId: e.target.value })}>
-                  <option value="">-- Choose Customer --</option>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Customer / Client (Optional)</label>
+                <select className="apex-select" value={orderHeader.customerId} onChange={e => setOrderHeader({ ...orderHeader, customerId: e.target.value })}>
+                  <option value="">-- Choose Customer (Optional / Direct) --</option>
                   {[...customers].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
@@ -8528,7 +8646,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
               <tr><td colSpan="13" style={{ textAlign: 'center', padding: 32, fontStyle: 'italic', color: '#94a3b8' }}>No orders found matching filters.</td></tr>
             )}
             {filteredOrders.map((ord, idx) => {
-              const custName = customers.find(c => c.id === ord.customerId)?.name || ord.customerName || 'Client';
+              const custName = customers.find(c => c.id === ord.customerId)?.name || ord.customerName || (ord.customerId ? 'Client' : 'Direct / Internal');
               const pending = Math.max(0, parseInt(ord.orderQty || 0) - parseInt(ord.dispatchedQty || 0));
 
               return (
