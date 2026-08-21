@@ -1,7 +1,7 @@
 import './App.css';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
-  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight
+  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
@@ -11,9 +11,10 @@ import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import Barcode from 'react-barcode';
 
 // ==========================================
-// 1. TURSO DATABASE SETUP
+// 1. TURSO DATABASE SETUP & GEMINI AI SERVICE
 // ==========================================
 import { executeQuery, executeBatch, generateId, initDb, getNextCounter } from './db.js';
+import { getGeminiApiKey, setGeminiApiKey, isGeminiConfigured, parseBoxRecipeWithAI, askFactoryAI, parseReelsInwardWithAI, calculateFactoryKPIs } from './gemini.js';
 
 
 // Audio synthesizer for barcode scan feedback
@@ -34,6 +35,1512 @@ const playBeepSound = () => {
     console.log('Audio beep error:', e);
   }
 };
+
+// --- NATIVE WEB SPEECH-TO-TEXT BUTTON COMPONENT ---
+export function VoiceInputButton({
+  onTranscript,
+  mode = 'text', // 'text' | 'dimension' | 'search' | 'number' | 'material'
+  lang = 'en-IN',
+  size = 'md', // 'sm' | 'md' | 'lg'
+  className = '',
+  title = 'Click to speak'
+}) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(true);
+  const recognitionRef = useRef(null);
+
+  useEffect(() => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setIsSupported(false);
+    }
+  }, []);
+
+  const toggleListening = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (!isSupported) {
+      alert('Speech Recognition is not supported in this browser. Please use Google Chrome, Apple Safari, or Microsoft Edge.');
+      return;
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch (err) {}
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRec();
+    recognitionRef.current = recognition;
+
+    recognition.lang = lang;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      playBeepSound();
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      console.warn('Speech Recognition error:', event?.error);
+      setIsListening(false);
+      if (event?.error === 'not-allowed') {
+        alert('Microphone access was denied. Please allow microphone permissions in your browser address bar.');
+      }
+    };
+
+    recognition.onresult = (event) => {
+      if (event.results && event.results[0] && event.results[0][0]) {
+        let transcript = (event.results[0][0].transcript || '').trim();
+        if (!transcript) return;
+
+        if (mode === 'dimension') {
+          // Converts e.g. "472 by 405 by 135", "472 into 405 into 135", "472 cross 405 cross 135" -> "472x405x135"
+          let cleaned = transcript
+            .replace(/\b(by|into|cross|multiplied by|\*|x|X)\b/gi, 'x')
+            .replace(/\s*x\s*/gi, 'x')
+            .replace(/[^0-9xX]/g, '');
+          onTranscript(cleaned || transcript);
+        } else if (mode === 'search') {
+          // Removes trailing period added by speech recognition
+          let cleaned = transcript.replace(/\.$/, '').trim();
+          onTranscript(cleaned);
+        } else if (mode === 'number') {
+          let cleaned = transcript.replace(/[^0-9.]/g, '');
+          onTranscript(cleaned || transcript);
+        } else if (mode === 'material') {
+          const low = transcript.toLowerCase();
+          if (low.includes('gold')) onTranscript('Golden');
+          else if (low.includes('dup')) onTranscript('Duplex');
+          else if (low.includes('kraft') || low.includes('craft') || low.includes('brown')) onTranscript('Kraft');
+          else onTranscript(transcript);
+        } else {
+          let cleaned = transcript.replace(/\.$/, '').trim();
+          onTranscript(cleaned);
+        }
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.warn('Recognition start failed:', err);
+      setIsListening(false);
+    }
+  };
+
+  if (!isSupported) return null;
+
+  const isSmall = size === 'sm';
+
+  return (
+    <button
+      type="button"
+      onClick={toggleListening}
+      className={`inline-flex items-center justify-center rounded transition-all select-none cursor-pointer ${
+        isListening
+          ? 'bg-rose-600 text-white animate-pulse shadow-md ring-2 ring-rose-400'
+          : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+      } ${isSmall ? 'p-1 h-6 w-6 text-xs' : 'p-1.5 h-8 w-8 text-sm'} ${className}`}
+      title={isListening ? '🎙️ Listening... Speak now (Click to stop)' : `🎙️ ${title}`}
+    >
+      {isListening ? (
+        <MicOff className={isSmall ? "w-3 h-3 text-white" : "w-4 h-4 text-white"} />
+      ) : (
+        <Mic className={isSmall ? "w-3.5 h-3.5" : "w-4 h-4"} />
+      )}
+    </button>
+  );
+}
+
+// --- SYSTEM-WIDE ADVANCED GLOBAL VOICE COMMAND & AI ASSISTANT ---
+export function GlobalVoiceAssistant({
+  setActiveTab,
+  activeTab,
+  companies = [],
+  activeUnitId,
+  setActiveUnitId,
+  canAccess,
+  currentUser,
+  orders = [],
+  inventory = [],
+  items = [],
+  production = [],
+  wipStages = [],
+  customers = [],
+  wastageLogs = [],
+  transactions = [],
+  costings = [],
+  plannedJobs = [],
+  onCreateDirectJob,
+  onOpenCreateJobModal,
+  onOpenJobCard,
+  onOpenCreateBoxModal,
+  onOpenCreateOrderModal,
+  onAttachReel,
+  onStartProduction
+}) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(true);
+  const [feedbackToast, setFeedbackToast] = useState(null);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const recognitionRef = useRef(null);
+  const toastTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) setIsSupported(false);
+  }, []);
+
+  // Keyboard shortcut: Alt + V or Ctrl + Shift + V
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.altKey && (e.key === 'v' || e.key === 'V')) || 
+          (e.ctrlKey && e.shiftKey && (e.key === 'v' || e.key === 'V'))) {
+        e.preventDefault();
+        toggleAssistant();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isListening]);
+
+  const showToast = (message, type = 'info', duration = 6000, details = null) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setFeedbackToast({ message, type, details });
+    toastTimeoutRef.current = setTimeout(() => {
+      setFeedbackToast(null);
+    }, duration);
+  };
+
+  const speakFeedback = (text) => {
+    if ('speechSynthesis' in window && text) {
+      try {
+        window.speechSynthesis.cancel();
+        const cleanText = text.replace(/[*_#`~₹]/g, '').replace(/MT/g, 'Metric Tonnes').replace(/kg/g, 'kilograms');
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.rate = 1.05;
+        utterance.pitch = 1.0;
+        utterance.lang = 'en-IN';
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        console.warn('Speech synthesis error:', e);
+      }
+    }
+  };
+
+  const executeCommand = async (transcript) => {
+    const raw = transcript.toLowerCase().trim();
+
+    // =========================================================================
+    // 0. HELP / WHAT CAN I SAY / SETTINGS
+    // =========================================================================
+    if (raw === 'help' || raw.includes('what can i say') || raw.includes('command list') || raw.includes('voice guide') || raw.includes('madad') || raw.includes('api key') || raw.includes('settings')) {
+      setShowHelpModal(true);
+      showToast('📖 Opening Voice Assistant & AI Settings', 'info', 5000);
+      speakFeedback('Opening Voice Guide and Settings');
+      return;
+    }
+
+    // =========================================================================
+    // 0.1 GEMINI 2.0 FLASH AI REASONING (IF CONFIGURED)
+    // =========================================================================
+    if (isGeminiConfigured()) {
+      showToast('🧠 Gemini AI Analyzing...', 'info', 4000);
+      try {
+        const aiResult = await askFactoryAI(transcript, {
+          orders,
+          inventory,
+          items,
+          production,
+          wipStages,
+          wastageLogs,
+          companies,
+          customers,
+          costings,
+          transactions,
+          plannedJobs
+        });
+
+        if (aiResult && aiResult.spokenResponse) {
+          // Perform action if requested
+          if (aiResult.action?.type === 'open_job_card' && aiResult.action.targetOrderId) {
+            const ordQuery = String(aiResult.action.targetOrderId).toLowerCase();
+            const matched = orders.find(o => 
+              String(o.id) === ordQuery || 
+              String(o.orderNo || '').toLowerCase().includes(ordQuery) ||
+              String(o.itemName || '').toLowerCase().includes(ordQuery)
+            );
+            if (matched && onOpenJobCard) onOpenJobCard(matched);
+          } else if (aiResult.action?.type === 'navigate_tab' && aiResult.action.targetTab) {
+            if (!canAccess || canAccess(currentUser?.role, aiResult.action.targetTab)) {
+              setActiveTab(aiResult.action.targetTab);
+            }
+          } else if (aiResult.action?.type === 'switch_unit' && aiResult.action.unitName) {
+            const comp = companies.find(c => c.name.toLowerCase().includes(aiResult.action.unitName.toLowerCase()));
+            if (comp && setActiveUnitId) setActiveUnitId(comp.id);
+          } else if (aiResult.action?.type === 'create_job' && aiResult.action.jobPayload) {
+            const jp = aiResult.action.jobPayload;
+            if (onCreateDirectJob) {
+              const matchedBox = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes((jp.itemName || '').toLowerCase())) || items[0];
+              await onCreateDirectJob({
+                jobNo: `JOB-${Date.now().toString().slice(-6)}`,
+                companyId: activeUnitId || '',
+                customerId: '',
+                customerName: jp.customerName || 'Advance Planned Job',
+                itemId: matchedBox?.id || '',
+                itemName: matchedBox?.name || matchedBox?.Item_Name || jp.itemName,
+                orderQty: parseInt(jp.orderQty || 1000),
+                plannedUps: parseInt(jp.plannedUps || matchedBox?.ups || 1),
+                deliveryDate: jp.deliveryDate || new Date().toISOString().split('T')[0],
+                notes: jp.notes || 'Voice Created Job Card'
+              });
+              if (setActiveTab) setActiveTab('planning');
+            }
+          } else if (aiResult.action?.type === 'open_create_job_modal') {
+            if (onOpenCreateJobModal) onOpenCreateJobModal();
+          } else if (aiResult.action?.type === 'attach_reel' && aiResult.action.reelQuery) {
+            const rQ = aiResult.action.reelQuery.toLowerCase();
+            const matchedReel = inventory.find(r => 
+              (r.systemReelId || '').toLowerCase().includes(rQ) ||
+              (r.uniqueReelId || '').toLowerCase().includes(rQ) ||
+              String(r.reelNo || '').toLowerCase().includes(rQ) ||
+              String(r.supplierReelNo || '').toLowerCase().includes(rQ)
+            );
+            const ordQ = (aiResult.action.targetOrderId || '').toLowerCase();
+            let targetOrder = orders.find(o => 
+              String(o.id).toLowerCase() === ordQ || 
+              String(o.orderNo || '').toLowerCase().includes(ordQ) ||
+              String(o.itemName || '').toLowerCase().includes(ordQ)
+            );
+            if (!targetOrder && orders.length > 0) targetOrder = orders.find(o => o.status === 'In Production') || orders[0];
+
+            if (matchedReel && targetOrder && onAttachReel) {
+              await onAttachReel(targetOrder.id, matchedReel, aiResult.action.stand || 'Top');
+              if (setActiveTab) setActiveTab('production');
+            }
+          } else if (aiResult.action?.type === 'start_production' && aiResult.action.targetOrderId) {
+            const ordQ = aiResult.action.targetOrderId.toLowerCase();
+            const matched = orders.find(o => 
+              String(o.id).toLowerCase() === ordQ || 
+              String(o.orderNo || '').toLowerCase().includes(ordQ) ||
+              String(o.itemName || '').toLowerCase().includes(ordQ)
+            );
+            if (matched && onStartProduction) {
+              onStartProduction(matched);
+              if (setActiveTab) setActiveTab('production');
+            }
+          }
+
+          showToast(`✨ ${aiResult.displayCard?.title || 'Gemini AI Intelligence'}`, 'success', 9000, {
+            title: aiResult.displayCard?.title || 'Factory Intelligence',
+            desc: `${aiResult.displayCard?.metricValue ? aiResult.displayCard.metricValue + ' | ' : ''}${aiResult.displayCard?.details || ''}`
+          });
+          speakFeedback(aiResult.spokenResponse);
+          return;
+        }
+      } catch (err) {
+        console.warn('Gemini AI call error, falling back to native pattern parser:', err);
+      }
+    }
+
+    // =========================================================================
+    // 1. OPEN JOB CARD (e.g. "Open job card for order ORD-1002", "Show job card for Imperial Blue", "Radico ka job card")
+    // =========================================================================
+    if (
+      raw.includes('job card') || raw.includes('jobcard') || raw.includes('jc ') || 
+      (raw.includes('job') && (raw.includes('open') || raw.includes('show') || raw.includes('card') || raw.includes('view') || raw.includes('kholo')))
+    ) {
+      let query = raw
+        .replace(/\b(open|show|display|view|find|get|the|a|please|kholo)?\s*(job\s*card|jobcard|jc|job)\s*(for|of|number|no|ka|ki)?\s*/gi, '')
+        .replace(/\b(order|po|item)?\s*/gi, '')
+        .trim();
+
+      let matchedOrder = null;
+      if (query) {
+        matchedOrder = orders.find(o => 
+          String(o.orderNo || '').toLowerCase().includes(query) ||
+          String(o.poNumber || '').toLowerCase().includes(query) ||
+          String(o.id || '').toLowerCase().includes(query)
+        );
+
+        if (!matchedOrder) {
+          matchedOrder = orders.find(o => 
+            String(o.itemName || o.Item_Name || '').toLowerCase().includes(query) ||
+            String(o.customerName || '').toLowerCase().includes(query)
+          );
+        }
+      }
+
+      if (!matchedOrder && orders.length > 0) {
+        matchedOrder = orders.find(o => o.status === 'In Production') || orders[0];
+      }
+
+      if (matchedOrder) {
+        if (onOpenJobCard) onOpenJobCard(matchedOrder);
+        const itmName = matchedOrder.itemName || matchedOrder.Item_Name || 'Box Item';
+        const ordNo = matchedOrder.orderNo || 'Job';
+        const qty = matchedOrder.orderQty || 0;
+        const msg = `Opening Job Card for ${ordNo} — ${itmName} (${qty} pcs)`;
+        showToast(`📄 ${msg}`, 'success', 7000, {
+          title: `Job Card: ${ordNo}`,
+          desc: `${itmName} | ${qty} Pcs | Status: ${matchedOrder.status || 'Active'}`
+        });
+        speakFeedback(`Opening Job Card for ${itmName}`);
+        return;
+      } else {
+        showToast(`❌ Could not find any job card matching "${query || transcript}"`, 'warning', 5000);
+        speakFeedback(`No job card found matching ${query || 'your request'}`);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 2. SPECIFIC REEL LOOKUP / LOCATION (e.g. "Status of reel RL-00012", "Where is reel 1005", "Find reel 405")
+    // =========================================================================
+    if ((raw.includes('reel') && (raw.includes('where') || raw.includes('status') || raw.includes('find') || raw.includes('location') || raw.includes('kahan'))) || raw.startsWith('rl-') || raw.includes('reel no') || raw.includes('reel number')) {
+      const reelMatch = raw.match(/\b(rl[-\s]?\d+|\d{3,6})\b/i);
+      const queryDigits = reelMatch ? reelMatch[1].replace(/\D/g, '') : null;
+      const rawReelQuery = reelMatch ? reelMatch[0].replace(/\s+/g, '-').toUpperCase() : '';
+
+      const matchedReel = inventory.find(r => {
+        const sysId = String(r.systemReelId || r.uniqueReelId || '').toUpperCase();
+        const reelNo = String(r.supplierReelNo || r.reelNo || '');
+        if (rawReelQuery && sysId.includes(rawReelQuery)) return true;
+        if (queryDigits && (sysId.includes(queryDigits) || reelNo.includes(queryDigits))) return true;
+        return false;
+      });
+
+      if (matchedReel) {
+        const sysId = matchedReel.systemReelId || matchedReel.uniqueReelId || `RL-${matchedReel.reelNo}`;
+        const balKg = (parseFloat(matchedReel.balanceQty !== undefined ? matchedReel.balanceQty : matchedReel.receivedQty) || 0).toFixed(0);
+        const loc = matchedReel.location || 'Warehouse Rack-A';
+        const gsm = matchedReel.gsm || '-';
+        const bf = matchedReel.bf || '-';
+        const mill = matchedReel.millName || 'Standard Mill';
+        const isFresh = (matchedReel.balanceQty || matchedReel.receivedQty) > 0;
+
+        const msg = `Reel ${sysId} (${gsm} GSM, ${bf} BF, ${mill}) has ${balKg} kg balance. Location: ${loc}. Status: ${isFresh ? 'Available' : 'Consumed'}.`;
+        showToast(`📍 ${sysId} Location & Stock`, 'success', 8000, {
+          title: `Reel ${sysId} (${gsm} GSM / ${bf} BF)`,
+          desc: `Balance: ${balKg} kg | Location: ${loc} | Mill: ${mill} | Status: ${isFresh ? '🟢 Available' : '🔴 Consumed'}`
+        });
+        speakFeedback(`Reel ${sysId} has ${balKg} kg in ${loc}`);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 3. AGING STOCK / OLD REELS INVENTORY (e.g. "Show aging reels", "Which paper is old?", "Purana reel kitna hai")
+    // =========================================================================
+    if (raw.includes('aging') || raw.includes('old paper') || raw.includes('old reel') || raw.includes('purana reel') || raw.includes('slow moving') || raw.includes('expired reel')) {
+      const now = Date.now();
+      const agingReels = inventory.filter(r => {
+        if (r.status === 'Consumed' || (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0) <= 0)) return false;
+        const d = new Date(r.date || r.createdAt || now).getTime();
+        const days = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+        return days >= 60;
+      });
+
+      const totalAgingKg = Math.round(agingReels.reduce((sum, r) => sum + (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0)), 0));
+      const totalAgingTons = (totalAgingKg / 1000).toFixed(2);
+
+      if (agingReels.length > 0) {
+        const msg = `Found ${agingReels.length} aging reels (>60 days old) totaling ${totalAgingKg.toLocaleString('en-IN')} kg (${totalAgingTons} MT). Consider consuming them first.`;
+        showToast(`🔴 Aging Paper Stock Alert`, 'warning', 8000, {
+          title: `Aging Paper (>60 Days)`,
+          desc: `Total: ${totalAgingKg.toLocaleString('en-IN')} kg (${totalAgingTons} MT) across ${agingReels.length} reels in warehouse.`
+        });
+        speakFeedback(msg);
+      } else {
+        const msg = `Great news! All active paper reels in stock are fresh and under 60 days old.`;
+        showToast(`🟢 Paper Health: All Fresh`, 'success', 6000);
+        speakFeedback(msg);
+      }
+      return;
+    }
+
+    // =========================================================================
+    // 4. LOW STOCK / CRITICAL REEL ALERT (e.g. "Low stock paper", "Which reels are low?")
+    // =========================================================================
+    if (raw.includes('low stock') || raw.includes('shortage') || raw.includes('out of stock') || raw.includes('kam stock')) {
+      const gsmMap = {};
+      inventory.forEach(r => {
+        if (r.status === 'Consumed') return;
+        const gsm = r.gsm || '120';
+        const bal = parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0);
+        gsmMap[gsm] = (gsmMap[gsm] || 0) + bal;
+      });
+
+      const lowGsmList = Object.entries(gsmMap).filter(([gsm, totalKg]) => totalKg < 800);
+      if (lowGsmList.length > 0) {
+        const detailStr = lowGsmList.map(([gsm, kg]) => `${gsm} GSM (${Math.round(kg)} kg)`).join(', ');
+        const msg = `Low stock alert for: ${detailStr}. Minimum reorder threshold is 800 kg.`;
+        showToast(`⚠️ Low Paper Stock Warning`, 'warning', 8000, {
+          title: `Low Stock Paper GSMs`,
+          desc: detailStr
+        });
+        speakFeedback(`Low stock alert for ${lowGsmList.map(([gsm]) => `${gsm} GSM`).join(' and ')}.`);
+      } else {
+        const msg = `All standard paper GSMs have healthy stock levels above 800 kg.`;
+        showToast(`✅ Paper Stock Healthy`, 'success', 6000);
+        speakFeedback(msg);
+      }
+      return;
+    }
+
+    // =========================================================================
+    // 5.1 COMPREHENSIVE DAILY PRODUCTION REPORTS & SUMMARIES
+    // =========================================================================
+    if (raw.includes('daily production') || raw.includes('production report') || raw.includes('today\'s production') || raw.includes('how much produced today') || raw.includes('production summary') || raw.includes('aaj ka production') || raw.includes('summarize performance') || raw.includes('plant summary')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers });
+      const { todayBoxes, todayMeters, monthBoxes, monthWeightMT, activeWipJobsCount } = kpis.production;
+      
+      const speechMsg = `Daily Production Report: Today ${todayBoxes.toLocaleString('en-IN')} boxes (${todayMeters.toLocaleString('en-IN')} meters) produced. Month-to-date total is ${monthBoxes.toLocaleString('en-IN')} boxes (${monthWeightMT} MT) with ${activeWipJobsCount} active WIP jobs.`;
+      
+      showToast(`📊 Daily Production Report`, 'success', 9000, {
+        title: `Today: ${todayBoxes.toLocaleString('en-IN')} boxes (${todayMeters.toLocaleString('en-IN')}m)`,
+        desc: `MTD: ${monthBoxes.toLocaleString('en-IN')} boxes (${monthWeightMT} MT) | Active WIP: ${activeWipJobsCount} jobs`
+      });
+      speakFeedback(speechMsg);
+      return;
+    }
+
+    // =========================================================================
+    // 5.2 MONTHLY WASTAGE & FUEL USAGE
+    // =========================================================================
+    if (raw.includes('monthly wastage') || raw.includes('fuel usage') || raw.includes('fuel and wastage') || raw.includes('wastage and fuel') || raw.includes('scrap percentage') || raw.includes('monthly scrap') || raw.includes('monthly fuel')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers });
+      const { monthScrapKg, monthScrapMT, monthCorrugationScrapKg, monthPrintingScrapKg, monthWastagePercentage, monthFuelKg, monthFuelCostInr } = kpis.wastageAndFuel;
+      
+      const speechMsg = `Monthly Wastage is ${monthScrapKg.toLocaleString('en-IN')} kg (${monthScrapMT} MT, ${monthWastagePercentage} scrap rate). Fuel usage is ${monthFuelKg.toLocaleString('en-IN')} kg coal/wood totaling ₹${monthFuelCostInr.toLocaleString('en-IN')}.`;
+      
+      showToast(`🔥 Monthly Wastage & Fuel Usage`, 'warning', 9000, {
+        title: `Wastage: ${monthScrapKg.toLocaleString('en-IN')} kg (${monthWastagePercentage}) | Fuel: ${monthFuelKg.toLocaleString('en-IN')} kg (₹${monthFuelCostInr.toLocaleString('en-IN')})`,
+        desc: `Corrugation Scrap: ${monthCorrugationScrapKg.toLocaleString('en-IN')} kg | Printing Scrap: ${monthPrintingScrapKg.toLocaleString('en-IN')} kg`
+      });
+      speakFeedback(speechMsg);
+      return;
+    }
+
+    // =========================================================================
+    // 5.3 COST / KG & PAPER RAW MATERIAL ECONOMICS
+    // =========================================================================
+    if (raw.includes('cost per kg') || raw.includes('cost/kg') || raw.includes('paper rate') || raw.includes('rate per kg') || raw.includes('per kg cost') || raw.includes('how much cost') || raw.includes('paper cost')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers });
+      const { avgPaperCostPerKg, totalStockWeightKg, totalStockMT, totalStockValuationInr, gsmCostBreakdown } = kpis.costEconomics;
+      
+      const topGsmSummary = gsmCostBreakdown.slice(0, 3).map(g => `${g.gsm}: ${g.avgRatePerKg}`).join(', ');
+      const speechMsg = `Your weighted average raw paper cost is ${avgPaperCostPerKg}. Total inventory is ${totalStockMT} MT valued at ₹${totalStockValuationInr.toLocaleString('en-IN')}.`;
+      
+      showToast(`💰 Raw Material Cost/KG & Valuation`, 'success', 9000, {
+        title: `Average Paper Cost: ${avgPaperCostPerKg}`,
+        desc: `Total Stock: ${totalStockMT} MT (₹${totalStockValuationInr.toLocaleString('en-IN')}) | Rates: ${topGsmSummary || 'Standard Rates'}`
+      });
+      speakFeedback(speechMsg);
+      return;
+    }
+
+    // =========================================================================
+    // 5.4 GENERAL WASTAGE & FUEL CONSUMPTION INSIGHTS
+    // =========================================================================
+    if (raw.includes('wastage') || raw.includes('scrap') || raw.includes('kachra') || raw.includes('rejection')) {
+      const totalWastageKg = Math.round(wastageLogs.reduce((sum, w) => sum + (parseFloat(w.wasteKg || w.wastageKg || w.totalWaste || 0)), 0));
+      const corrugationWaste = Math.round(wastageLogs.filter(w => (w.section || w.stage || '').toLowerCase().includes('corrug')).reduce((sum, w) => sum + (parseFloat(w.wasteKg || w.wastageKg || 0)), 0));
+      const printingWaste = Math.round(wastageLogs.filter(w => (w.section || w.stage || '').toLowerCase().includes('print')).reduce((sum, w) => sum + (parseFloat(w.wasteKg || w.wastageKg || 0)), 0));
+
+      const count = wastageLogs.length;
+      const msg = `Total recorded wastage is ${totalWastageKg.toLocaleString('en-IN')} kg across ${count} entries (${corrugationWaste.toLocaleString('en-IN')} kg Corrugation, ${printingWaste.toLocaleString('en-IN')} kg Printing/Finishing).`;
+      
+      showToast(`🔥 Wastage Analytics Summary`, 'info', 8000, {
+        title: `Total Scrap: ${totalWastageKg.toLocaleString('en-IN')} kg`,
+        desc: `Corrugation: ${corrugationWaste.toLocaleString('en-IN')} kg | Printing/Finishing: ${printingWaste.toLocaleString('en-IN')} kg | Total Logs: ${count}`
+      });
+      speakFeedback(`Total recorded wastage is ${totalWastageKg} kg.`);
+      return;
+    }
+
+    if (raw.includes('fuel') || raw.includes('coal') || raw.includes('wood') || raw.includes('boiler') || raw.includes('power')) {
+      const totalFuelKg = Math.round(wastageLogs.reduce((sum, w) => sum + (parseFloat(w.fuelKg || w.coalKg || w.woodKg || 0)), 0));
+      const msg = `Total boiler fuel consumed recorded in logs is ${totalFuelKg.toLocaleString('en-IN')} kg.`;
+      showToast(`⚡ Power & Fuel Analytics`, 'info', 7000, {
+        title: `Boiler Fuel Consumption`,
+        desc: `Total: ${totalFuelKg.toLocaleString('en-IN')} kg coal/wood`
+      });
+      speakFeedback(msg);
+      return;
+    }
+
+    // =========================================================================
+    // 5.5 FULL ITEM COST BREAKDOWN (Paper, Gum, Conversion, Freight, Profit Margin)
+    // =========================================================================
+    if (raw.includes('cost of') || raw.includes('costing of') || raw.includes('cost for') || raw.includes('costing for') || raw.includes('cost breakdown') || raw.includes('margin on') || raw.includes('profit on') || raw.includes('kitne ka padta')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers, costings, transactions });
+      let query = raw
+        .replace(/\b(what\s*is|the|total|cost|costing|breakdown|margin|profit|per\s*box|per\s*kg|of|for|on|how\s*much|does|cost|kitne\s*ka|padta\s*hai)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim().toLowerCase();
+
+      let matchedItem = (kpis.costEconomics.sampleCostSheets || []).find(cs => cs.name.toLowerCase().includes(query));
+      if (!matchedItem && (kpis.costEconomics.sampleCostSheets || []).length > 0) {
+        matchedItem = kpis.costEconomics.sampleCostSheets[0];
+      }
+
+      if (matchedItem) {
+        const { name, costPerBox, costPerKg, breakdown, sellingPrice, profitMargin } = matchedItem;
+        const speechMsg = `${name} total cost is ₹${costPerBox} per box (₹${costPerKg}/kg). Paper ₹${breakdown.paperCost.replace('₹','')}, Conversion ₹${breakdown.powerAndConversion.replace('₹','')}, Gum ₹${breakdown.gumCost.replace('₹','')}. Selling price is ${sellingPrice} with ${profitMargin} profit margin.`;
+        
+        showToast(`💰 Full Costing: ${name}`, 'success', 9000, {
+          title: `Cost: ₹${costPerBox}/box (₹${costPerKg}/kg) | Margin: ${profitMargin}`,
+          desc: `Paper: ${breakdown.paperCost} | Conversion: ${breakdown.powerAndConversion} | Gum: ${breakdown.gumCost} | Printing/Wire: ${breakdown.printingAndWire} | Freight: ${breakdown.freight} | Sale: ${sellingPrice}`
+        });
+        if (setActiveTab) setActiveTab('costing');
+        speakFeedback(speechMsg);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 5.6 WIP MACHINE BOTTLENECK & STAGE ANALYSIS
+    // =========================================================================
+    if (raw.includes('bottleneck') || raw.includes('stuck') || raw.includes('wip stage') || raw.includes('kahan ruka') || raw.includes('stage breakdown') || raw.includes('machine status')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers, costings, transactions });
+      const { wipStageBreakdown, bottleneckStage, activeWipJobsCount } = kpis.production;
+      
+      const breakdownStr = wipStageBreakdown.map(s => `${s.stage}: ${s.sheets.toLocaleString('en-IN')}`).join(', ');
+      const speechMsg = `Across ${activeWipJobsCount} active WIP jobs, the main bottleneck is at ${bottleneckStage}. Total stage queues: ${breakdownStr}.`;
+      
+      showToast(`🚨 WIP Machine Bottlenecks`, 'warning', 9000, {
+        title: `Main Bottleneck: ${bottleneckStage}`,
+        desc: breakdownStr || 'All stages flowing smoothly'
+      });
+      if (setActiveTab) setActiveTab('wip_tracker');
+      speakFeedback(speechMsg);
+      return;
+    }
+
+    // =========================================================================
+    // 5.7 CONSUMABLES STOCK (Gum Powder, Boiler Coal/Wood, Stitching Wire, Ink)
+    // =========================================================================
+    if (raw.includes('gum') || raw.includes('starch') || raw.includes('wire') || raw.includes('ink') || raw.includes('consumable')) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers, costings, transactions });
+      const { gumStockKg, coalStockKg, wireStockKg, inkStockKg } = kpis.consumablesStock;
+      
+      const speechMsg = `Consumables Stock: Gum powder has ${gumStockKg}, Boiler Coal has ${coalStockKg}, Stitching Wire has ${wireStockKg}, and Printing Ink has ${inkStockKg} in stock.`;
+      
+      showToast(`📦 Consumables & Boiler Inventory`, 'info', 8000, {
+        title: `Gum: ${gumStockKg} | Coal: ${coalStockKg} | Wire: ${wireStockKg} | Ink: ${inkStockKg}`,
+        desc: `Live non-paper consumable balance in warehouse`
+      });
+      speakFeedback(speechMsg);
+      return;
+    }
+    // =========================================================================
+    // 5.8 WIP ITEM-WISE BREAKDOWN (e.g. "Show me WIP item wise breakdown", "Which items in WIP")
+    // =========================================================================
+    if (raw.includes('wip item') || raw.includes('item wise wip') || raw.includes('items in wip') || (raw.includes('wip') && (raw.includes('item') || raw.includes('breakdown') || raw.includes('kaunse')))) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers, costings, transactions, plannedJobs });
+      const { wipItemBreakdown } = kpis.production;
+      
+      if (wipItemBreakdown.length > 0) {
+        const summaryList = wipItemBreakdown.slice(0, 4).map(i => `${i.itemName} (${i.remainingSheets.toLocaleString('en-IN')} pcs at ${i.stage})`).join(', ');
+        const fullDetails = wipItemBreakdown.map(i => `• ${i.itemName} (#${i.jobNo}): ${i.completedSheets.toLocaleString('en-IN')}/${i.scheduledSheets.toLocaleString('en-IN')} done (${i.remainingSheets.toLocaleString('en-IN')} bal @ ${i.stage})`).join('\n');
+        
+        const speechMsg = `There are ${wipItemBreakdown.length} items active in WIP: ${summaryList}.`;
+        showToast(`🏭 WIP Item-Wise Breakdown`, 'success', 9000, {
+          title: `${wipItemBreakdown.length} Active Items in WIP`,
+          desc: fullDetails
+        });
+        if (setActiveTab) setActiveTab('wip_tracker');
+        speakFeedback(speechMsg);
+        return;
+      } else {
+        const msg = `There are currently no active jobs in the WIP machine stages.`;
+        showToast(`🟢 WIP Queue Clear`, 'info', 6000);
+        speakFeedback(msg);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 5.9 PLANNING SCHEDULE (Today & Tomorrow Machine-Wise Breakdown)
+    // =========================================================================
+    if (raw.includes('planning for today') || raw.includes('planning for tomorrow') || raw.includes('what\'s the planning') || raw.includes('what is the planning') || raw.includes('planned for today') || raw.includes('planned for tomorrow') || raw.includes('aaj ka planning') || raw.includes('kal ka planning') || (raw.includes('planning') && (raw.includes('today') || raw.includes('tomorrow') || raw.includes('schedule') || raw.includes('aaj') || raw.includes('kal')))) {
+      const kpis = calculateFactoryKPIs({ orders, inventory, items, production, wipStages, wastageLogs, companies, customers, costings, transactions, plannedJobs });
+      const { totalQueuedJobs, totalPlannedBoxes, machineWisePlanning } = kpis.planning;
+      
+      if (totalQueuedJobs > 0 && machineWisePlanning.length > 0) {
+        const machineSummaries = machineWisePlanning.map(m => `${m.machine}: ${m.jobsCount} jobs (${m.totalQty.toLocaleString('en-IN')} boxes: ${m.itemsSummary})`).join(' | ');
+        const speechMsg = `Planning Schedule: ${totalQueuedJobs} jobs queued totaling ${totalPlannedBoxes.toLocaleString('en-IN')} boxes. ${machineWisePlanning.map(m => `${m.machine} has ${m.jobsCount} jobs totaling ${m.totalQty.toLocaleString('en-IN')} pcs`).join(', ')}.`;
+        
+        showToast(`📅 Machine-Wise Planning Schedule`, 'success', 9000, {
+          title: `${totalQueuedJobs} Planned Jobs (${totalPlannedBoxes.toLocaleString('en-IN')} Boxes)`,
+          desc: machineSummaries
+        });
+        if (setActiveTab) setActiveTab('planning');
+        speakFeedback(speechMsg);
+        return;
+      } else {
+        const speechMsg = `No jobs are currently scheduled in the planning queues. Would you like me to create a job?`;
+        showToast(`📅 Planning Queue Empty`, 'info', 6000, {
+          title: `0 Jobs Queued`,
+          desc: `Say "Create job for [Item] [Qty]" to queue a job automatically.`
+        });
+        if (setActiveTab) setActiveTab('planning');
+        speakFeedback(speechMsg);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 5.10 AUTOMATIC VOICE JOB CREATION & QUEUING
+    // =========================================================================
+    if (raw.startsWith('create job') || raw.startsWith('plan job') || raw.startsWith('add job') || raw.startsWith('new job') || raw.includes('job banao') || raw.includes('job card banao') || (raw.includes('create') && raw.includes('job'))) {
+      let query = raw
+        .replace(/\b(create|plan|add|new|make|schedule|job\s*card|job|for|boxes|pcs|sheets|pieces|banao)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const qtyMatch = query.match(/\b\d{2,7}\b/);
+      const parsedQty = qtyMatch ? parseInt(qtyMatch[0]) : null;
+      const cleanItemQuery = query.replace(/\b\d{2,7}\b/g, '').trim();
+
+      let matchedItem = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(cleanItemQuery));
+      if (!matchedItem && cleanItemQuery) {
+        matchedItem = items.find(i => (i.name || i.Item_Name || '').toLowerCase().startsWith(cleanItemQuery.slice(0, 4)));
+      }
+
+      if (matchedItem && parsedQty) {
+        if (onCreateDirectJob) {
+          await onCreateDirectJob({
+            jobNo: `JOB-${Date.now().toString().slice(-6)}`,
+            companyId: activeUnitId || '',
+            customerId: '',
+            customerName: 'Voice Planned Job',
+            itemId: matchedItem.id,
+            itemName: matchedItem.name || matchedItem.Item_Name,
+            orderQty: parsedQty,
+            plannedUps: parseInt(matchedItem.ups || 1),
+            deliveryDate: new Date().toISOString().split('T')[0],
+            notes: 'Created via Voice Assistant'
+          });
+          const msg = `Created Job Card for ${parsedQty.toLocaleString('en-IN')} boxes of ${matchedItem.name || matchedItem.Item_Name} and added it to the planning queue.`;
+          showToast(`✨ Job Created Successfully`, 'success', 8000, {
+            title: `Job Queued: ${matchedItem.name || matchedItem.Item_Name}`,
+            desc: `Quantity: ${parsedQty.toLocaleString('en-IN')} pcs | Status: Queued in Planning & WIP Corrugation`
+          });
+          if (setActiveTab) setActiveTab('planning');
+          speakFeedback(msg);
+          return;
+        }
+      } else if (matchedItem && !parsedQty) {
+        const msg = `How many boxes of ${matchedItem.name || matchedItem.Item_Name} would you like to plan?`;
+        showToast(`❓ Specify Quantity`, 'info', 6000, {
+          title: matchedItem.name || matchedItem.Item_Name,
+          desc: `Please state the number of boxes to produce.`
+        });
+        speakFeedback(msg);
+        return;
+      } else {
+        if (onOpenCreateJobModal) {
+          onOpenCreateJobModal();
+          const msg = `Opening Job Creation form. Please select the box item and quantity.`;
+          showToast(`➕ Opening Job Creation`, 'info', 5000);
+          speakFeedback(msg);
+          return;
+        }
+      }
+    }
+
+    // =========================================================================
+    // 5.11 ATTACH / MOUNT REEL TO JOB VIA VOICE
+    // =========================================================================
+    if (raw.includes('attach reel') || raw.includes('mount reel') || raw.includes('load reel') || raw.includes('reel lagao') || raw.includes('reel attach') || (raw.includes('reel') && (raw.includes('stand') || raw.includes('job')))) {
+      const reelMatch = raw.match(/\b(rl-\d+|\d{3,6})\b/i);
+      const reelTerm = reelMatch ? reelMatch[0].toLowerCase() : '';
+      
+      let matchedReel = inventory.find(r => 
+        (r.systemReelId || '').toLowerCase().includes(reelTerm) ||
+        (r.uniqueReelId || '').toLowerCase().includes(reelTerm) ||
+        String(r.reelNo || '').toLowerCase() === reelTerm ||
+        String(r.supplierReelNo || '').toLowerCase() === reelTerm
+      );
+
+      let stand = 'Top';
+      if (raw.includes('flute') || raw.includes('corrug')) stand = 'Flute(C)';
+      else if (raw.includes('back') || raw.includes('bottom')) stand = 'Backing(C)';
+
+      // Find active job
+      let targetOrder = orders.find(o => o.status === 'In Production') || orders[0];
+
+      if (matchedReel && targetOrder && onAttachReel) {
+        await onAttachReel(targetOrder.id, matchedReel, stand);
+        const speechMsg = `Attached Reel ${matchedReel.systemReelId || matchedReel.reelNo} to ${targetOrder.itemName || 'Production Job'} on ${stand} stand.`;
+        showToast(`📎 Reel Mounted to Job`, 'success', 8000, {
+          title: `Reel Mounted: ${matchedReel.systemReelId || matchedReel.reelNo}`,
+          desc: `Job: ${targetOrder.itemName} | Stand: ${stand} | Weight: ${matchedReel.balanceQty || matchedReel.receivedQty} kg`
+        });
+        if (setActiveTab) setActiveTab('production');
+        speakFeedback(speechMsg);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 5.12 START / LOG PRODUCTION JOB VIA VOICE
+    // =========================================================================
+    if (raw.startsWith('start production') || raw.startsWith('log production') || raw.startsWith('enter production') || raw.includes('production shuru') || raw.includes('production chalu')) {
+      let query = raw
+        .replace(/\b(start|log|enter|production|for|job|order|shuru|karo|chalu)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      let matchedOrder = orders.find(o => 
+        (o.itemName || '').toLowerCase().includes(query) ||
+        (o.orderNo || '').toLowerCase().includes(query)
+      ) || orders.find(o => o.status === 'Pending' || o.status === 'In Production');
+
+      if (matchedOrder && onStartProduction) {
+        onStartProduction(matchedOrder);
+        const speechMsg = `Starting production run for ${matchedOrder.itemName || matchedOrder.orderNo}. Opening production log.`;
+        showToast(`🏭 Production Run Started`, 'success', 8000, {
+          title: `Job: ${matchedOrder.itemName || matchedOrder.orderNo}`,
+          desc: `Quantity: ${matchedOrder.orderQty} pcs | Prefilled in Production Log`
+        });
+        if (setActiveTab) setActiveTab('production');
+        speakFeedback(speechMsg);
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 6. FINANCIALS & PENDING REVENUE (e.g. "Total pending order value", "Pending revenue", "Kitne ka order bacha hai")
+    // =========================================================================
+    if (raw.includes('revenue') || raw.includes('order value') || raw.includes('pending value') || raw.includes('valuation') || raw.includes('paisa') || raw.includes('kitne ka order')) {
+      const pendingOrders = orders.filter(o => o.status === 'Pending' || o.status === 'In Production');
+      const totalPendingValue = Math.round(pendingOrders.reduce((sum, o) => {
+        const qty = parseFloat(o.orderQty || 0);
+        const rate = parseFloat(o.rate || o.unitRate || 0);
+        return sum + (qty * rate);
+      }, 0));
+
+      const totalPcs = pendingOrders.reduce((sum, o) => sum + (parseFloat(o.orderQty || 0)), 0);
+
+      const msg = `You have ${pendingOrders.length} pending orders totaling ₹${totalPendingValue.toLocaleString('en-IN')} (${totalPcs.toLocaleString('en-IN')} boxes).`;
+      showToast(`💰 Pending Pipeline Valuation`, 'success', 8000, {
+        title: `Pending Value: ₹${totalPendingValue.toLocaleString('en-IN')}`,
+        desc: `Active Orders: ${pendingOrders.length} | Total Quantity: ${totalPcs.toLocaleString('en-IN')} boxes`
+      });
+      speakFeedback(`Total pending order value is ${totalPendingValue.toLocaleString('en-IN')} rupees across ${pendingOrders.length} orders.`);
+      return;
+    }
+
+    // =========================================================================
+    // 7. QUANTITY IN PRODUCTION / WIP STATUS (e.g. "How much quantity of 180ml IB is in production?", "Production me kitna maal hai")
+    // =========================================================================
+    const isProductionQuery = 
+      (raw.includes('production') || raw.includes('wip') || raw.includes('in progress') || raw.includes('corrugation') || raw.includes('maal')) &&
+      (raw.includes('how much') || raw.includes('how many') || raw.includes('quantity') || raw.includes('qty') || raw.includes('status') || raw.includes('what is') || raw.includes('check') || raw.includes('balance') || raw.includes('sheets') || raw.includes('boxes') || raw.includes('kitna'));
+
+    if (isProductionQuery) {
+      let query = raw
+        .replace(/\b(how\s*much|how\s*many|quantity|qty|boxes|sheets|pieces|what\s*is|the|status|of|for|in|production|wip|work\s*in\s*progress|currently|now|is|are|there|running|kitna|maal|hai)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      let matchingWip = wipStages.filter(w => {
+        if (!query) return true;
+        const name = String(w.itemName || '').toLowerCase();
+        const job = String(w.jobNo || '').toLowerCase();
+        return name.includes(query) || job.includes(query);
+      });
+
+      let matchingOrders = orders.filter(o => {
+        if (!query) return o.status === 'In Production';
+        const name = String(o.itemName || o.Item_Name || '').toLowerCase();
+        const ord = String(o.orderNo || o.poNumber || '').toLowerCase();
+        return (name.includes(query) || ord.includes(query)) && o.status === 'In Production';
+      });
+
+      if (matchingWip.length > 0 || matchingOrders.length > 0) {
+        let totalScheduledSheets = matchingWip.reduce((acc, w) => acc + (parseFloat(w.totalSheets || w.orderQty || 0)), 0);
+        let totalCompleted = matchingWip.reduce((acc, w) => acc + (parseFloat(w.completedSheets || 0)), 0);
+        let totalBalance = matchingWip.reduce((acc, w) => acc + (parseFloat(w.balanceQty || (parseFloat(w.totalSheets || 0) - parseFloat(w.completedSheets || 0)))), 0);
+        
+        if (totalScheduledSheets === 0 && matchingOrders.length > 0) {
+          totalScheduledSheets = matchingOrders.reduce((acc, o) => acc + (parseFloat(o.orderQty || 0)), 0);
+          totalBalance = totalScheduledSheets;
+        }
+
+        const stagesList = [...new Set(matchingWip.map(w => w.currentStage || 'Corrugation'))].join(', ') || 'In Production';
+        const itemLabel = query ? `"${query}"` : 'all active production';
+        const speechMsg = `Currently ${totalScheduledSheets.toLocaleString('en-IN')} pieces for ${itemLabel} are scheduled in production. ${totalCompleted.toLocaleString('en-IN')} completed, ${totalBalance.toLocaleString('en-IN')} remaining across ${stagesList}.`;
+        
+        showToast(`🏭 Production Status: ${itemLabel}`, 'success', 8000, {
+          title: `WIP / Production: ${itemLabel}`,
+          desc: `Total: ${totalScheduledSheets.toLocaleString('en-IN')} pcs | Done: ${totalCompleted.toLocaleString('en-IN')} | Remaining: ${totalBalance.toLocaleString('en-IN')} | Stages: ${stagesList}`
+        });
+        speakFeedback(speechMsg);
+        return;
+      } else {
+        const foundOrder = orders.find(o => String(o.itemName || '').toLowerCase().includes(query));
+        if (foundOrder) {
+          const msg = `Order ${foundOrder.orderNo || ''} for ${foundOrder.itemName} is currently ${foundOrder.status} (${foundOrder.orderQty} pcs).`;
+          showToast(`ℹ️ ${msg}`, 'info', 6000);
+          speakFeedback(msg);
+        } else {
+          showToast(`ℹ️ No active production found matching "${query || 'your query'}"`, 'info', 5000);
+          speakFeedback(`No active production found for ${query || 'this query'}`);
+        }
+        return;
+      }
+    }
+
+    // =========================================================================
+    // 8. PAPER REEL STOCK INQUIRIES (GSM, DECKLE, BF, WEIGHT)
+    // =========================================================================
+    const isPaperQuery = 
+      (raw.includes('paper') || raw.includes('reel') || raw.includes('gsm') || raw.includes('deckle') || raw.includes('kraft') || raw.includes('semi chemical') || raw.includes('semi-chemical') || (raw.includes('stock') && (raw.includes('kg') || raw.includes('ton') || raw.includes('bf')))) &&
+      (raw.includes('how much') || raw.includes('how many') || raw.includes('what') || raw.includes('available') || raw.includes('inventory') || raw.includes('stock') || raw.includes('total') || raw.includes('do we have') || raw.includes('do i have') || raw.includes('tell me') || raw.includes('kitna'));
+
+    if (isPaperQuery) {
+      const gsmMatch = raw.match(/\b(60|70|80|90|100|110|120|130|140|150|160|170|180|190|200|220|230|240|250|280|300|350|400)\s*(gsm|g)?\b/i);
+      const targetGsm = gsmMatch ? parseFloat(gsmMatch[1]) : null;
+
+      const bfMatch = raw.match(/\b(12|14|16|18|20|22|24|28|30|32|35|40)\s*(bf|burst)?\b/i);
+      const targetBf = (bfMatch && !targetGsm) || (bfMatch && gsmMatch && bfMatch[1] !== gsmMatch[1]) ? parseFloat(bfMatch[1]) : null;
+
+      const deckleMatch = raw.match(/\b(500|600|700|800|850|900|950|1000|1050|1100|1150|1200|1250|1300|1350|1400|1450|1500|1600|1700|1800|1900|2000)\s*(mm|deckle)?\b/i);
+      const targetDeckle = deckleMatch ? parseFloat(deckleMatch[1]) : null;
+
+      let matchingReels = inventory.filter(r => {
+        if (r.status === 'Consumed' || r.status === 'Archived' || (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0) <= 0)) return false;
+        if (targetGsm && Math.abs(parseFloat(r.gsm || 0) - targetGsm) > 5) return false;
+        if (targetBf && Math.abs(parseFloat(r.bf || 0) - targetBf) > 1) return false;
+        if (targetDeckle && Math.abs(parseFloat(r.size || r.deckleMm || r.deckle || 0) - targetDeckle) > 20) return false;
+        return true;
+      });
+
+      const totalWeightKg = Math.round(matchingReels.reduce((acc, r) => acc + (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0)), 0));
+      const totalTons = (totalWeightKg / 1000).toFixed(2);
+      const reelCount = matchingReels.length;
+
+      let descParts = [];
+      if (targetGsm) descParts.push(`${targetGsm} GSM`);
+      if (targetBf) descParts.push(`${targetBf} BF`);
+      if (targetDeckle) descParts.push(`${targetDeckle} mm Deckle`);
+      const filterDesc = descParts.length > 0 ? descParts.join(', ') : 'total paper stock';
+
+      let msg = '';
+      if (reelCount > 0) {
+        msg = `You have ${totalWeightKg.toLocaleString('en-IN')} kg (${totalTons} MT) of ${filterDesc} across ${reelCount} reel${reelCount > 1 ? 's' : ''} in stock.`;
+        showToast(`📜 Paper Stock: ${filterDesc}`, 'success', 8000, {
+          title: `Paper Stock: ${filterDesc}`,
+          desc: `Total: ${totalWeightKg.toLocaleString('en-IN')} kg (${totalTons} MT) | Reels: ${reelCount}`
+        });
+        speakFeedback(msg);
+      } else {
+        msg = `No available stock found for ${filterDesc}.`;
+        showToast(`⚠️ Paper Inventory: ${msg}`, 'warning', 6000);
+        speakFeedback(msg);
+      }
+      return;
+    }
+
+    // =========================================================================
+    // 9. FINISHED GOODS BOX STOCK
+    // =========================================================================
+    const isFgQuery = 
+      (raw.includes('finished') || raw.includes('fg') || raw.includes('ready for dispatch') || (raw.includes('box') && raw.includes('stock'))) &&
+      (raw.includes('how much') || raw.includes('how many') || raw.includes('stock') || raw.includes('what') || raw.includes('available'));
+
+    if (isFgQuery) {
+      let query = raw.replace(/\b(how\s*much|how\s*many|finished\s*goods|fg|boxes|box|stock|ready|for|dispatch|do|we|have|in|what|is|the|tell|me)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+      
+      let matchingOrders = orders.filter(o => {
+        if (!query) return true;
+        const name = String(o.itemName || o.Item_Name || '').toLowerCase();
+        return name.includes(query);
+      });
+
+      let readyQty = 0;
+      matchingOrders.forEach(o => {
+        const orderProduction = production.filter(p => p.orderId === o.id);
+        const prodTotal = orderProduction.reduce((acc, p) => acc + (parseFloat(p.quantityProduced || p.qty || 0)), 0);
+        const dispatched = parseFloat(o.dispatchedQty || o.dispatchQty || 0);
+        const inStock = Math.max(0, prodTotal - dispatched);
+        readyQty += inStock;
+      });
+
+      const label = query ? `"${query}"` : 'all finished products';
+      const msg = `${readyQty.toLocaleString('en-IN')} finished boxes are ready in stock for ${label}.`;
+      showToast(`📦 FG Stock: ${label}`, 'success', 7000, {
+        title: `Finished Goods Inventory`,
+        desc: `${readyQty.toLocaleString('en-IN')} finished boxes ready for dispatch.`
+      });
+      speakFeedback(msg);
+      return;
+    }
+
+    // =========================================================================
+    // 10. PENDING ORDERS / CUSTOMER ORDERS SUMMARY
+    // =========================================================================
+    if (raw.includes('pending order') || raw.includes('how many orders') || raw.includes('total orders') || raw.includes('orders for') || raw.includes('kitne order')) {
+      let query = raw.replace(/\b(how\s*many|total|pending|orders|order|for|are|there|do|we|have|what|is|the|tell|me|kitne|hai)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+      
+      let targetOrders = orders.filter(o => {
+        if (query) {
+          const cust = String(o.customerName || '').toLowerCase();
+          const item = String(o.itemName || '').toLowerCase();
+          return (cust.includes(query) || item.includes(query));
+        }
+        return o.status === 'Pending' || o.status === 'In Production';
+      });
+
+      const totalOrderQty = targetOrders.reduce((acc, o) => acc + (parseFloat(o.orderQty || 0)), 0);
+      const count = targetOrders.length;
+      const label = query ? `for "${query}"` : `currently pending`;
+      const msg = `There are ${count} order${count === 1 ? '' : 's'} (${totalOrderQty.toLocaleString('en-IN')} pcs) ${label}.`;
+      
+      showToast(`🛒 Orders Pipeline: ${label}`, 'success', 7000, {
+        title: `Pending Orders Summary`,
+        desc: `${count} orders | ${totalOrderQty.toLocaleString('en-IN')} boxes`
+      });
+      speakFeedback(msg);
+      return;
+    }
+
+    // =========================================================================
+    // 11. NAVIGATION INTENTS
+    // =========================================================================
+    if (raw.includes('order') || raw.includes('po ') || raw.includes('purchase order')) {
+      if (canAccess && !canAccess(currentUser?.role, 'orders')) {
+        showToast('Access denied: You do not have permission to view Orders', 'error');
+        speakFeedback('Access restricted for Orders');
+        return;
+      }
+      setActiveTab('orders');
+      showToast(`🎙️ Navigating to Orders ("${transcript}")`, 'success');
+      speakFeedback('Opening Orders');
+      return;
+    }
+
+    if (raw.includes('box') || raw.includes('database') || raw.includes('items') || raw.includes('specification') || raw.includes('item')) {
+      if (canAccess && !canAccess(currentUser?.role, 'items')) {
+        showToast('Access denied: You do not have permission to view Box Database', 'error');
+        speakFeedback('Access restricted for Box Database');
+        return;
+      }
+      setActiveTab('items');
+      showToast(`🎙️ Navigating to Box Database ("${transcript}")`, 'success');
+      speakFeedback('Opening Box Database');
+      return;
+    }
+
+    if (raw.includes('inventory') || raw.includes('stock') || raw.includes('reel') || raw.includes('paper stock')) {
+      if (canAccess && !canAccess(currentUser?.role, 'inventory')) {
+        showToast('Access denied: You do not have permission to view Inventory', 'error');
+        speakFeedback('Access restricted for Inventory');
+        return;
+      }
+      setActiveTab('inventory');
+      showToast(`🎙️ Navigating to Stock Inventory ("${transcript}")`, 'success');
+      speakFeedback('Opening Stock Inventory');
+      return;
+    }
+
+    if (raw.includes('wip') || raw.includes('tracker') || raw.includes('work in progress') || raw.includes('stage')) {
+      if (canAccess && !canAccess(currentUser?.role, 'wip_tracker')) {
+        showToast('Access denied: You do not have permission to view WIP Tracker', 'error');
+        speakFeedback('Access restricted');
+        return;
+      }
+      setActiveTab('wip_tracker');
+      showToast(`🎙️ Navigating to WIP Tracker ("${transcript}")`, 'success');
+      speakFeedback('Opening WIP Tracker');
+      return;
+    }
+
+    if (raw.includes('production') || raw.includes('corrugation log') || raw.includes('machine log')) {
+      if (canAccess && !canAccess(currentUser?.role, 'production')) {
+        showToast('Access denied: You do not have permission to view Production', 'error');
+        speakFeedback('Access restricted');
+        return;
+      }
+      setActiveTab('production');
+      showToast(`🎙️ Navigating to Production Log ("${transcript}")`, 'success');
+      speakFeedback('Opening Production Log');
+      return;
+    }
+
+    if (raw.includes('planning') || raw.includes('schedule') || raw.includes('job card')) {
+      if (canAccess && !canAccess(currentUser?.role, 'planning')) {
+        showToast('Access denied: You do not have permission to view Planning', 'error');
+        speakFeedback('Access restricted');
+        return;
+      }
+      setActiveTab('planning');
+      showToast(`🎙️ Navigating to Planning Sheet ("${transcript}")`, 'success');
+      speakFeedback('Opening Planning');
+      return;
+    }
+
+    if (raw.includes('calculator') || raw.includes('deckle') || raw.includes('cutting blank')) {
+      setActiveTab('calculator');
+      showToast(`🎙️ Navigating to Calculator ("${transcript}")`, 'success');
+      speakFeedback('Opening Deckle Calculator');
+      return;
+    }
+
+    if (raw.includes('costing') || raw.includes('price') || raw.includes('cost')) {
+      setActiveTab('costing');
+      showToast(`🎙️ Navigating to Cost Calculator ("${transcript}")`, 'success');
+      speakFeedback('Opening Cost Calculator');
+      return;
+    }
+
+    if (raw.includes('finished') || raw.includes('dispatch') || raw.includes('delivery') || raw.includes('fg')) {
+      setActiveTab('finished_goods');
+      showToast(`🎙️ Navigating to Finished Goods ("${transcript}")`, 'success');
+      speakFeedback('Opening Finished Goods');
+      return;
+    }
+
+    if (raw.includes('report') || raw.includes('summary') || raw.includes('analytics')) {
+      setActiveTab('reports');
+      showToast(`🎙️ Navigating to Daily Reports ("${transcript}")`, 'success');
+      speakFeedback('Opening Reports');
+      return;
+    }
+
+    if (raw.includes('customer') || raw.includes('client')) {
+      setActiveTab('customers');
+      showToast(`🎙️ Navigating to Job Work Clients ("${transcript}")`, 'success');
+      speakFeedback('Opening Clients');
+      return;
+    }
+
+    if (raw.includes('power') || raw.includes('fuel') || raw.includes('wastage') || raw.includes('gum') || raw.includes('energy')) {
+      setActiveTab('wastage');
+      showToast(`🎙️ Navigating to Power & Fuel / Wastage ("${transcript}")`, 'success');
+      speakFeedback('Opening Power and Fuel');
+      return;
+    }
+
+    if (raw.includes('dashboard') || raw.includes('home') || raw.includes('overview')) {
+      setActiveTab('dashboard');
+      showToast(`🎙️ Navigating to Dashboard ("${transcript}")`, 'success');
+      speakFeedback('Opening Dashboard');
+      return;
+    }
+
+    if (raw.includes('log') || raw.includes('audit') || raw.includes('activity')) {
+      setActiveTab('logs');
+      showToast(`🎙️ Navigating to Activity Logs ("${transcript}")`, 'success');
+      speakFeedback('Opening Activity Logs');
+      return;
+    }
+
+    if (raw.includes('user') || raw.includes('access') || raw.includes('permission')) {
+      setActiveTab('users');
+      showToast(`🎙️ Navigating to Users & Access ("${transcript}")`, 'success');
+      speakFeedback('Opening Users');
+      return;
+    }
+
+    if (raw.includes('unit') || raw.includes('plant') || raw.includes('company')) {
+      const matchedCompany = companies.find(c => raw.includes(c.name.toLowerCase()));
+      if (matchedCompany && setActiveUnitId) {
+        setActiveUnitId(matchedCompany.id);
+        showToast(`🎙️ Switched to unit "${matchedCompany.name}"`, 'success');
+        speakFeedback(`Switched to ${matchedCompany.name}`);
+        return;
+      } else if (raw.includes('all') && setActiveUnitId) {
+        setActiveUnitId('');
+        showToast(`🎙️ Switched to All Units (Consolidated)`, 'success');
+        speakFeedback('Switched to all units');
+        return;
+      }
+      setActiveTab('companies');
+      showToast(`🎙️ Navigating to My Units ("${transcript}")`, 'success');
+      speakFeedback('Opening Units');
+      return;
+    }
+
+    // =========================================================================
+    // 12. UNKNOWN COMMAND FALLBACK
+    // =========================================================================
+    showToast(`❓ Unrecognized command: "${transcript}". Say "Help" to see all commands.`, 'warning', 6000);
+    speakFeedback('Command not recognized. Say help for commands.');
+  };
+
+  const toggleAssistant = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (!isSupported) {
+      alert('Speech Recognition is not supported in this browser. Please use Google Chrome, Edge, or Safari.');
+      return;
+    }
+
+    if (isListening) {
+      try { recognitionRef.current?.stop(); } catch (err) {}
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRec();
+    recognitionRef.current = recognition;
+
+    recognition.lang = 'en-IN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      playBeepSound();
+      showToast('🎙️ Listening... (Ask about Job Cards, Paper Stock, WIP, Wastage, or Say "Help")', 'info', 7000);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      console.warn('Voice assistant error:', event?.error);
+      setIsListening(false);
+      if (event?.error === 'not-allowed') {
+        showToast('❌ Microphone permission denied', 'error');
+      }
+    };
+
+    recognition.onresult = (event) => {
+      if (event.results && event.results[0] && event.results[0][0]) {
+        const transcript = (event.results[0][0].transcript || '').trim();
+        if (transcript) {
+          executeCommand(transcript);
+        }
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.warn('Failed to start voice assistant:', err);
+      setIsListening(false);
+    }
+  };
+
+  if (!isSupported) return null;
+
+  return (
+    <>
+      {/* Floating System Voice Command Action Button */}
+      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 10 }}>
+        {isListening && (
+          <div style={{
+            background: 'rgba(15, 23, 42, 0.95)',
+            color: '#fff',
+            padding: '8px 14px',
+            borderRadius: 24,
+            fontSize: 12,
+            fontWeight: 700,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(244, 63, 94, 0.4)'
+          }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f43f5e', animation: 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite' }} />
+            <span>Listening... (Say "Help", "Job Card for [Item]", "How much 150 GSM paper?")</span>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setShowHelpModal(true)}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: '50%',
+            background: '#334155',
+            color: '#94a3b8',
+            border: '1px solid #475569',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            fontWeight: 800,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+          }}
+          title="Voice Command Reference Guide"
+        >
+          ?
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleAssistant}
+          style={{
+            width: 54,
+            height: 54,
+            borderRadius: '50%',
+            background: isListening ? 'linear-gradient(135deg, #ef4444, #e11d48)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+            color: '#fff',
+            border: 'none',
+            boxShadow: isListening ? '0 0 24px rgba(239, 68, 68, 0.7)' : '0 8px 24px rgba(37, 99, 235, 0.45)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            transform: isListening ? 'scale(1.08)' : 'scale(1)'
+          }}
+          title={isListening ? 'Stop listening' : '🎙️ System Voice Assistant (Alt + V) - Click and speak any command'}
+        >
+          {isListening ? (
+            <MicOff style={{ width: 24, height: 24 }} />
+          ) : (
+            <Mic style={{ width: 24, height: 24 }} />
+          )}
+        </button>
+      </div>
+
+      {/* Floating HUD Command Notification Toast */}
+      {feedbackToast && (
+        <div style={{
+          position: 'fixed',
+          top: 20,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10000,
+          background: feedbackToast.type === 'error' ? '#991b1b' : (feedbackToast.type === 'warning' ? '#854d0e' : (feedbackToast.type === 'success' ? '#0f172a' : '#0f172a')),
+          color: '#fff',
+          padding: '12px 22px',
+          borderRadius: 16,
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow: '0 12px 36px rgba(0,0,0,0.35)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          maxWidth: '92vw',
+          border: feedbackToast.type === 'success' ? '1.5px solid #38bdf8' : (feedbackToast.type === 'warning' ? '1.5px solid #fbbf24' : '1.5px solid rgba(255,255,255,0.15)'),
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800 }}>
+            <span>{feedbackToast.message}</span>
+          </div>
+          {feedbackToast.details && (
+            <div style={{ fontSize: 11, color: '#94a3b8', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 4, marginTop: 2 }}>
+              <strong style={{ color: '#38bdf8' }}>{feedbackToast.details.title}: </strong> {feedbackToast.details.desc}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Voice Commands Cheat Sheet Modal */}
+      {showHelpModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 10001,
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16
+        }}>
+          <div style={{
+            background: '#1e293b',
+            color: '#fff',
+            borderRadius: 16,
+            width: '100%',
+            maxWidth: 680,
+            maxHeight: '85vh',
+            overflowY: 'auto',
+            padding: 24,
+            border: '1px solid #334155',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #334155', paddingBottom: 12, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 22 }}>🎙️</span>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#38bdf8' }}>Voice Assistant Command Guide</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', fontWeight: 800 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* GEMINI AI INTEGRATION SETTINGS */}
+            <div style={{ background: '#0f172a', border: '1.5px solid #6366f1', borderRadius: 12, padding: 14, marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Sparkles style={{ width: 16, height: 16, color: '#818cf8' }} />
+                  <span style={{ fontSize: 13, fontWeight: 800, color: '#e0e7ff' }}>Google Gemini 2.0 Flash AI Engine</span>
+                </div>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  background: isGeminiConfigured() ? '#065f46' : '#78350f',
+                  color: isGeminiConfigured() ? '#6ee7b7' : '#fde68a'
+                }}>
+                  {isGeminiConfigured() ? '🟢 AI Connected' : '🟠 Fallback Pattern Mode'}
+                </span>
+              </div>
+              <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '0 0 10px 0' }}>
+                Enables natural language reasoning across all orders, WIP stages, paper stock, and complex Box BOM voice dictation.
+              </p>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    type="password"
+                    placeholder={isGeminiConfigured() ? '••••••••••••••••••••••••' : 'Paste Gemini API Key (AIzaSy...)'}
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '7px 10px',
+                      background: '#1e293b',
+                      border: '1px solid #475569',
+                      borderRadius: 8,
+                      color: '#fff',
+                      fontSize: 12,
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (apiKeyInput.trim()) {
+                      setGeminiApiKey(apiKeyInput.trim());
+                      setApiKeyInput('');
+                      alert('✓ Gemini API Key saved successfully! Full conversational AI & Box Dictation is now active.');
+                    } else if (isGeminiConfigured()) {
+                      setGeminiApiKey('');
+                      alert('Gemini API Key removed. Reverted to fast native pattern mode.');
+                    }
+                  }}
+                  className="apex-btn apex-btn-primary"
+                  style={{ padding: '7px 14px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', background: '#4f46e5' }}
+                >
+                  {apiKeyInput.trim() ? 'Save Key' : (isGeminiConfigured() ? 'Remove Key' : 'Save')}
+                </button>
+              </div>
+              {!isGeminiConfigured() && (
+                <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 6 }}>
+                  Free key in 30 sec: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline', fontWeight: 600 }}>Get Free API Key from Google AI Studio →</a>
+                </div>
+              )}
+            </div>
+
+            <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
+              Click the microphone (or press <strong style={{ color: '#fff' }}>Alt + V</strong>) and speak naturally. The assistant understands English &amp; Hinglish:
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+              {/* Card 1: Job Cards & Planning */}
+              <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', marginBottom: 6 }}>📅 Planning &amp; Job Cards</div>
+                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: '#cbd5e1', lineHeight: '1.6' }}>
+                  <li><em>"What's the planning for today / tomorrow?"</em></li>
+                  <li><em>"Create job for 180ml IB Master 5000 boxes"</em></li>
+                  <li><em>"Plan 10000 boxes of Radico 750ml"</em></li>
+                  <li><em>"Open job card for ORD-1002 / Radico"</em></li>
+                </ul>
+              </div>
+
+              {/* Card 2: WIP & Reports */}
+              <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#34d399', marginBottom: 6 }}>🏭 WIP Item Breakdown &amp; Reports</div>
+                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: '#cbd5e1', lineHeight: '1.6' }}>
+                  <li><em>"Show me WIP item wise breakdown"</em></li>
+                  <li><em>"Where is production stuck? (Bottlenecks)"</em></li>
+                  <li><em>"Daily production report"</em></li>
+                  <li><em>"How much produced today?"</em></li>
+                </ul>
+              </div>
+
+              {/* Card 3: Paper Stock & Consumables */}
+              <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24', marginBottom: 6 }}>📜 Paper Stock &amp; Consumables</div>
+                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: '#cbd5e1', lineHeight: '1.6' }}>
+                  <li><em>"How much 150 GSM paper in stock?"</em></li>
+                  <li><em>"Status of reel RL-00012"</em></li>
+                  <li><em>"How much gum, coal, wire, and ink left?"</em></li>
+                  <li><em>"Show aging reels / Low stock reels"</em></li>
+                </ul>
+              </div>
+
+              {/* Card 4: Wastage, Fuel & Cost/KG */}
+              <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#f43f5e', marginBottom: 6 }}>💰 Costing, Wastage &amp; Fuel</div>
+                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: '#cbd5e1', lineHeight: '1.6' }}>
+                  <li><em>"What is the cost of 180ml IB Master?"</em></li>
+                  <li><em>"How much cost per kg am I using?"</em></li>
+                  <li><em>"Show me monthly wastage and fuel usage"</em></li>
+                  <li><em>"Total pending order value"</em></li>
+                </ul>
+              </div>
+
+              {/* Card 5: Navigation */}
+              <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155', gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#c084fc', marginBottom: 6 }}>🏢 Quick Navigation &amp; Unit Switch</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11 }}>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Go to Orders"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Go to Box Database"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Go to Inventory"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Go to WIP Tracker"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Go to Planning"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Switch to unit Nashik"</span>
+                  <span style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 6 }}>"Switch to all units"</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 18, textAlign: 'right' }}>
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(false)}
+                className="apex-btn apex-btn-primary"
+                style={{ padding: '8px 20px', fontSize: 12, fontWeight: 700 }}
+              >
+                Got it!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 // --- PRINTABLE BARCODE LABEL MODAL ---
 // Ultra-Fast O(1) Cached System Reel ID Formatter (Series RL-00001, RL-00002, ...)
@@ -111,16 +1618,13 @@ function formatSystemReelId(r, allInventory = []) {
 
 
 function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [] }) {
-  if (!isOpen || !data) return null;
-
-  // Handle single item or array of items
-  const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
-  if (baseItems.length === 0) return null;
-
   const [printMode, setPrintMode] = useState('a4_grid'); // 'a4_grid' | 'single'
   const [copiesPerItem, setCopiesPerItem] = useState(1); // Default 1 sticker per reel
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 16 slots
+
+  // Handle single item or array of items
+  const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
 
   // Build the list of active items to print
   const effectiveItems = [];
@@ -324,6 +1828,8 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 </html>`);
     printWin.document.close();
   };
+
+  if (!isOpen || !data || baseItems.length === 0) return null;
 
   return (
     <div className="barcode-print-modal-overlay fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:static print:inset-auto">
@@ -625,6 +2131,13 @@ const getSetComponents = (item) => {
   if (!item || !item.setComponents) return [];
   if (Array.isArray(item.setComponents)) return item.setComponents;
   if (typeof item.setComponents === 'string') return safeJsonParse(item.setComponents, []);
+  return [];
+};
+
+export const getItemLayers = (item) => {
+  if (!item || !item.layers) return [];
+  if (Array.isArray(item.layers)) return item.layers;
+  if (typeof item.layers === 'string') return safeJsonParse(item.layers, []);
   return [];
 };
 
@@ -990,8 +2503,6 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
     };
   }, [isOpen, scanTab]);
 
-  if (!isOpen) return null;
-
   const processScannedCode = (rawCode) => {
     let query = String(rawCode || '').trim();
     if (!query) return;
@@ -1113,6 +2624,8 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
   // Input style shorthand
   const inp = { background: '#0f172a', color: '#fff', border: '1px solid #334155', borderRadius: 6, padding: '7px 10px', fontSize: 13, width: '100%' };
   const sel = { ...inp, cursor: 'pointer' };
+
+  if (!isOpen) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 12 }}>
@@ -1754,7 +3267,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                   <td>{renderCell('size', r.size, 'number')}</td>
                   <td>{renderCell('gsm', r.gsm, 'number')}</td>
                   <td>{renderCell('bf', r.bf, 'number')}</td>
-                  <td>{renderCell('colour', r.colour || 'Kraft', 'select', ['Kraft', 'Golden', 'White'])}</td>
+                  <td>{renderCell('colour', r.colour || 'Kraft', 'select', ['Kraft', 'Golden', 'Duplex'])}</td>
                   <td>{renderCell('receivedQty', r.receivedQty, 'number')}</td>
                   <td style={{ fontWeight: 800, color: isAvailable ? '#16a34a' : '#94a3b8' }}>
                     {(r.balanceQty || 0).toFixed(1)} kg
@@ -2114,6 +3627,7 @@ export default function App() {
   const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
   const [createDirectJobModalOpen, setCreateDirectJobModalOpen] = useState(false);
   const [printTagData, setPrintTagData] = useState(null);
+  const [voiceJobCardOrder, setVoiceJobCardOrder] = useState(null);
   const [activeUnitId, setActiveUnitId] = useState(() => localStorage.getItem('apex_activeUnitId') || '');
 
   const handleCreateDirectJob = async (jobData) => {
@@ -2269,7 +3783,11 @@ export default function App() {
       ]);
       setErpUsers(users);
       setCompanies(comps);
-      setItems(itms.map(i => ({ ...i, setComponents: safeJsonParse(i.setComponents, []) })));
+      setItems(itms.map(i => ({
+        ...i,
+        setComponents: safeJsonParse(i.setComponents, []),
+        layers: typeof i.layers === 'string' ? safeJsonParse(i.layers, null) : (i.layers || null)
+      })));
       setProduction(prod.map(p => ({ ...p, consumedReels: safeJsonParse(p.consumedReels, []) })));
       setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
       setWastageLogs(wst);
@@ -2695,6 +4213,40 @@ export default function App() {
         type={printTagData?.type}
         data={printTagData?.data}
         allInventory={inventory}
+      />
+      {voiceJobCardOrder && (
+        <JobCardViewModal
+          order={voiceJobCardOrder}
+          item={items.find(i => i.id === voiceJobCardOrder.itemId || i.name === voiceJobCardOrder.itemName || i.Item_Name === voiceJobCardOrder.itemName)}
+          company={companies.find(c => c.id === voiceJobCardOrder.companyId)}
+          customer={customers.find(c => c.id === voiceJobCardOrder.customerId)}
+          onClose={() => setVoiceJobCardOrder(null)}
+          onDownloadPdf={typeof generateJobCard === 'function' ? generateJobCard : null}
+        />
+      )}
+      <GlobalVoiceAssistant
+        setActiveTab={setActiveTab}
+        activeTab={activeTab}
+        companies={companies}
+        activeUnitId={activeUnitId}
+        setActiveUnitId={setActiveUnitId}
+        canAccess={canAccess}
+        currentUser={currentErpUser}
+        orders={orders}
+        inventory={inventory}
+        items={items}
+        production={production}
+        wipStages={wipStages}
+        customers={customers}
+        wastageLogs={wastageLogs}
+        transactions={transactions}
+        costings={costings}
+        plannedJobs={plannedJobs}
+        onCreateDirectJob={handleCreateDirectJob}
+        onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)}
+        onAttachReel={handleAttachReelToJob}
+        onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }}
+        onOpenJobCard={(order) => setVoiceJobCardOrder(order)}
       />
       <main className={`apex-main ${activeTab === 'dashboard' ? 'dash-mode' : ''}`}>
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
@@ -3400,6 +4952,345 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Flute Engineering Factors Table
+export const FLUTE_FACTORS = {
+  'A': 1.52,
+  'B': 1.35,
+  'C': 1.43,
+  'E': 1.27,
+  'BC': 1.39,
+  'AB': 1.44
+};
+
+export const getBoardCaliperMm = (plyNum, fluteType = 'B') => {
+  const ply = parseInt(plyNum, 10) || 3;
+  if (ply === 2) return 2.0;
+  if (ply === 3) {
+    if (fluteType === 'E') return 1.5;
+    if (fluteType === 'C') return 4.0;
+    if (fluteType === 'A') return 4.8;
+    return 3.0; // B-flute default
+  }
+  if (ply === 5) {
+    if (fluteType === 'BC') return 6.8;
+    if (fluteType === 'AB') return 7.5;
+    if (fluteType === 'E') return 3.0;
+    return 6.5; // 5-ply default
+  }
+  if (ply >= 7) return 10.5;
+  return 3.0;
+};
+
+// Helper to generate default layers when missing
+export const generateDefaultPaperLayers = (plyStr = '3', flute = 'B') => {
+  const ply = parseInt(plyStr, 10) || 3;
+  const fFactor = FLUTE_FACTORS[flute] || 1.35;
+  if (ply === 2) {
+    return [
+      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+      { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor }
+    ];
+  }
+  if (ply === 5) {
+    const f1 = flute.includes('BC') ? 1.35 : (flute.includes('AB') ? 1.52 : fFactor);
+    const f2 = flute.includes('BC') ? 1.43 : (flute.includes('AB') ? 1.35 : (fFactor === 1.35 ? 1.43 : fFactor));
+    return [
+      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+      { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f1 },
+      { name: '3. Middle Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+      { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f2 },
+      { name: '5. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+    ];
+  }
+  if (ply === 7) {
+    return [
+      { name: '1. Top Liner', type: 'Golden', gsm: '200', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+      { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.35 },
+      { name: '3. Middle Liner 1', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+      { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.43 },
+      { name: '5. Middle Liner 2', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+      { name: '6. Flute Medium 3', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.52 },
+      { name: '7. Bottom Liner', type: 'Kraft', gsm: '180', bf: '20', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+    ];
+  }
+  // 3-ply default
+  return [
+    { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+    { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor },
+    { name: '3. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+  ];
+};
+
+// --- CAD 2D FLAT BLANK & BOARD STRUCTURE VISUALIZERS ---
+export function CadBlankDiagram({ item, title = 'Interactive CAD 2D Flat Blank & Creasing Schematic' }) {
+  if (!item) return null;
+  const rawSize = String(item.size || item.Size_mm || item.innerSize || '').trim();
+  const parts = rawSize.split(/[xX*×\s,]+/).map(p => parseFloat(p)).filter(p => !isNaN(p) && p > 0);
+  let L = parts[0] || (parseFloat(item.lengthMm) || 350);
+  let W = parts[1] || (parseFloat(item.widthMm) || 250);
+  let H = parts[2] || (parseFloat(item.heightMm) || 200);
+
+  const itemType = item.itemType || item.Item_Type || 'Box';
+  const jointType = item.jointType || 'Stitching (35mm)';
+  const lap = jointType.includes('Gluing') ? 30 : (jointType.includes('Interlock') || jointType.includes('None') ? 0 : 35);
+  const flap = Math.round(W / 2 + 3);
+  const totalDeckle = item.deckleMm ? parseFloat(item.deckleMm) : (flap * 2 + H);
+  const totalCutLength = item.cutLengthMm ? parseFloat(item.cutLengthMm) : (lap + (2 * L) + (2 * W));
+  const itemName = item.name || item.Item_Name || 'Box Item';
+  const ply = item.ply || item.Ply || 3;
+  const flute = item.fluteType || item.Flute_Type || 'B';
+
+  if (itemType === 'Sheet') {
+    const sW = W || 600;
+    const sL = L || 800;
+    const pad = 40;
+    const vbW = sL + (pad * 2);
+    const vbH = sW + (pad * 2);
+    return (
+      <div style={{ background: '#0f172a', borderRadius: 10, padding: '16px', color: '#fff', marginBottom: 16, border: '1.5px solid #334155' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 16 }}>📄</span>
+            <strong style={{ fontSize: 13, color: '#38bdf8' }}>{title}</strong>
+            <span style={{ fontSize: 10, background: '#1e293b', padding: '2px 8px', borderRadius: 4, color: '#94a3b8' }}>CORRUGATED SHEET</span>
+          </div>
+          <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: '#a5f3fc' }}>
+            Deckle (W): <strong style={{ color: '#38bdf8' }}>{sW} mm</strong> × Cut Length (L): <strong style={{ color: '#4ade80' }}>{sL} mm</strong>
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto', textAlign: 'center', background: '#0b1120', borderRadius: 8, padding: 14, border: '1px solid #1e293b' }}>
+          <svg viewBox={`0 0 ${vbW} ${vbH}`} style={{ width: '100%', maxWidth: 650, height: 'auto', display: 'block', margin: '0 auto' }}>
+            <defs>
+              <pattern id="sheetCadGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#1e293b" strokeWidth="0.8" />
+              </pattern>
+              <marker id="sheetArrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8" />
+              </marker>
+            </defs>
+            <rect x="0" y="0" width={vbW} height={vbH} fill="#0b1120" />
+            <rect x={pad} y={pad} width={sL} height={sW} fill="url(#sheetCadGrid)" stroke="#38bdf8" strokeWidth="2" rx="4" />
+            {/* Flute direction indication */}
+            <g opacity="0.4">
+              {Array.from({ length: Math.min(12, Math.floor(sL / 60)) }).map((_, idx) => (
+                <line key={idx} x1={pad + 30 + (idx * 60)} y1={pad + 15} x2={pad + 30 + (idx * 60)} y2={pad + sW - 15} stroke="#38bdf8" strokeWidth="1" strokeDasharray="4 4" />
+              ))}
+            </g>
+            <text x={pad + sL / 2} y={pad + sW / 2 - 8} fill="#f8fafc" fontSize="14" fontWeight="bold" textAnchor="middle">
+              {itemName}
+            </text>
+            <text x={pad + sL / 2} y={pad + sW / 2 + 14} fill="#38bdf8" fontSize="12" fontFamily="var(--font-mono)" textAnchor="middle">
+              Cut Length {sL} mm × Deckle {sW} mm • {ply}-Ply ({flute} Flute)
+            </text>
+            <line x1={pad} y1={pad - 14} x2={pad + sL} y2={pad - 14} stroke="#38bdf8" strokeWidth="1" markerStart="url(#sheetArrow)" markerEnd="url(#sheetArrow)" />
+            <text x={pad + sL / 2} y={pad - 20} fill="#38bdf8" fontSize="10" fontWeight="bold" textAnchor="middle">Length (L): {sL} mm</text>
+            <line x1={pad - 14} y1={pad} x2={pad - 14} y2={pad + sW} stroke="#38bdf8" strokeWidth="1" markerStart="url(#sheetArrow)" markerEnd="url(#sheetArrow)" />
+            <text x={pad - 22} y={pad + sW / 2} fill="#38bdf8" fontSize="10" fontWeight="bold" textAnchor="middle" transform={`rotate(-90 ${pad - 22} ${pad + sW / 2})`}>Deckle (W): {sW} mm</text>
+          </svg>
+        </div>
+      </div>
+    );
+  }
+
+  // Box / RSC Layout
+  const panels = [
+    { name: 'LAP', w: lap, isLap: true },
+    { name: 'L1', w: L, isLap: false, fullName: 'Length 1' },
+    { name: 'W1', w: W, isLap: false, fullName: 'Width 1' },
+    { name: 'L2', w: L, isLap: false, fullName: 'Length 2' },
+    { name: 'W2', w: W, isLap: false, fullName: 'Width 2' }
+  ].filter(p => p.w > 0);
+
+  const totalW = panels.reduce((sum, p) => sum + p.w, 0);
+  const totalH = flap + H + flap;
+
+  const padX = 65;
+  const padY = 45;
+  const vbW = totalW + (padX * 2);
+  const vbH = totalH + (padY * 2);
+
+  let currentX = padX;
+  const panelLayout = panels.map(p => {
+    const startX = currentX;
+    currentX += p.w;
+    return { ...p, x: startX };
+  });
+
+  const yTop = padY;
+  const yCreaseTop = padY + flap;
+  const yCreaseBot = yCreaseTop + H;
+  const yBot = yCreaseBot + flap;
+
+  return (
+    <div style={{ background: '#0f172a', borderRadius: 10, padding: '16px', color: '#fff', marginBottom: 16, border: '1.5px solid #334155' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 16 }}>📐</span>
+          <strong style={{ fontSize: 13, color: '#38bdf8' }}>{title}</strong>
+          <span style={{ fontSize: 10, background: '#1e293b', padding: '2px 8px', borderRadius: 4, color: '#94a3b8' }}>FEFCO 0201 / RSC</span>
+        </div>
+        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: '#a5f3fc' }}>
+          Cutting Blank: <strong style={{ color: '#38bdf8' }}>{totalDeckle} mm</strong> (Deckle) × <strong style={{ color: '#4ade80' }}>{totalCutLength} mm</strong> (Length)
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto', textAlign: 'center', background: '#0b1120', borderRadius: 8, padding: 14, border: '1px solid #1e293b' }}>
+        <svg viewBox={`0 0 ${vbW} ${vbH}`} style={{ width: '100%', maxWidth: 700, height: 'auto', display: 'block', margin: '0 auto' }}>
+          <defs>
+            <pattern id="cadGrid" width="25" height="25" patternUnits="userSpaceOnUse">
+              <path d="M 25 0 L 0 0 0 25" fill="none" stroke="#1e293b" strokeWidth="0.8" />
+            </pattern>
+            <marker id="arrowHead" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8" />
+            </marker>
+          </defs>
+
+          {/* Background grid */}
+          <rect x="0" y="0" width={vbW} height={vbH} fill="#0b1120" />
+          <rect x={padX - 10} y={padY - 10} width={totalW + 20} height={totalH + 20} fill="url(#cadGrid)" opacity="0.6" />
+
+          {/* Render Panels */}
+          {panelLayout.map((p, idx) => {
+            if (p.isLap) {
+              return (
+                <g key={idx}>
+                  <path
+                    d={`M ${p.x} ${yCreaseTop + 8} L ${p.x + p.w} ${yCreaseTop} L ${p.x + p.w} ${yCreaseBot} L ${p.x} ${yCreaseBot - 8} Z`}
+                    fill="#1e3a8a"
+                    fillOpacity="0.5"
+                    stroke="#38bdf8"
+                    strokeWidth="1.5"
+                  />
+                  <text x={p.x + p.w / 2} y={yCreaseTop + H / 2} fill="#38bdf8" fontSize="10" fontWeight="bold" textAnchor="middle" transform={`rotate(-90 ${p.x + p.w / 2} ${yCreaseTop + H / 2})`}>
+                    LAP {p.w}mm
+                  </text>
+                </g>
+              );
+            }
+
+            return (
+              <g key={idx}>
+                {/* Top Flap */}
+                <rect x={p.x + 2} y={yTop} width={p.w - 4} height={flap} fill="#1e293b" stroke="#0284c7" strokeWidth="1.2" rx="2" />
+                <text x={p.x + p.w / 2} y={yTop + flap / 2 + 4} fill="#94a3b8" fontSize="9" textAnchor="middle">Flap ({flap}mm)</text>
+
+                {/* Main Body Panel */}
+                <rect x={p.x} y={yCreaseTop} width={p.w} height={H} fill="#1e293b" fillOpacity="0.9" stroke="#38bdf8" strokeWidth="1.5" />
+                <text x={p.x + p.w / 2} y={yCreaseTop + H / 2 - 6} fill="#f8fafc" fontSize="12" fontWeight="bold" textAnchor="middle">{p.name}</text>
+                <text x={p.x + p.w / 2} y={yCreaseTop + H / 2 + 10} fill="#38bdf8" fontSize="11" fontFamily="var(--font-mono)" textAnchor="middle">{p.w} mm</text>
+
+                {/* Bottom Flap */}
+                <rect x={p.x + 2} y={yCreaseBot} width={p.w - 4} height={flap} fill="#1e293b" stroke="#0284c7" strokeWidth="1.2" rx="2" />
+                <text x={p.x + p.w / 2} y={yCreaseBot + flap / 2 + 4} fill="#94a3b8" fontSize="9" textAnchor="middle">Flap ({flap}mm)</text>
+              </g>
+            );
+          })}
+
+          {/* Horizontal Creasing Score Lines (Dashed Red) */}
+          <line x1={padX} y1={yCreaseTop} x2={padX + totalW} y2={yCreaseTop} stroke="#f43f5e" strokeWidth="1.5" strokeDasharray="5 3" />
+          <line x1={padX} y1={yCreaseBot} x2={padX + totalW} y2={yCreaseBot} stroke="#f43f5e" strokeWidth="1.5" strokeDasharray="5 3" />
+
+          {/* Crease line label */}
+          <text x={padX + totalW + 6} y={yCreaseTop + 3} fill="#f43f5e" fontSize="9" fontWeight="bold">Score 1 ({flap}mm)</text>
+          <text x={padX + totalW + 6} y={yCreaseBot + 3} fill="#f43f5e" fontSize="9" fontWeight="bold">Score 2 ({H}mm)</text>
+
+          {/* Stereo / Print Mockup Zone in L1 panel */}
+          {panelLayout.length >= 2 && (
+            <g>
+              <rect
+                x={panelLayout[1].x + 15}
+                y={yCreaseTop + 15}
+                width={Math.max(20, panelLayout[1].w - 30)}
+                height={Math.max(20, H - 30)}
+                fill="#22c55e"
+                fillOpacity="0.08"
+                stroke="#22c55e"
+                strokeWidth="1"
+                strokeDasharray="3 3"
+                rx="4"
+              />
+              <text x={panelLayout[1].x + panelLayout[1].w / 2} y={yCreaseTop + H / 2 - 14} fill="#4ade80" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                PRINT REGION
+              </text>
+              <text x={panelLayout[1].x + panelLayout[1].w / 2} y={yCreaseTop + H / 2 + 20} fill="#86efac" fontSize="7.5" textAnchor="middle">
+                {item.stereoBlockId || 'STEREO BLOCK'}
+              </text>
+            </g>
+          )}
+
+          {/* Total Cut Length Dimension Line (Top) */}
+          <line x1={padX} y1={padY - 18} x2={padX + totalW} y2={padY - 18} stroke="#38bdf8" strokeWidth="1" markerStart="url(#arrowHead)" markerEnd="url(#arrowHead)" />
+          <text x={padX + totalW / 2} y={padY - 24} fill="#38bdf8" fontSize="10" fontWeight="bold" textAnchor="middle">
+            Total Blank Cut Length: {totalCutLength} mm
+          </text>
+
+          {/* Total Deckle Dimension Line (Left) */}
+          <line x1={padX - 18} y1={padY} x2={padX - 18} y2={padY + totalH} stroke="#38bdf8" strokeWidth="1" markerStart="url(#arrowHead)" markerEnd="url(#arrowHead)" />
+          <text x={padX - 26} y={padY + totalH / 2} fill="#38bdf8" fontSize="10" fontWeight="bold" textAnchor="middle" transform={`rotate(-90 ${padX - 26} ${padY + totalH / 2})`}>
+            Deckle Width: {totalDeckle} mm
+          </text>
+        </svg>
+      </div>
+
+      <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 11, color: '#94a3b8', borderTop: '1px solid #1e293b', paddingTop: 8 }}>
+        <div>Joint Type: <strong style={{ color: '#f8fafc' }}>{jointType}</strong></div>
+        <div>Flute Profile: <strong style={{ color: '#38bdf8' }}>{ply}-Ply {flute}-Flute</strong></div>
+        <div>Creasing Scores: <strong style={{ color: '#fbbf24' }}>{item.creasingScores || `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`}</strong></div>
+      </div>
+    </div>
+  );
+}
+
+export function BoardCrossSectionDiagram({ layers = [], ply = 3, flute = 'B' }) {
+  const actualLayers = (layers && Array.isArray(layers) && layers.length > 0)
+    ? layers
+    : generateDefaultPaperLayers(String(ply), flute);
+  const caliper = getBoardCaliperMm(ply, flute);
+
+  return (
+    <div style={{ background: '#f8fafc', border: '1.5px solid #cbd5e1', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+        <h5 style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>🔬</span> Stratified Board Cross-Section Waveform ({ply}-Ply {flute}-Flute)
+        </h5>
+        <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>Approx. Board Caliper: <strong style={{ color: '#0f172a' }}>~{caliper} mm</strong></span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, background: '#0f172a', padding: 12, borderRadius: 8 }}>
+        {actualLayers.map((lyr, idx) => {
+          const isF = lyr.isFlute;
+          const paperColor = lyr.type === 'Golden' || lyr.colour === 'Golden' ? '#f59e0b' : (lyr.type === 'Duplex' || lyr.colour === 'Duplex' ? '#e2e8f0' : '#d97706');
+          return (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 140, fontSize: 11, color: '#94a3b8', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <span style={{ color: isF ? '#fbbf24' : '#38bdf8', fontWeight: 700 }}>{lyr.name}</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: isF ? 22 : 8, display: 'flex', alignItems: 'center' }}>
+                {isF ? (
+                  <svg width="100%" height="22" preserveAspectRatio="none" viewBox="0 0 400 22">
+                    <path
+                      d="M 0 18 Q 10 2 20 18 Q 30 2 40 18 Q 50 2 60 18 Q 70 2 80 18 Q 90 2 100 18 Q 110 2 120 18 Q 130 2 140 18 Q 150 2 160 18 Q 170 2 180 18 Q 190 2 200 18 Q 210 2 220 18 Q 230 2 240 18 Q 250 2 260 18 Q 270 2 280 18 Q 290 2 300 18 Q 310 2 320 18 Q 330 2 340 18 Q 350 2 360 18 Q 370 2 380 18 Q 390 2 400 18"
+                      fill="none"
+                      stroke={paperColor}
+                      strokeWidth="2.5"
+                    />
+                  </svg>
+                ) : (
+                  <div style={{ width: '100%', height: 6, background: paperColor, borderRadius: 2, boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                )}
+              </div>
+              <div style={{ width: 180, fontSize: 11, color: '#f8fafc', display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                <span style={{ background: '#1e293b', padding: '1px 6px', borderRadius: 4, fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#38bdf8' }}>{lyr.gsm} GSM</span>
+                <span style={{ color: '#cbd5e1' }}>{lyr.bf} BF</span>
+                <span style={{ color: '#94a3b8', fontSize: 10 }}>({lyr.type || lyr.colour || 'Kraft'})</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -4190,6 +6081,113 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   });
   const [consumableFilters, setConsumableFilters] = useState({ itemName: '', vendorName: '', status: 'All' });
 
+  const [isAiReelDictating, setIsAiReelDictating] = useState(false);
+  const [aiReelStatus, setAiReelStatus] = useState('');
+  const aiReelRecRef = useRef(null);
+
+  const startAiReelDictation = () => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    if (isAiReelDictating) {
+      try { aiReelRecRef.current?.stop(); } catch(e) {}
+      setIsAiReelDictating(false);
+      return;
+    }
+
+    const rec = new SpeechRec();
+    aiReelRecRef.current = rec;
+    rec.lang = 'en-IN';
+    rec.continuous = false;
+    rec.interimResults = false;
+
+    rec.onstart = () => {
+      setIsAiReelDictating(true);
+      setAiReelStatus('🎙️ Listening... Dictate inward reels (e.g. "Inward from Star Paper Mill invoice 4521. Reel 101: 150 GSM 18 BF 900 size 650 kg. Reel 102: 150 GSM 18 BF 900 size 680 kg. Reel 103: 120 GSM 16 BF 1000 size 720 kg")');
+      playBeepSound();
+    };
+
+    rec.onend = () => {
+      setIsAiReelDictating(false);
+    };
+
+    rec.onerror = (e) => {
+      setIsAiReelDictating(false);
+      setAiReelStatus('❌ Microphone error: ' + (e?.error || 'unknown'));
+    };
+
+    rec.onresult = async (event) => {
+      if (event.results && event.results[0] && event.results[0][0]) {
+        const transcript = (event.results[0][0].transcript || '').trim();
+        if (!transcript) return;
+
+        setAiReelStatus('🧠 Gemini AI parsing multiple reels: "' + transcript + '"...');
+
+        try {
+          if (!isGeminiConfigured()) {
+            setAiReelStatus('⚠️ Please configure your Gemini API Key in Alt+V settings first.');
+            alert('Please add your Gemini API Key in the Voice Assistant settings (Alt + V -> ? -> API Key) to enable AI Inward Dictation.');
+            return;
+          }
+
+          const parsed = await parseReelsInwardWithAI(transcript, vendors);
+          if (!parsed || !Array.isArray(parsed.reels) || parsed.reels.length === 0) {
+            setAiReelStatus('⚠️ Could not detect reels from speech.');
+            return;
+          }
+
+          setCommonData(prev => ({
+            ...prev,
+            millName: parsed.millName || prev.millName,
+            invoiceNo: parsed.invoiceNo || prev.invoiceNo,
+            vehicleNo: parsed.vehicleNo || prev.vehicleNo,
+            date: parsed.date || prev.date
+          }));
+
+          const newRows = parsed.reels.map((r, rIdx) => ({
+            uniqueReelId: '',
+            supplierReelNo: String(r.supplierReelNo || `RL-${rIdx + 1}`),
+            reelNo: String(r.supplierReelNo || `RL-${rIdx + 1}`),
+            size: String(r.size || '900'),
+            gsm: String(r.gsm || '140'),
+            bf: String(r.bf || '18'),
+            colour: r.colour || 'Kraft',
+            receivedQty: String(r.receivedQty || ''),
+            initialIssuedQty: '',
+            ratePerKg: r.ratePerKg ? String(r.ratePerKg) : '',
+            location: r.location || 'Warehouse Bay-01'
+          }));
+
+          setReelsInput(newRows);
+
+          const totalKg = newRows.reduce((acc, r) => acc + (parseFloat(r.receivedQty) || 0), 0);
+          setAiReelStatus(`✓ Parsed ${newRows.length} reels (${totalKg.toLocaleString('en-IN')} kg) from ${parsed.millName || 'Supplier'}. Click "Inward & Generate Barcodes" below to save and print labels.`);
+
+          if (parsed.summaryVoiceText && 'speechSynthesis' in window) {
+            try {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(parsed.summaryVoiceText);
+              utterance.lang = 'en-IN';
+              window.speechSynthesis.speak(utterance);
+            } catch(e) {}
+          }
+        } catch (err) {
+          console.error('AI Reel Inward error:', err);
+          setAiReelStatus('❌ AI Reel Parsing failed: ' + (err.message || err));
+        }
+      }
+    };
+
+    try {
+      rec.start();
+    } catch(e) {
+      setIsAiReelDictating(false);
+    }
+  };
+
   const handleScanInvoice = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -4241,8 +6239,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     }
   };
 
-  const handleAddOrUpdate = async (e) => {
-    e.preventDefault();
+  const handleAddOrUpdate = async (e, shouldPrintBarcodes = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     const effectiveCompanyId = (allowedCompanyId && allowedCompanyId !== 'all')
       ? allowedCompanyId
       : (commonData.companyId || currentUser?.companyId || (companies[0]?.id || ''));
@@ -4261,30 +6259,45 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     } else {
       const batch = writeBatch(db);
       let count = 0;
+      const createdReelsList = [];
+
       reelsInput.forEach((reel, idx) => {
         const supNo = reel.supplierReelNo || reel.reelNo;
-        if (!supNo) return;
+        if (!supNo && !reel.size && !reel.gsm) return;
         const existingMax = (inventory || []).reduce((max, cur) => {
           const fid = formatSystemReelId(cur, inventory);
           const n = parseInt(fid.replace('RL-', ''), 10);
           return !isNaN(n) && n > max ? n : max;
         }, 0);
         const autoReelId = reel.uniqueReelId || `RL-${String(existingMax + idx + 1).padStart(5, '0')}`;
-        const newDocRef = { table: 'inventory', id: generateId() };
-        batch.set(newDocRef, {
+        const finalSupNo = supNo || autoReelId;
+        const newId = generateId();
+        const newDocRef = { table: 'inventory', id: newId };
+        
+        const reelDoc = {
           ...finalCommon,
           ...reel,
+          id: newId,
           uniqueReelId: autoReelId,
-          supplierReelNo: supNo,
-          reelNo: supNo,
+          systemReelId: autoReelId,
+          supplierReelNo: finalSupNo,
+          reelNo: finalSupNo,
           category: 'Paper',
           tallySynced: false
-        });
+        };
+
+        batch.set(newDocRef, reelDoc);
+        createdReelsList.push(reelDoc);
         count++;
       });
+
       await batch.commit();
       if(addLog) addLog(`Added ${count} inventory reels from ${commonData.millName || 'supplier'}`);
       setReelsInput([{...emptyReel}]); 
+
+      if (shouldPrintBarcodes && createdReelsList.length > 0) {
+        setPrintTagData({ type: 'reel', data: createdReelsList });
+      }
     }
   };
 
@@ -4678,16 +6691,74 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       {/* --- INWARD NEW REEL(S) INVOICE FORM (AVAILABLE IN BOTH EXCEL AND CLASSIC VIEWS) --- */}
       {activeSubTab === 'Paper' && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
             <h3 className="font-bold flex items-center gap-2 text-stone-900">
               <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward New Invoice / Paper Reels Entry'}
             </h3>
-            {inventoryMode === 'grid' && (
-              <span className="text-xs font-medium text-stone-500">
-                Enter reels here or paste directly from Excel below
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={startAiReelDictation}
+                className="apex-btn"
+                style={{
+                  background: isAiReelDictating ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                  color: '#fff',
+                  fontWeight: 800,
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: isAiReelDictating ? '0 0 16px rgba(239, 68, 68, 0.6)' : '0 2px 8px rgba(124, 58, 237, 0.35)',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  border: 'none'
+                }}
+                title="Dictate entire supplier invoice with multiple paper reels (GSM, BF, Size, Weight, Reel No)"
+              >
+                <Sparkles style={{ width: 14, height: 14, color: '#fef08a' }} />
+                <span>{isAiReelDictating ? '🔴 Listening... Dictate Multiple Reels' : '✨ 🎙️ AI Dictate Multi-Reel Inward'}</span>
+              </button>
+              {inventoryMode === 'grid' && (
+                <span className="text-xs font-medium text-stone-500">
+                  Enter reels here or paste directly from Excel below
+                </span>
+              )}
+            </div>
           </div>
+
+          {/* AI Reel Dictation Live Status */}
+          {(isAiReelDictating || aiReelStatus) && (
+            <div style={{
+              padding: '12px 16px',
+              marginBottom: 14,
+              background: isAiReelDictating ? '#1e1b4b' : '#0f172a',
+              border: isAiReelDictating ? '1.5px solid #818cf8' : '1.5px solid #334155',
+              borderRadius: 8,
+              color: '#fff',
+              fontSize: 12.5,
+              fontWeight: 600,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 10,
+              animation: 'fadeIn 0.2s ease-out'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {isAiReelDictating && <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', animation: 'ping 1.2s infinite' }} />}
+                <span>{aiReelStatus || 'Listening... Speak supplier name, invoice, and all reel details (e.g. "Reel 101: 150 GSM 18 BF 900 size 650 kg, Reel 102...")'}</span>
+              </div>
+              {aiReelStatus && !isAiReelDictating && (
+                <button
+                  type="button"
+                  onClick={() => setAiReelStatus('')}
+                  style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 14, cursor: 'pointer', fontWeight: 800 }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
           <form onSubmit={handleAddOrUpdate} className="space-y-4">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, background: '#fafaf9', padding: 14, borderRadius: 10, border: '1px solid var(--border)', marginBottom: 4 }}>
               <div><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={commonData.date} onChange={e => setCommonData({...commonData, date: e.target.value})} /></div>
@@ -4753,7 +6824,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                         <select required className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}>
                           <option value="Kraft">Kraft</option>
                           <option value="Golden">Golden</option>
-                          <option value="White">White</option>
+                          <option value="Duplex">Duplex</option>
                         </select>
                       </td>
                       <td className="p-1.5">
@@ -4776,15 +6847,25 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </table>
             </div>
 
-            <div className="flex gap-2 pt-4 border-t border-stone-200">
+            <div className="flex gap-2 pt-4 border-t border-stone-200 flex-wrap">
               {!editingId && (
                 <button type="button" onClick={addReelRow} className="bg-stone-100 text-stone-700 px-4 py-2 rounded text-sm font-bold hover:bg-stone-200 flex items-center gap-2">
-                  + Add Another Reel Row
+                  + Add Reel Row
                 </button>
               )}
-              <button type="submit" className="flex-1 bg-stone-900 text-white p-2.5 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">
-                {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'} to Stock Inventory`}
+              <button type="submit" className="flex-1 bg-stone-900 text-white p-2.5 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold min-w-[200px]">
+                {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'}`}
               </button>
+              {!editingId && (
+                <button
+                  type="button"
+                  onClick={(e) => handleAddOrUpdate(e, true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded font-bold text-sm flex items-center gap-2 shadow-sm cursor-pointer"
+                  title="Saves all inwarded reels and opens the barcode sticker printing modal"
+                >
+                  <span>🖨️ Inward &amp; Print Barcodes ({reelsInput.length})</span>
+                </button>
+              )}
               {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6 font-bold">Cancel</button>}
             </div>
           </form>
@@ -4830,7 +6911,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     <div className="w-20"><label className="block text-[10px] text-stone-500 mb-1">Size</label><input required type="text" className="w-full p-2 border rounded text-sm" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} /></div>
                     <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} /></div>
                     <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} /></div>
-                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded text-sm" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option></select></div>
+                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded text-sm" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="Duplex">Duplex</option></select></div>
                     <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Recv (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50 text-sm" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} /></div>
                     <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50 text-sm" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} /></div>
                     <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Rate (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded text-sm" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} /></div>
@@ -4868,7 +6949,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <input type="text" placeholder="GSM" className="apex-input" style={{ width: 68, padding: '6px 10px', fontSize: 12 }} value={filters.gsm} onChange={e => setFilters({...filters, gsm: e.target.value})} />
               <input type="text" placeholder="BF" className="apex-input" style={{ width: 60, padding: '6px 10px', fontSize: 12 }} value={filters.bf} onChange={e => setFilters({...filters, bf: e.target.value})} />
               <select className="apex-select" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filters.colour} onChange={e => setFilters({...filters, colour: e.target.value})}>
-                <option value="">All Colours</option><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="White">White</option>
+                <option value="">All Colours</option><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="Duplex">Duplex</option>
               </select>
               <select className="apex-select" style={{ width: 'auto', padding: '6px 10px', fontSize: 12, fontWeight: 600 }} value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}>
                 <option value="All">All Statuses</option><option value="Available">Available only</option><option value="Used">Used / Empty</option>
@@ -5087,8 +7168,6 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 // ============================================================================
 
 function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], customers = [], activeUnitId, onCreateJob }) {
-  if (!isOpen) return null;
-
   const [itemMode, setItemMode] = useState('master'); // 'master' | 'custom'
   const [selectedItemId, setSelectedItemId] = useState('');
   
@@ -5186,6 +7265,8 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
 
     onClose();
   };
+
+  if (!isOpen) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
@@ -5443,8 +7524,6 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
 }
 
 function AttachReelModal({ isOpen, onClose, inventory = [], orders = [], plannedJobs = [], onAttachReel, onOpenCreateJobModal, prefilledOrderId = '' }) {
-  if (!isOpen) return null;
-
   const [selectedReelId, setSelectedReelId] = useState('');
   const [selectedOrderId, setSelectedOrderId] = useState(prefilledOrderId || '');
   const [standName, setStandName] = useState('Top');
@@ -5503,6 +7582,8 @@ function AttachReelModal({ isOpen, onClose, inventory = [], orders = [], planned
     });
     return list;
   }, [plannedJobs, orders]);
+
+  if (!isOpen) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
@@ -5629,17 +7710,6 @@ function AttachReelModal({ isOpen, onClose, inventory = [], orders = [], planned
                 </button>
               ))}
             </div>
-            <select
-              style={{ width: '100%', background: '#1e293b', color: '#fff', border: '1px solid #475569', borderRadius: 8, padding: '8px 12px', fontSize: 12, fontWeight: 700 }}
-              value={standName}
-              onChange={e => setStandName(e.target.value)}
-            >
-              <option value="Top">Top</option>
-              <option value="Flute(C)">Flute(C)</option>
-              <option value="Backing(C)">Backing(C)</option>
-              <option value="Flute(B)">Flute(B)</option>
-              <option value="Backing(B)">Backing(B)</option>
-            </select>
           </div>
 
           <div style={{ display: 'flex', gap: 10, paddingTop: 10 }}>
@@ -5660,26 +7730,30 @@ function AttachReelModal({ isOpen, onClose, inventory = [], orders = [], planned
 }
 
 function CompleteJobModal({ isOpen, onClose, order, inventory = [], onFinalizeJob }) {
-  if (!isOpen || !order) return null;
-
-  const attachedList = Array.isArray(order.attachedReels) ? order.attachedReels : [];
+  const attachedList = Array.isArray(order?.attachedReels) ? order.attachedReels : [];
   
-  const [linerQty, setLinerQty] = useState(String(order.orderQty || ''));
-  const [numberOfUps, setNumberOfUps] = useState(String(order.plannedUps || '1'));
+  const [linerQty, setLinerQty] = useState(String(order?.orderQty || ''));
+  const [numberOfUps, setNumberOfUps] = useState(String(order?.plannedUps || '1'));
   const [wasteSheetsKg, setWasteSheetsKg] = useState('0');
   
-  // Per-reel usage tracking: mode 'full' | 'remnant', remnantKg, returnLocation
-  const [reelUsage, setReelUsage] = useState(() => {
-    const init = {};
-    attachedList.forEach(r => {
-      init[r.id] = {
-        mode: 'full',
-        remnantKg: '',
-        returnLocation: 'Bay-01 Remnants'
-      };
-    });
-    return init;
-  });
+  const [reelUsage, setReelUsage] = useState({});
+
+  useEffect(() => {
+    if (order) {
+      setLinerQty(String(order.orderQty || ''));
+      setNumberOfUps(String(order.plannedUps || '1'));
+      const attached = Array.isArray(order.attachedReels) ? order.attachedReels : [];
+      const init = {};
+      attached.forEach(r => {
+        init[r.id] = {
+          mode: 'full',
+          remnantKg: '',
+          returnLocation: 'Bay-01 Remnants'
+        };
+      });
+      setReelUsage(init);
+    }
+  }, [order]);
 
   const handleModeToggle = (id, mode) => {
     setReelUsage(prev => ({
@@ -5702,7 +7776,6 @@ function CompleteJobModal({ isOpen, onClose, order, inventory = [], onFinalizeJo
     }));
   };
 
-  // Calculate total consumed kg
   let totalConsumedKg = 0;
   const consumedList = attachedList.map(r => {
     const usage = reelUsage[r.id] || { mode: 'full', remnantKg: '' };
@@ -5732,7 +7805,6 @@ function CompleteJobModal({ isOpen, onClose, order, inventory = [], onFinalizeJo
       return alert("Please enter the number of corrugated sheets produced.");
     }
     
-    // Validate remnant weights
     for (const c of consumedList) {
       if (c.remnantKg >= c.initialLoadedKg) {
         return alert(`Remnant weight for reel ${c.systemReelId} cannot be greater than or equal to initial weight (${c.initialLoadedKg}kg).`);
@@ -5749,6 +7821,8 @@ function CompleteJobModal({ isOpen, onClose, order, inventory = [], onFinalizeJo
   };
 
   const totalPieces = Math.round((parseFloat(linerQty) || 0) * (parseFloat(numberOfUps) || 1));
+
+  if (!isOpen || !order) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
@@ -7158,11 +9232,19 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   const bfs = String(targetItem.paperBf || '28/20/28').split('/').map(s => parseFloat(s.trim()) || 18);
   const colours = String(targetItem.paperColour || 'Kraft').split('/').map(s => s.trim() || 'Kraft');
 
+  const itemLayers = getItemLayers(targetItem);
   let boardGsm = 0;
-  for (let i = 0; i < ply; i++) {
-    const gsm = gsms[i] !== undefined ? gsms[i] : (gsms[0] || 120);
-    const factor = getFlutingFactor(ply, i);
-    boardGsm += gsm * factor;
+  if (itemLayers.length > 0) {
+    boardGsm = itemLayers.reduce((acc, lyr) => {
+      const factor = parseFloat(lyr.takeUp || (lyr.isFlute ? (getFlutingFactor(ply, 1) || 1.35) : 1.0));
+      return acc + (parseFloat(lyr.gsm || 0) * factor);
+    }, 0);
+  } else {
+    for (let i = 0; i < ply; i++) {
+      const gsm = gsms[i] !== undefined ? gsms[i] : (gsms[0] || 120);
+      const factor = getFlutingFactor(ply, i);
+      boardGsm += gsm * factor;
+    }
   }
   boardGsm = Math.round(boardGsm || 450);
 
@@ -7273,21 +9355,35 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-stone-100 font-bold border-b border-stone-300 text-[11px]">
-                      <th className="p-1">Ply Type</th>
+                      <th className="p-1">Ply / Layer</th>
                       <th className="p-1">GSM</th>
                       <th className="p-1">BF</th>
-                      <th className="p-1">Shade</th>
+                      <th className="p-1">Grade / Shade</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from({ length: ply }).map((_, i) => (
-                      <tr key={i} className="border-b border-stone-200 font-medium">
-                        <td className="p-1.5 font-extrabold">{i === 0 ? 'Top' : (i === ply - 1 ? 'Bottom' : 'Fluting')}</td>
-                        <td className="p-1 font-mono">{gsms[i] || gsms[0] || 120} GSM</td>
-                        <td className="p-1 font-mono">{bfs[i] || bfs[0] || 18} BF</td>
-                        <td className="p-1">{colours[i] || colours[0] || 'Kraft'}</td>
-                      </tr>
-                    ))}
+                    {itemLayers.length > 0 ? (
+                      itemLayers.map((lyr, i) => (
+                        <tr key={i} className={`border-b border-stone-200 font-medium ${lyr.isFlute ? 'bg-amber-50/50' : ''}`}>
+                          <td className="p-1.5 font-extrabold flex items-center gap-1">
+                            <span>{lyr.isFlute ? '🌊' : '📦'}</span>
+                            <span>{lyr.name || (i === 0 ? 'Top Liner' : (i === itemLayers.length - 1 ? 'Bottom Liner' : `Layer ${i + 1}`))}</span>
+                          </td>
+                          <td className="p-1 font-mono font-bold">{lyr.gsm} GSM</td>
+                          <td className="p-1 font-mono">{lyr.bf || 18} BF</td>
+                          <td className="p-1">{lyr.type || lyr.colour || 'Kraft'}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      Array.from({ length: ply }).map((_, i) => (
+                        <tr key={i} className="border-b border-stone-200 font-medium">
+                          <td className="p-1.5 font-extrabold">{i === 0 ? 'Top Liner' : (i === ply - 1 ? 'Bottom Liner' : 'Fluting Medium')}</td>
+                          <td className="p-1 font-mono">{gsms[i] || gsms[0] || 120} GSM</td>
+                          <td className="p-1 font-mono">{bfs[i] || bfs[0] || 18} BF</td>
+                          <td className="p-1">{colours[i] || colours[0] || 'Kraft'}</td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -7397,21 +9493,30 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   const QUEUES_STORAGE_KEY = `erp_planning_custom_queues_${activeUnitId || 'all'}`;
   const JOBS_STORAGE_KEY = `erp_planned_jobs_${activeUnitId || 'all'}`;
 
-  // Multiple Queues Management State
+  // Production Queue Management State (Default: 1 Unified Planning Queue)
   const [queuesList, setQueuesList] = useState(() => {
     try {
       const saved = localStorage.getItem(QUEUES_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : [
-        { id: 'q_line1', name: 'Line 1: Corrugator', color: '#2563eb' },
-        { id: 'q_line2', name: 'Line 2: Printing & Slotting', color: '#7c3aed' },
-        { id: 'q_line3', name: 'Line 3: Finishing & Gluing', color: '#059669' }
-      ];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Seamlessly migrate legacy 3 demo queues to single Production Queue
+        if (
+          Array.isArray(parsed) &&
+          parsed.length === 3 &&
+          parsed[0]?.id === 'q_line1' &&
+          parsed[0]?.name === 'Line 1: Corrugator' &&
+          parsed[1]?.id === 'q_line2' &&
+          parsed[2]?.id === 'q_line3'
+        ) {
+          const singleQueue = [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
+          try { localStorage.setItem(QUEUES_STORAGE_KEY, JSON.stringify(singleQueue)); } catch(e) {}
+          return singleQueue;
+        }
+        return Array.isArray(parsed) && parsed.length > 0 ? parsed : [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
+      }
+      return [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
     } catch {
-      return [
-        { id: 'q_line1', name: 'Line 1: Corrugator', color: '#2563eb' },
-        { id: 'q_line2', name: 'Line 2: Printing & Slotting', color: '#7c3aed' },
-        { id: 'q_line3', name: 'Line 3: Finishing & Gluing', color: '#059669' }
-      ];
+      return [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
     }
   });
 
@@ -7890,10 +9995,10 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
       <div style={{ marginBottom: 28 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
-            🎛️ Active Production Queues ({queuesList.length} Lines • {plannedJobs.length} Planned Jobs)
+            🎛️ Active Production {queuesList.length > 1 ? `Queues (${queuesList.length} Lines • ${plannedJobs.length} Planned Jobs)` : `Queue (${plannedJobs.length} Planned Jobs)`}
           </h3>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            ✋ Drag &amp; drop job cards directly from one queue column into another or reorder within a column
+            {queuesList.length > 1 ? '✋ Drag & drop job cards between queue columns or reorder within a column' : '✋ Drag & drop job cards or use arrows to adjust priority order'}
           </span>
         </div>
 
@@ -8602,7 +10707,12 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       {/* Filter Row */}
       <div className="apex-card" style={{ padding: '10px 16px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>FILTER:</span>
-        <input type="text" placeholder="Search Item / PO / ID..." className="apex-input" style={{ width: 220, padding: '4px 8px', fontSize: 12 }} value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input type="text" placeholder="Search Item / PO / ID..." className="apex-input" style={{ width: 220, padding: '4px 30px 4px 8px', fontSize: 12 }} value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} />
+          <div style={{ position: 'absolute', right: 4 }}>
+            <VoiceInputButton size="sm" mode="search" onTranscript={text => setFilters({ ...filters, search: text })} title="Voice search orders" />
+          </div>
+        </div>
         <select className="apex-select" style={{ width: 160, padding: '4px 8px', fontSize: 12 }} value={filters.customer} onChange={e => setFilters({ ...filters, customer: e.target.value })}>
           <option value="">All Customers</option>
           {customers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
@@ -9002,13 +11112,21 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
       doc.setFont("helvetica", "normal");
       doc.text(compName, 130, 42);
 
+      const orderNo = order.orderNo || order.Order_No || (order.id ? `ORD-${order.id.slice(0, 6).toUpperCase()}` : '-');
+      const skuName = order.itemName || order.Item_Name || 'Carton Box';
+      const innerSize = stockInfo.item?.size || stockInfo.item?.Size_mm || order.size || order.Size_mm || '-';
+      const ply = stockInfo.item?.ply || stockInfo.item?.Ply || order.ply || order.Ply || '3';
+      const rawFlute = stockInfo.item?.fluteType || order.fluteType || stockInfo.item?.flute || order.flute || 'B';
+      const flute = rawFlute.toLowerCase().includes('flute') ? rawFlute : `${rawFlute} Flute`;
+      const specString = `${innerSize} (${ply} Ply ${flute})`;
+
       const tableBody = [
-        [ 1, order.itemName || order.Item_Name, `${stockInfo.item?.size || stockInfo.item?.Size_mm || '-'} (${stockInfo.item?.ply || stockInfo.item?.Ply || '-'} Ply)`, dispatchQty, `${(dispatchQty * stockInfo.avgWeightKg).toFixed(2)} kg` ]
+        [ 1, `${orderNo} / ${skuName}`, specString, dispatchQty, `${(dispatchQty * (stockInfo.avgWeightKg || 0)).toFixed(2)} kg` ]
       ];
 
       autoTable(doc, {
         startY: 55,
-        head: [['Sr No.', 'Item Description', 'Specifications', 'Quantity', 'Total Weight']],
+        head: [['Sr No.', 'Order No / SKU Name', 'Inner Size (Ply & Flute)', 'Quantity (Pcs)', 'Total Weight']],
         body: tableBody,
         theme: 'grid',
         headStyles: { fillColor: [41, 37, 36], textColor: 255, fontStyle: 'bold' },
@@ -9416,15 +11534,18 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
 
       {/* Search & Filter Bar */}
       <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm mb-6 flex flex-wrap gap-4 items-center">
-        <div className="flex-1 min-w-[200px] relative">
-          <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+        <div className="flex-1 min-w-[200px] relative flex items-center">
+          <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input 
             type="text" 
             placeholder="Search by item name, ID, size..." 
-            className="w-full pl-9 pr-4 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-905"
+            className="w-full pl-9 pr-10 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-905"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
+          <div className="absolute right-2 top-1/2 -translate-y-1/2">
+            <VoiceInputButton size="sm" mode="search" onTranscript={text => setSearchTerm(text)} title="Voice search inventory" />
+          </div>
         </div>
         
         {allowedCompanyId === 'all' && (
@@ -9607,7 +11728,7 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                                   <select className="w-full p-1 border rounded text-[11px] bg-white" value={editItemForm.paperColour} onChange={e => setEditItemForm({...editItemForm, paperColour: e.target.value})}>
                                     <option value="Kraft">Kraft</option>
                                     <option value="Golden">Golden</option>
-                                    <option value="White">White</option>
+                                    <option value="Duplex">Duplex</option>
                                   </select>
                                 </div>
                               </div>
@@ -9769,7 +11890,43 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     'AB': 1.44
   };
 
-  // Helper to auto-calculate CAD Blank Size, Creasing Scores, Area and Theoretical Weight
+  // Normalize layers: always recalculate takeUp for flute layers based on the current fluteType.
+  // This ensures stored items with stale takeUp values display and calculate correctly.
+  const normalizeLayers = (layers, fluteType = 'B') => {
+    if (!Array.isArray(layers) || layers.length === 0) return layers;
+    let fluteCount = 0;
+    return layers.map(lyr => {
+      if (!lyr.isFlute) return { ...lyr, takeUp: 1.0 };
+      // For BC flute: first medium = B(1.35), second medium = C(1.43)
+      // For AB flute: first medium = A(1.52), second medium = B(1.35)
+      let factor;
+      if (fluteType === 'BC') factor = fluteCount === 0 ? 1.35 : 1.43;
+      else if (fluteType === 'AB') factor = fluteCount === 0 ? 1.52 : 1.35;
+      else factor = FLUTE_FACTORS[fluteType] || 1.35;
+      fluteCount++;
+      return { ...lyr, takeUp: factor };
+    });
+  };
+
+  const getBoardCaliperMm = (plyNum, fluteType = 'B') => {
+    if (plyNum === 2) return 2.0;
+    if (plyNum === 3) {
+      if (fluteType === 'E') return 1.5;
+      if (fluteType === 'C') return 4.0;
+      if (fluteType === 'A') return 4.8;
+      return 3.0; // B-flute default
+    }
+    if (plyNum === 5) {
+      if (fluteType === 'BC') return 6.8;
+      if (fluteType === 'AB') return 7.5;
+      if (fluteType === 'E') return 3.0;
+      return 6.5; // 5-ply default
+    }
+    if (plyNum >= 7) return 10.5;
+    return 3.0;
+  };
+
+  // Helper to auto-calculate CAD Blank Size, Creasing Scores, Area, and Theoretical Weight
   const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140) => {
     const raw = String(idDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
     const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
@@ -9778,10 +11935,11 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     const H = dims[2] || 0;
 
     const ply = parseInt(plyStr, 10) || 3;
-    const caliper = ply >= 5 ? 10 : (ply >= 3 ? 6 : 3);
-    const odL = L > 0 ? L + caliper : 0;
-    const odW = W > 0 ? W + caliper : 0;
-    const odH = H > 0 ? H + caliper : 0;
+    const boardCaliperMm = getBoardCaliperMm(ply, flute);
+    const odAllowance = 4; // 4mm difference between ID and OD size
+    const odL = L > 0 ? L + odAllowance : 0;
+    const odW = W > 0 ? W + odAllowance : 0;
+    const odH = H > 0 ? H + odAllowance : 0;
     const odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : '';
 
     let lapMm = 35;
@@ -9813,30 +11971,41 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
 
     const blankAreaSqM = (deckleMm > 0 && cutLengthMm > 0) ? (deckleMm * cutLengthMm) / 1000000 : 0;
 
-    // Total GSM Calculation with Layer-by-Layer Flute Factors
+    // Total GSM Calculation with Layer-by-Layer Flute Factors, BS & Edge Crush Test (ECT)
     let totalBoardGsm = 0;
     let estimatedBs = 0;
+    let calculatedEct = 0; // Edge Crush Test in kN/m
 
     if (layers && Array.isArray(layers) && layers.length > 0) {
-      layers.forEach(lyr => {
+      // Always normalize takeUp for flute layers based on current flute type (ignores stale stored values)
+      const normalizedLayers = normalizeLayers(layers, flute);
+      normalizedLayers.forEach(lyr => {
         const lyrGsm = parseFloat(lyr.gsm || 0);
-        const lyrBf = parseFloat(lyr.bf || 0);
-        const lyrFactor = parseFloat(lyr.takeUp || (lyr.isFlute ? (FLUTE_FACTORS[flute] || 1.35) : 1.0));
+        const lyrBf = parseFloat(lyr.bf || 16);
+        const lyrFactor = parseFloat(lyr.takeUp);
         totalBoardGsm += lyrGsm * lyrFactor;
+
+        // Paper RCT (Ring Crush Test) approximation in kN/m
+        const rct = lyrGsm * ((lyrBf * 0.00045) + 0.005);
+        calculatedEct += rct * lyrFactor;
+
+        // Board Bursting Strength contribution (primarily from flat liners)
         if (!lyr.isFlute && lyrGsm > 0 && lyrBf > 0) {
           estimatedBs += (lyrGsm * lyrBf) / 1000;
         }
       });
       estimatedBs = (estimatedBs * 0.95).toFixed(1);
+      calculatedEct = calculatedEct * 0.95; // Combined board corrugation efficiency
     } else {
       const fluteFactor = FLUTE_FACTORS[flute] || 1.35;
       const effectiveMultiplier = ply === 3 ? (1.0 + fluteFactor + 1.0) : (ply === 5 ? (1.0 + fluteFactor + 1.0 + fluteFactor + 1.0) : 4.5);
       totalBoardGsm = defaultGsm * (effectiveMultiplier / ply);
       estimatedBs = ((defaultGsm * 18 * (ply === 5 ? 3 : 2)) / 1000 * 0.95).toFixed(1);
+      const rct = defaultGsm * ((18 * 0.00045) + 0.005);
+      calculatedEct = rct * effectiveMultiplier * 0.95;
     }
 
     const theoreticalWeightGrams = blankAreaSqM > 0 ? Math.round(blankAreaSqM * totalBoardGsm) : 0;
-    const estimatedBctKgf = Math.round(5.87 * (totalBoardGsm / 100) * Math.sqrt(caliper * ((2 * (L + W)) / 10)));
 
     return {
       odStr,
@@ -9846,24 +12015,94 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       creasingScores,
       totalBoardGsm: Math.round(totalBoardGsm),
       theoreticalWeightGrams,
-      estimatedBs,
-      estimatedBctKgf: estimatedBctKgf > 0 ? estimatedBctKgf : 250
+      estimatedBs: estimatedBs > 0 ? String(estimatedBs) : ''
     };
   };
 
-  const default3PlyLayers = [
-    { name: '1. Top Liner', type: 'Virgin Kraft', gsm: '180', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-    { name: '2. Fluting Medium', type: 'Semi-Chemical', gsm: '120', bf: '16', colour: 'Natural', isFlute: true, takeUp: 1.35 },
-    { name: '3. Bottom Liner', type: 'Kraft Liner', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-  ];
+  const generateDefaultLayers = (plyStr = '3', flute = 'B') => {
+    const ply = parseInt(plyStr, 10) || 3;
+    const fFactor = FLUTE_FACTORS[flute] || 1.35;
+    if (ply === 2) {
+      return [
+        { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+        { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor }
+      ];
+    }
+    if (ply === 5) {
+      const f1 = flute.includes('BC') ? 1.35 : (flute.includes('AB') ? 1.52 : fFactor);
+      const f2 = flute.includes('BC') ? 1.43 : (flute.includes('AB') ? 1.35 : (fFactor === 1.35 ? 1.43 : fFactor));
+      return [
+        { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+        { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f1 },
+        { name: '3. Middle Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+        { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f2 },
+        { name: '5. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+      ];
+    }
+    if (ply === 7) {
+      return [
+        { name: '1. Top Liner', type: 'Golden', gsm: '200', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+        { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.35 },
+        { name: '3. Middle Liner 1', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+        { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.43 },
+        { name: '5. Middle Liner 2', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
+        { name: '6. Flute Medium 3', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.52 },
+        { name: '7. Bottom Liner', type: 'Kraft', gsm: '180', bf: '20', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+      ];
+    }
+    // 3-ply default
+    return [
+      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
+      { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor },
+      { name: '3. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
+    ];
+  };
 
-  const default5PlyLayers = [
-    { name: '1. Top Liner', type: 'Virgin Kraft', gsm: '180', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-    { name: '2. Flute Medium 1', type: 'Semi-Chemical', gsm: '120', bf: '16', colour: 'Natural', isFlute: true, takeUp: 1.35 },
-    { name: '3. Middle Liner', type: 'Kraft Medium', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-    { name: '4. Flute Medium 2', type: 'Semi-Chemical', gsm: '120', bf: '16', colour: 'Natural', isFlute: true, takeUp: 1.43 },
-    { name: '5. Bottom Liner', type: 'Kraft Liner', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-  ];
+  const syncLayersForPly = (existingLayers = [], newPlyStr = '3', flute = 'B') => {
+    const targetPly = parseInt(newPlyStr, 10) || 3;
+    const defaultLayers = generateDefaultLayers(newPlyStr, flute);
+
+    // Always return fresh defaults if no existing layers
+    if (!Array.isArray(existingLayers) || existingLayers.length === 0) return defaultLayers;
+
+    // Helper: get the correct flute take-up factor for a given flute position index (0-based among flute layers)
+    const getFluteFactorForPosition = (flutePositionIndex) => {
+      // For BC flute: first medium = B(1.35), second medium = C(1.43)
+      // For AB flute: first medium = A(1.52), second medium = B(1.35)
+      if (flute === 'BC') return flutePositionIndex === 0 ? 1.35 : 1.43;
+      if (flute === 'AB') return flutePositionIndex === 0 ? 1.52 : 1.35;
+      return FLUTE_FACTORS[flute] || 1.35;
+    };
+
+    // Map existing layers to the new ply structure, preserving user-set GSM/BF/type but
+    // ALWAYS recalculating takeUp for flute layers to match the selected flute type
+    if (existingLayers.length === targetPly) {
+      let fluteCount = 0;
+      return existingLayers.map((lyr, idx) => {
+        const def = defaultLayers[idx] || {};
+        const isFlute = lyr.isFlute !== undefined ? lyr.isFlute : def.isFlute;
+        // Always recalculate takeUp for fluting layers from current flute selection
+        const takeUp = isFlute ? getFluteFactorForPosition(fluteCount) : 1.0;
+        if (isFlute) fluteCount++;
+        return { ...def, ...lyr, isFlute, takeUp };
+      });
+    }
+
+    // Different ply count — rebuild structure using default layer positions, carry over user's GSM/BF data where possible
+    return defaultLayers.map((def, idx) => {
+      if (idx === 0 && existingLayers[0]) {
+        return { ...def, ...existingLayers[0], name: def.name, isFlute: false, takeUp: 1.0 };
+      }
+      if (idx === targetPly - 1 && existingLayers[existingLayers.length - 1]) {
+        return { ...def, ...existingLayers[existingLayers.length - 1], name: def.name, isFlute: false, takeUp: 1.0 };
+      }
+      if (existingLayers[idx]) {
+        const takeUp = def.isFlute ? (FLUTE_FACTORS[flute] || 1.35) : 1.0;
+        return { ...def, ...existingLayers[idx], name: def.name, isFlute: def.isFlute, takeUp };
+      }
+      return def;
+    });
+  };
 
   const emptyItemRow = {
     companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
@@ -9878,47 +12117,241 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     cutLengthMm: '',
     creasingScores: '',
     weight: '',
-    paperGsm: '140',
-    paperBf: '18',
-    paperColour: 'Kraft',
+    paperGsm: '180',
+    paperBf: '20',
+    paperColour: 'Golden',
     stereoBlockId: '',
     stereoColors: '1-Colour Black',
     punchingDieId: '',
-    targetBs: '9.5',
-    targetBct: '280',
-    layers: default3PlyLayers
+    targetBs: '',
+    targetBct: '',
+    layers: generateDefaultLayers('3', 'B')
   };
 
   const [itemsInput, setItemsInput] = useState([{ ...emptyItemRow }]);
+  const [selectedLayerConfigRow, setSelectedLayerConfigRow] = useState(0);
   const [filters, setFilters] = useState({ company: '', name: '', type: '', ply: '' });
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [activeBomModalItem, setActiveBomModalItem] = useState(null);
+  const [isAiDictating, setIsAiDictating] = useState(false);
+  const [aiDictationStatus, setAiDictationStatus] = useState('');
+  const aiRecognitionRef = useRef(null);
 
-  const addItemRow = () => setItemsInput([...itemsInput, { ...emptyItemRow }]);
-  const removeItemRow = (idx) => setItemsInput(itemsInput.filter((_, i) => i !== idx));
+  const startAiBoxDictation = () => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    if (isAiDictating) {
+      try { aiRecognitionRef.current?.stop(); } catch(e) {}
+      setIsAiDictating(false);
+      return;
+    }
+
+    const rec = new SpeechRec();
+    aiRecognitionRef.current = rec;
+    rec.lang = 'en-IN';
+    rec.continuous = false;
+    rec.interimResults = false;
+
+    rec.onstart = () => {
+      setIsAiDictating(true);
+      setAiDictationStatus('🎙️ Listening... Dictate box specs (e.g. "Edit 180ml IB Master. Size 450x300x200, 3 ply B flute. Top golden 150 16bf, fluting 120 16bf, bottom kraft 140 18bf")');
+      playBeepSound();
+    };
+
+    rec.onend = () => {
+      setIsAiDictating(false);
+    };
+
+    rec.onerror = (e) => {
+      setIsAiDictating(false);
+      setAiDictationStatus('❌ Microphone error: ' + (e?.error || 'unknown'));
+    };
+
+    rec.onresult = async (event) => {
+      if (event.results && event.results[0] && event.results[0][0]) {
+        const transcript = (event.results[0][0].transcript || '').trim();
+        if (!transcript) return;
+
+        setAiDictationStatus('🧠 Gemini AI parsing box recipe: "' + transcript + '"...');
+
+        try {
+          if (!isGeminiConfigured()) {
+            setAiDictationStatus('⚠️ Please configure your Gemini API Key in Alt+V settings first.');
+            alert('Please add your Gemini API Key in the Voice Assistant settings (Alt + V -> ? -> API Key) to enable AI Box Dictation.');
+            return;
+          }
+
+          const parsed = await parseBoxRecipeWithAI(transcript, items);
+          if (!parsed) {
+            setAiDictationStatus('⚠️ Could not parse box recipe.');
+            return;
+          }
+
+          setShowBatchForm(true);
+
+          let targetRowIndex = selectedLayerConfigRow;
+
+          // If editing an existing item, find it
+          if (parsed.action === 'edit' && parsed.targetItemName) {
+            const foundExisting = items.find(i => 
+              (i.name || i.Item_Name || '').toLowerCase().includes(parsed.targetItemName.toLowerCase())
+            );
+            if (foundExisting) {
+              setEditingId(foundExisting.id);
+            }
+          }
+
+          const updated = [...itemsInput];
+          const cur = updated[targetRowIndex] || { ...emptyItemRow };
+
+          const newPly = String(parsed.ply || cur.ply || '3');
+          const newFlute = parsed.fluteType || cur.fluteType || 'B';
+          const newSize = parsed.size || cur.size || '';
+          const newName = parsed.name || cur.name || '';
+          const newItemType = parsed.itemType || cur.itemType || 'Box';
+
+          // Layers from parsed or fallback sync
+          let newLayers = Array.isArray(parsed.layers) && parsed.layers.length > 0
+            ? parsed.layers.map((l, lIdx) => ({
+                id: `lyr_${lIdx + 1}`,
+                name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
+                type: l.type || 'Kraft',
+                gsm: String(l.gsm || 120),
+                bf: String(l.bf || 16),
+                takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[newFlute] || 1.35) : 1.0)),
+                isFlute: l.isFlute || false
+              }))
+            : syncLayersForPly(cur.layers, newPly, newFlute);
+
+          // Calculate CAD metrics
+          const cad = calculateCadBlank(newSize, newPly, newFlute, newItemType, cur.jointType, newLayers, parseFloat(newLayers[0]?.gsm || 140));
+
+          const updatedRow = {
+            ...cur,
+            name: newName,
+            size: newSize,
+            ply: newPly,
+            fluteType: newFlute,
+            itemType: newItemType,
+            layers: newLayers,
+            od: cad.odStr,
+            deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+            cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+            creasingScores: cad.creasingScores,
+            weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+            targetBs: cad.estimatedBs || '',
+            targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : ''
+          };
+
+          updated[targetRowIndex] = updatedRow;
+          setItemsInput(updated);
+          setSelectedLayerConfigRow(targetRowIndex);
+
+          setAiDictationStatus(`✓ Auto-filled ${newName || 'Box'} with ${newPly}-Ply ${newFlute}-Flute recipe (${newLayers.map(l => `${l.gsm}G ${l.type}`).join(' / ')})`);
+
+          // Voice audio response
+          if (parsed.summaryVoiceText && 'speechSynthesis' in window) {
+            try {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(parsed.summaryVoiceText);
+              utterance.lang = 'en-IN';
+              window.speechSynthesis.speak(utterance);
+            } catch (e) {}
+          }
+        } catch (err) {
+          console.error('AI Dictation Error:', err);
+          setAiDictationStatus('❌ AI Parsing failed: ' + (err.message || err));
+        }
+      }
+    };
+
+    try {
+      rec.start();
+    } catch(e) {
+      setIsAiDictating(false);
+    }
+  };
+
+  const addItemRow = () => {
+    const newRow = { ...emptyItemRow, layers: generateDefaultLayers('3', 'B') };
+    const nextIdx = itemsInput.length;
+    setItemsInput([...itemsInput, newRow]);
+    setSelectedLayerConfigRow(nextIdx);
+  };
+  const removeItemRow = (idx) => {
+    const updated = itemsInput.filter((_, i) => i !== idx);
+    setItemsInput(updated);
+    if (selectedLayerConfigRow >= updated.length) {
+      setSelectedLayerConfigRow(Math.max(0, updated.length - 1));
+    }
+  };
 
   const handleItemChange = (idx, field, val) => {
     const updated = [...itemsInput];
     const item = { ...updated[idx], [field]: val };
 
-    // When Ply changes, refresh default layer structure
+    // When Ply or Flute changes, sync and update layers
     if (field === 'ply') {
-      if (val === '5') item.layers = default5PlyLayers;
-      else if (val === '3') item.layers = default3PlyLayers;
+      item.layers = syncLayersForPly(item.layers, val, item.fluteType);
+    } else if (field === 'fluteType') {
+      item.layers = syncLayersForPly(item.layers, item.ply, val);
     }
 
     // Auto-calculate CAD and Blank metrics
     const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, item.layers, parseFloat(item.paperGsm || 140));
     item.od = cad.odStr;
-    item.deckleMm = String(cad.deckleMm);
-    item.cutLengthMm = String(cad.cutLengthMm);
+    item.deckleMm = cad.deckleMm > 0 ? String(cad.deckleMm) : '';
+    item.cutLengthMm = cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '';
     item.creasingScores = cad.creasingScores;
-    item.weight = String(cad.theoreticalWeightGrams);
-    item.targetBs = cad.estimatedBs;
-    item.targetBct = String(cad.estimatedBctKgf);
+    item.weight = cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '';
+    item.targetBs = cad.estimatedBs || '';
+    item.targetBct = cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '';
 
     updated[idx] = item;
+    setItemsInput(updated);
+  };
+
+  const handleLayerChange = (itemIdx, layerIdx, field, val) => {
+    const updated = [...itemsInput];
+    const item = { ...updated[itemIdx] };
+    const currentLayers = Array.isArray(item.layers) && item.layers.length > 0
+      ? [...item.layers]
+      : generateDefaultLayers(item.ply, item.fluteType);
+
+    const updatedLyr = { ...currentLayers[layerIdx], [field]: val };
+
+    if (field === 'isFlute') {
+      updatedLyr.takeUp = val ? (FLUTE_FACTORS[item.fluteType] || 1.35) : 1.0;
+    }
+
+    if (field === 'type') {
+      updatedLyr.colour = val;
+    }
+
+    currentLayers[layerIdx] = updatedLyr;
+    item.layers = currentLayers;
+
+    if (currentLayers[0]) {
+      item.paperGsm = String(currentLayers[0].gsm || item.paperGsm);
+      item.paperBf = String(currentLayers[0].bf || item.paperBf);
+      item.paperColour = currentLayers[0].type || currentLayers[0].colour || item.paperColour;
+    }
+
+    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, currentLayers, parseFloat(item.paperGsm || 140));
+    item.od = cad.odStr;
+    item.deckleMm = cad.deckleMm > 0 ? String(cad.deckleMm) : '';
+    item.cutLengthMm = cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '';
+    item.creasingScores = cad.creasingScores;
+    item.weight = cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '';
+    item.targetBs = cad.estimatedBs || '';
+    item.targetBct = cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '';
+
+    updated[itemIdx] = item;
     setItemsInput(updated);
   };
 
@@ -9949,7 +12382,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     setEditingId(item.id);
     const layers = item.layers && Array.isArray(item.layers) && item.layers.length > 0
       ? item.layers
-      : ((item.ply || item.Ply) == '5' ? default5PlyLayers : default3PlyLayers);
+      : generateDefaultLayers(item.ply || item.Ply || '3', item.fluteType || 'B');
 
     const cad = calculateCadBlank(
       item.size || item.Size_mm,
@@ -9967,23 +12400,24 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       name: item.name || item.Item_Name || '',
       size: item.size || item.Size_mm || '',
       od: item.od || cad.odStr,
-      ply: item.ply || item.Ply || '3',
+      ply: String(item.ply || item.Ply || '3'),
       fluteType: item.fluteType || 'B',
       jointType: item.jointType || 'Stitching (35mm)',
-      deckleMm: item.deckleMm || String(cad.deckleMm),
-      cutLengthMm: item.cutLengthMm || String(cad.cutLengthMm),
+      deckleMm: item.deckleMm || (cad.deckleMm > 0 ? String(cad.deckleMm) : ''),
+      cutLengthMm: item.cutLengthMm || (cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : ''),
       creasingScores: item.creasingScores || cad.creasingScores,
-      weight: item.weight || item.Weight_g || String(cad.theoreticalWeightGrams),
-      paperGsm: item.paperGsm || item.Paper_GSM || '140',
-      paperBf: item.paperBf || item.Paper_BF || '18',
-      paperColour: item.paperColour || item.Paper_Colour || 'Kraft',
+      weight: item.weight || item.Weight_g || (cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : ''),
+      paperGsm: item.paperGsm || item.Paper_GSM || '180',
+      paperBf: item.paperBf || item.Paper_BF || '22',
+      paperColour: item.paperColour || item.Paper_Colour || 'Golden',
       stereoBlockId: item.stereoBlockId || '',
       stereoColors: item.stereoColors || '1-Colour Black',
       punchingDieId: item.punchingDieId || '',
-      targetBs: item.targetBs || cad.estimatedBs,
-      targetBct: item.targetBct || String(cad.estimatedBctKgf),
+      targetBs: item.targetBs || (cad.estimatedBs || ''),
+      targetBct: item.targetBct || (cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : ''),
       layers: layers
     }]);
+    setSelectedLayerConfigRow(0);
     setShowBatchForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -10013,6 +12447,13 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   const ply5Count = filteredItems.filter(i => (i.ply || i.Ply) == '5').length;
   const ply7Count = filteredItems.filter(i => (i.ply || i.Ply) == '7').length;
 
+  const currentConfigItem = itemsInput[selectedLayerConfigRow] || itemsInput[0] || emptyItemRow;
+  const currentConfigLayers = Array.isArray(currentConfigItem.layers) && currentConfigItem.layers.length > 0
+    ? currentConfigItem.layers
+    : generateDefaultLayers(currentConfigItem.ply, currentConfigItem.fluteType);
+
+  const activeBlankAreaSqM = (parseFloat(currentConfigItem.deckleMm || 0) * parseFloat(currentConfigItem.cutLengthMm || 0)) / 1000000;
+
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', paddingBottom: 48 }}>
       
@@ -10033,18 +12474,21 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
 
             {/* CAD BLANK DIMENSIONS SUMMARY */}
             <div style={{ background: '#f8fafc', border: '1.5px solid #cbd5e1', borderRadius: 10, padding: 16, marginBottom: 16 }}>
-              <h4 style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', textTransform: 'uppercase', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>📦</span> Auto-Engineered CAD Blank Dimensions
+              <h4 style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', textTransform: 'uppercase', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📦</span> Auto-Engineered CAD Blank Dimensions &amp; Strength Specs
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, fontSize: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, fontSize: 12 }}>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Inner Size (ID):</span><br /><strong style={{ fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.size || activeBomModalItem.Size_mm || '-'} mm</strong></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Outer Size (OD):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{activeBomModalItem.od || '-'} mm</strong></div>
+                <div><span style={{ color: '#64748b', fontSize: 11 }}>Outer Size (OD):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{(() => { const _id = activeBomModalItem.size || activeBomModalItem.Size_mm || ''; const _p = _id.split(/[xX*×]+/).map(s => parseFloat(s.trim()) || 0); return (_p.length >= 3 && _p[0] > 0) ? `${_p[0]+4}x${_p[1]+4}x${_p[2]+4}` : '-'; })()} mm</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Cutting Deckle (Width):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#16a34a' }}>{activeBomModalItem.deckleMm || '-'} mm</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Cut Sheet Length:</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#16a34a' }}>{activeBomModalItem.cutLengthMm || '-'} mm</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Joint / Lap:</span><br /><strong>{activeBomModalItem.jointType || 'Stitching (35mm)'}</strong></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Creasing Profile:</span><br /><strong style={{ fontSize: 11 }}>{activeBomModalItem.creasingScores || 'Standard RSC Profile'}</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Engineered Weight:</span><br /><strong style={{ color: '#d97706', fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.weight || activeBomModalItem.Weight_g || '-'} g</strong></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Target BS / BCT:</span><br /><strong style={{ color: '#7c3aed' }}>{activeBomModalItem.targetBs || '9.5'} kg/cm² / {activeBomModalItem.targetBct || '280'} kgf</strong></div>
+                <div><span style={{ color: '#64748b', fontSize: 11 }}>Bursting Strength (BS):</span><br /><strong style={{ color: '#059669', fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.targetBs ? `${activeBomModalItem.targetBs} kg/cm²` : '-'}</strong></div>
+                <div><span style={{ color: '#64748b', fontSize: 11 }}>Box Compression (BCT):</span><br /><strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{activeBomModalItem.targetBct ? `${activeBomModalItem.targetBct} KG` : '-'}</strong></div>
+              </div>
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #cbd5e1', fontSize: 11, color: '#475569' }}>
+                <span style={{ fontWeight: 700 }}>Creasing Scores:</span> {activeBomModalItem.creasingScores || 'Standard RSC Profile'}
               </div>
             </div>
 
@@ -10058,25 +12502,33 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                 <thead>
                   <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #cbd5e1' }}>
                     <th style={{ padding: '8px 12px', textAlign: 'left' }}>Board Layer</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>Paper Grade</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>Paper Material (Kraft / Golden / Duplex)</th>
                     <th style={{ padding: '8px 12px', textAlign: 'center' }}>GSM</th>
                     <th style={{ padding: '8px 12px', textAlign: 'center' }}>BF</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'center' }}>Shade</th>
                     <th style={{ padding: '8px 12px', textAlign: 'center' }}>Take-Up Factor</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(activeBomModalItem.layers && activeBomModalItem.layers.length > 0
-                    ? activeBomModalItem.layers
-                    : ((activeBomModalItem.ply || activeBomModalItem.Ply) == 5 ? default5PlyLayers : default3PlyLayers)
+                  {normalizeLayers(
+                    activeBomModalItem.layers && activeBomModalItem.layers.length > 0
+                      ? activeBomModalItem.layers
+                      : generateDefaultLayers(activeBomModalItem.ply || activeBomModalItem.Ply || '3', activeBomModalItem.fluteType || 'B'),
+                    activeBomModalItem.fluteType || 'B'
                   ).map((lyr, lIdx) => (
                     <tr key={lIdx} style={{ borderBottom: '1px solid #e2e8f0', background: lyr.isFlute ? '#fffbeb' : '#fff' }}>
-                      <td style={{ padding: '8px 12px', fontWeight: 800, color: lyr.isFlute ? '#b45309' : '#0f172a' }}>{lyr.name}</td>
-                      <td style={{ padding: '8px 12px' }}>{lyr.type || 'Kraft Paper'}</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 800, color: lyr.isFlute ? '#b45309' : '#0f172a' }}>
+                        {lyr.isFlute ? '🌊 ' : '📦 '}{lyr.name}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <span className={`px-2 py-0.5 rounded text-xs font-extrabold ${lyr.type === 'Golden' || lyr.colour === 'Golden' ? 'bg-amber-100 text-amber-900 border border-amber-300' : (lyr.type === 'Duplex' || lyr.colour === 'Duplex' ? 'bg-purple-100 text-purple-900 border border-purple-300' : 'bg-stone-100 text-stone-900 border border-stone-300')}`}>
+                          {lyr.type || lyr.colour || 'Kraft'}
+                        </span>
+                      </td>
                       <td style={{ padding: '8px 12px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{lyr.gsm} GSM</td>
                       <td style={{ padding: '8px 12px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{lyr.bf} BF</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'center' }}>{lyr.colour || 'Kraft'}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 800, color: lyr.isFlute ? '#d97706' : '#64748b' }}>{lyr.takeUp || (lyr.isFlute ? '1.35x' : '1.00x')}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 800, color: lyr.isFlute ? '#d97706' : '#64748b' }}>
+                        {parseFloat(lyr.takeUp).toFixed(2)}x
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -10091,7 +12543,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
             </div>
 
             <button onClick={() => setActiveBomModalItem(null)} className="apex-btn apex-btn-primary" style={{ width: '100%', padding: '10px 0', fontWeight: 800, background: '#0f172a', justifyContent: 'center' }}>
-              Close Recipe Visualizer
+              ✕ Close CAD &amp; BOM Visualizer
             </button>
           </div>
         </div>
@@ -10112,13 +12564,37 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
-            onClick={() => { setShowBatchForm(!showBatchForm); setEditingId(null); setItemsInput([{ ...emptyItemRow }]); }}
+            onClick={() => { setShowBatchForm(!showBatchForm); setEditingId(null); setItemsInput([{ ...emptyItemRow }]); setSelectedLayerConfigRow(0); }}
             className="apex-btn apex-btn-primary"
             style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#2563eb' }}
           >
             {showBatchForm ? '✕ Close Entry Form' : '➕ Add Box Specs (CAD & BOM Recipe Mode)'}
+          </button>
+
+          <button
+            type="button"
+            onClick={startAiBoxDictation}
+            className="apex-btn"
+            style={{
+              fontWeight: 800,
+              padding: '7px 16px',
+              fontSize: 12,
+              background: isAiDictating ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              boxShadow: isAiDictating ? '0 0 16px rgba(239, 68, 68, 0.6)' : '0 2px 8px rgba(124, 58, 237, 0.35)',
+              cursor: 'pointer',
+              border: 'none',
+              borderRadius: 8
+            }}
+            title="Dictate Box Name, Dimensions, Ply, Flute, and full Layer-by-Layer Paper BOM"
+          >
+            <Sparkles style={{ width: 14, height: 14, color: '#fef08a' }} />
+            <span>{isAiDictating ? '🔴 Listening... Dictate Specs' : '✨ 🎙️ AI Dictate Box Recipe'}</span>
           </button>
         </div>
         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -10126,22 +12602,76 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
         </span>
       </div>
 
+      {/* Live AI Dictation Status Alert */}
+      {(isAiDictating || aiDictationStatus) && (
+        <div style={{
+          padding: '12px 18px',
+          marginBottom: 16,
+          background: isAiDictating ? '#1e1b4b' : '#0f172a',
+          border: isAiDictating ? '1.5px solid #818cf8' : '1.5px solid #334155',
+          borderRadius: 10,
+          color: '#fff',
+          fontSize: 12.5,
+          fontWeight: 600,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {isAiDictating && <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', animation: 'ping 1.2s infinite' }} />}
+            <span>{aiDictationStatus || 'Listening... Speak box name, size, ply, and layer-by-layer paper recipes.'}</span>
+          </div>
+          {aiDictationStatus && !isAiDictating && (
+            <button
+              onClick={() => setAiDictationStatus('')}
+              style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 14, cursor: 'pointer', fontWeight: 800 }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Multi-Row CAD & BOM Entry Form */}
       {showBatchForm && (
         <div className="apex-card" style={{ padding: 18, marginBottom: 20, background: '#f8fafc', border: '1.5px solid #cbd5e1' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div>
               <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                {editingId ? 'Edit Box Specification & CAD BOM' : `➕ Batch Inward Box Specs with Auto-CAD (${itemsInput.length} Rows)`}
+                {editingId ? 'Edit Box Specification & Layer-by-Layer CAD BOM' : `➕ Inward Box Specs with Full Layer-by-Layer BOM Recipe (${itemsInput.length} Rows)`}
               </h3>
-              <p style={{ fontSize: 11, color: '#64748b', margin: '2px 0 0 0' }}>Type L x W x H to automatically compute Outer Dim (OD), Deckle Width, Cut Length &amp; Board Grams</p>
+              <p style={{ fontSize: 11, color: '#64748b', margin: '2px 0 0 0' }}>Type L x W x H to compute Outer Dim (OD), Deckle Width, Cut Length &amp; configure every single paper ply below</p>
             </div>
-            <span style={{ fontSize: 11, background: '#dbeafe', color: '#1e40af', padding: '3px 10px', borderRadius: 12, fontWeight: 800 }}>
-              ⚡ Live CAD Math Active
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                onClick={startAiBoxDictation}
+                style={{
+                  background: '#e0e7ff',
+                  color: '#3730a3',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 6,
+                  padding: '4px 10px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  cursor: 'pointer'
+                }}
+              >
+                <Sparkles style={{ width: 12, height: 12 }} /> Dictate Recipe
+              </button>
+              <span style={{ fontSize: 11, background: '#dbeafe', color: '#1e40af', padding: '3px 10px', borderRadius: 12, fontWeight: 800 }}>
+                ⚡ Live Layer Math Active
+              </span>
+            </div>
           </div>
 
           <form onSubmit={handleSaveItems}>
+            {/* Main Dimensions Table */}
             <div className="overflow-x-auto border border-stone-300 rounded-lg shadow-sm mb-4">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
@@ -10156,73 +12686,258 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                     <th className="p-2 w-16">Flute</th>
                     <th className="p-2 min-w-[110px]">Cutting Deckle (W)</th>
                     <th className="p-2 min-w-[110px]">Cut Length (L)</th>
-                    <th className="p-2 min-w-[90px]">Top GSM/BF</th>
+                    <th className="p-2 min-w-[140px]">Paper Structure</th>
                     <th className="p-2 min-w-[90px]">Weight (g)</th>
                     <th className="p-2 w-10 text-center">✕</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200 bg-white">
-                  {itemsInput.map((itm, idx) => (
-                    <tr key={idx} className="hover:bg-stone-50">
-                      <td className="p-2 text-center font-bold text-stone-500">{idx + 1}</td>
-                      <td className="p-1.5">
-                        <select
-                          className="w-full p-1.5 border rounded text-xs"
-                          value={itm.companyId}
-                          onChange={e => handleItemChange(idx, 'companyId', e.target.value)}
-                        >
-                          <option value="">-- All Units --</option>
-                          {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="p-1.5">
-                        <select className="w-full p-1.5 border rounded text-xs" value={itm.itemType} onChange={e => handleItemChange(idx, 'itemType', e.target.value)}>
-                          <option value="Box">Box (RSC)</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC / Die-Cut</option>
-                        </select>
-                      </td>
-                      <td className="p-1.5">
-                        <input required type="text" placeholder="e.g. 180ml IB Master" className="w-full p-1.5 border border-blue-300 rounded font-bold text-xs" value={itm.name} onChange={e => handleItemChange(idx, 'name', e.target.value)} />
-                      </td>
-                      <td className="p-1.5">
-                        <input required type="text" placeholder="250x200x150" className="w-full p-1.5 border border-amber-300 bg-amber-50/50 rounded text-xs font-mono font-bold" value={itm.size} onChange={e => handleItemChange(idx, 'size', e.target.value)} />
-                      </td>
-                      <td className="p-1.5">
-                        <input type="text" readOnly placeholder="Auto OD" className="w-full p-1.5 border rounded text-xs font-mono bg-slate-50 text-slate-700" value={itm.od} />
-                      </td>
-                      <td className="p-1.5">
-                        <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.ply} onChange={e => handleItemChange(idx, 'ply', e.target.value)}>
-                          <option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option><option value="2">2 Ply</option>
-                        </select>
-                      </td>
-                      <td className="p-1.5">
-                        <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.fluteType} onChange={e => handleItemChange(idx, 'fluteType', e.target.value)}>
-                          <option value="B">B (1.35x)</option><option value="C">C (1.43x)</option><option value="E">E (1.27x)</option><option value="A">A (1.52x)</option><option value="BC">BC</option><option value="AB">AB</option>
-                        </select>
-                      </td>
-                      <td className="p-1.5">
-                        <input type="text" placeholder="Auto Deckle" className="w-full p-1.5 border rounded text-xs font-mono bg-emerald-50 text-emerald-800 font-bold" value={itm.deckleMm} onChange={e => handleItemChange(idx, 'deckleMm', e.target.value)} />
-                      </td>
-                      <td className="p-1.5">
-                        <input type="text" placeholder="Auto Length" className="w-full p-1.5 border rounded text-xs font-mono bg-emerald-50 text-emerald-800 font-bold" value={itm.cutLengthMm} onChange={e => handleItemChange(idx, 'cutLengthMm', e.target.value)} />
-                      </td>
-                      <td className="p-1.5">
-                        <div className="flex gap-1">
-                          <input type="number" placeholder="GSM" title="Top Liner GSM" className="w-12 p-1.5 border rounded text-xs" value={itm.paperGsm} onChange={e => handleItemChange(idx, 'paperGsm', e.target.value)} />
-                          <input type="number" placeholder="BF" title="Top Liner BF" className="w-10 p-1.5 border rounded text-xs" value={itm.paperBf} onChange={e => handleItemChange(idx, 'paperBf', e.target.value)} />
-                        </div>
-                      </td>
-                      <td className="p-1.5">
-                        <input type="number" step="0.1" placeholder="g" className="w-full p-1.5 border rounded text-xs font-bold font-mono bg-amber-50 text-amber-900" value={itm.weight} onChange={e => handleItemChange(idx, 'weight', e.target.value)} />
-                      </td>
-                      <td className="p-1.5 text-center">
-                        {!editingId && itemsInput.length > 1 && (
-                          <button type="button" onClick={() => removeItemRow(idx)} className="text-red-500 hover:text-red-700 font-bold text-sm">✕</button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {itemsInput.map((itm, idx) => {
+                    const isSelected = selectedLayerConfigRow === idx;
+                    const layerSummary = (itm.layers || []).map(l => `${l.gsm}G ${l.type || l.colour || 'Kraft'}`).join(' / ') || '180G Golden / 120F Kraft / 140K Kraft';
+                    return (
+                      <tr key={idx} className={`${isSelected ? 'bg-blue-50/70 ring-1 ring-blue-300' : 'hover:bg-stone-50'}`}>
+                        <td className="p-2 text-center font-bold text-stone-500">{idx + 1}</td>
+                        <td className="p-1.5">
+                          <select
+                            className="w-full p-1.5 border rounded text-xs"
+                            value={itm.companyId}
+                            onChange={e => handleItemChange(idx, 'companyId', e.target.value)}
+                          >
+                            <option value="">-- All Units --</option>
+                            {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        </td>
+                        <td className="p-1.5">
+                          <select className="w-full p-1.5 border rounded text-xs" value={itm.itemType} onChange={e => handleItemChange(idx, 'itemType', e.target.value)}>
+                            <option value="Box">Box (RSC)</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC / Die-Cut</option>
+                          </select>
+                        </td>
+                        <td className="p-1.5">
+                          <div className="relative flex items-center">
+                            <input required type="text" placeholder="e.g. 180ml IB Master" className="w-full p-1.5 pr-7 border border-blue-300 rounded font-bold text-xs" value={itm.name} onChange={e => handleItemChange(idx, 'name', e.target.value)} />
+                            <div className="absolute right-1">
+                              <VoiceInputButton size="sm" onTranscript={text => handleItemChange(idx, 'name', text)} title="Speak item name" />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-1.5">
+                          <div className="relative flex items-center">
+                            <input required type="text" placeholder="250x200x150" className="w-full p-1.5 pr-7 border border-amber-300 bg-amber-50/50 rounded text-xs font-mono font-bold" value={itm.size} onChange={e => handleItemChange(idx, 'size', e.target.value)} />
+                            <div className="absolute right-1">
+                              <VoiceInputButton size="sm" mode="dimension" onTranscript={text => handleItemChange(idx, 'size', text)} title="Speak dimensions (e.g. '250 by 200 by 150')" />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-1.5">
+                          <input type="text" readOnly placeholder="Auto OD" className="w-full p-1.5 border rounded text-xs font-mono bg-slate-50 text-slate-700" value={itm.od} />
+                        </td>
+                        <td className="p-1.5">
+                          <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.ply} onChange={e => handleItemChange(idx, 'ply', e.target.value)}>
+                            <option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option><option value="2">2 Ply</option>
+                          </select>
+                        </td>
+                        <td className="p-1.5">
+                          <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.fluteType} onChange={e => handleItemChange(idx, 'fluteType', e.target.value)}>
+                            <option value="B">B (1.35x)</option><option value="C">C (1.43x)</option><option value="E">E (1.27x)</option><option value="A">A (1.52x)</option><option value="BC">BC</option><option value="AB">AB</option>
+                          </select>
+                        </td>
+                        <td className="p-1.5">
+                          <input type="text" placeholder="Auto Deckle" className="w-full p-1.5 border rounded text-xs font-mono bg-emerald-50 text-emerald-800 font-bold" value={itm.deckleMm} onChange={e => handleItemChange(idx, 'deckleMm', e.target.value)} />
+                        </td>
+                        <td className="p-1.5">
+                          <input type="text" placeholder="Auto Length" className="w-full p-1.5 border rounded text-xs font-mono bg-emerald-50 text-emerald-800 font-bold" value={itm.cutLengthMm} onChange={e => handleItemChange(idx, 'cutLengthMm', e.target.value)} />
+                        </td>
+                        <td className="p-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedLayerConfigRow(idx)}
+                            className={`w-full p-1.5 border rounded text-[11px] font-bold flex items-center justify-between gap-1 transition ${isSelected ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'}`}
+                            title="Click to view & edit all paper layers"
+                          >
+                            <span className="truncate">{layerSummary}</span>
+                            <span className="text-[10px] opacity-80">⚙️ Layers</span>
+                          </button>
+                        </td>
+                        <td className="p-1.5">
+                          <input type="number" step="0.1" placeholder="g" className="w-full p-1.5 border rounded text-xs font-bold font-mono bg-amber-50 text-amber-900" value={itm.weight} onChange={e => handleItemChange(idx, 'weight', e.target.value)} />
+                        </td>
+                        <td className="p-1.5 text-center">
+                          {!editingId && itemsInput.length > 1 && (
+                            <button type="button" onClick={() => removeItemRow(idx)} className="text-red-500 hover:text-red-700 font-bold text-sm">✕</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+
+            {/* DEDICATED LAYER-BY-LAYER PAPER SPECIFICATION MATRIX */}
+            <div className="bg-white border-2 border-blue-400 rounded-xl p-4 mb-4 shadow-md">
+              <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-200 flex-wrap gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="bg-blue-600 text-white text-xs font-black px-2.5 py-1 rounded-md">
+                    🧬 LAYER-BY-LAYER BOM RECIPE
+                  </span>
+                  <span className="font-extrabold text-slate-900 text-sm">
+                    {currentConfigItem.name || `Row ${selectedLayerConfigRow + 1}`} ({currentConfigItem.ply}-Ply {currentConfigItem.fluteType}-Flute)
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">
+                    • Configure paper material (Kraft / Golden / Duplex), GSM, BF &amp; take-up for all {currentConfigLayers.length} layers:
+                  </span>
+                </div>
+              </div>
+
+              {/* Multi-Row Row Selector Tabs if multiple items in form */}
+              {!editingId && itemsInput.length > 1 && (
+                <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
+                  {itemsInput.map((itm, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setSelectedLayerConfigRow(idx)}
+                      className={`px-3 py-1 rounded-md text-xs font-bold transition border ${selectedLayerConfigRow === idx ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'}`}
+                    >
+                      Row {idx + 1}: {itm.name || 'Unnamed SKU'} ({itm.ply || 3}-Ply)
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Layers Table */}
+              <div className="overflow-x-auto border border-slate-300 rounded-lg shadow-sm mb-3">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-white font-bold">
+                      <th className="p-2 w-40">Layer Position / Role</th>
+                      <th className="p-2 min-w-[180px]">Paper Material (Kraft / Golden / Duplex)</th>
+                      <th className="p-2 w-28 text-center">GSM (g/m²)</th>
+                      <th className="p-2 w-24 text-center">BF (Burst)</th>
+                      <th className="p-2 w-28 text-center">Take-Up Factor</th>
+                      <th className="p-2 w-28 text-right pr-3">Est. Layer Wt</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {currentConfigLayers.map((lyr, lIdx) => {
+                      const isFlute = lyr.isFlute || false;
+                      const lyrFactor = parseFloat(lyr.takeUp || (isFlute ? (FLUTE_FACTORS[currentConfigItem.fluteType] || 1.35) : 1.0));
+                      const lyrGsm = parseFloat(lyr.gsm || 0);
+                      const lyrWeightGrams = activeBlankAreaSqM > 0 ? Math.round(activeBlankAreaSqM * lyrGsm * lyrFactor) : 0;
+
+                      return (
+                        <tr key={lIdx} className={`${isFlute ? 'bg-amber-50/50' : 'bg-white'} hover:bg-blue-50/30 transition`}>
+                          <td className="p-2 font-bold text-slate-800">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${isFlute ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-800'}`}>
+                                {isFlute ? '🌊 FLUTE' : '📦 LINER'}
+                              </span>
+                              <span>{lyr.name}</span>
+                            </div>
+                          </td>
+                          <td className="p-1.5">
+                            <div className="flex items-center gap-1">
+                              <select
+                                className="flex-1 p-1.5 border border-slate-300 rounded text-xs font-bold text-slate-800 bg-white"
+                                value={lyr.type || lyr.colour || 'Kraft'}
+                                onChange={e => handleLayerChange(selectedLayerConfigRow, lIdx, 'type', e.target.value)}
+                              >
+                                <option value="Kraft">Kraft</option>
+                                <option value="Golden">Golden</option>
+                                <option value="Duplex">Duplex</option>
+                              </select>
+                              <VoiceInputButton
+                                size="sm"
+                                mode="material"
+                                onTranscript={val => handleLayerChange(selectedLayerConfigRow, lIdx, 'type', val)}
+                                title="Speak Paper Material (Kraft / Golden / Duplex)"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-1.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number"
+                                min="60"
+                                max="400"
+                                className="w-16 p-1.5 border border-blue-400 rounded text-xs text-center font-mono font-black bg-blue-50/50 text-blue-900"
+                                value={lyr.gsm}
+                                onChange={e => handleLayerChange(selectedLayerConfigRow, lIdx, 'gsm', e.target.value)}
+                              />
+                              <span className="text-[10px] font-bold text-slate-400">GSM</span>
+                              <VoiceInputButton
+                                size="sm"
+                                mode="number"
+                                onTranscript={val => handleLayerChange(selectedLayerConfigRow, lIdx, 'gsm', val)}
+                                title="Speak GSM (e.g. '180')"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-1.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number"
+                                min="10"
+                                max="45"
+                                className="w-14 p-1.5 border border-slate-300 rounded text-xs text-center font-mono font-bold bg-white"
+                                value={lyr.bf}
+                                onChange={e => handleLayerChange(selectedLayerConfigRow, lIdx, 'bf', e.target.value)}
+                              />
+                              <span className="text-[10px] font-bold text-slate-400">BF</span>
+                              <VoiceInputButton
+                                size="sm"
+                                mode="number"
+                                onTranscript={val => handleLayerChange(selectedLayerConfigRow, lIdx, 'bf', val)}
+                                title="Speak BF (e.g. '20')"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-1.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="1.0"
+                                max="2.0"
+                                className="w-14 p-1.5 border border-slate-300 rounded text-xs text-center font-mono font-bold bg-slate-50 text-slate-700"
+                                value={lyr.takeUp || (isFlute ? (FLUTE_FACTORS[currentConfigItem.fluteType] || 1.35) : 1.0)}
+                                onChange={e => handleLayerChange(selectedLayerConfigRow, lIdx, 'takeUp', e.target.value)}
+                              />
+                              <span className="text-[10px] font-bold text-slate-400">x</span>
+                              <VoiceInputButton
+                                size="sm"
+                                mode="number"
+                                onTranscript={val => handleLayerChange(selectedLayerConfigRow, lIdx, 'takeUp', val)}
+                                title="Speak Take-Up Factor"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-1.5 text-right pr-3 font-mono font-bold text-slate-700">
+                            {lyrWeightGrams > 0 ? `${lyrWeightGrams} g` : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* LIVE ENGINEERING METRICS SUMMARY BAR */}
+              <div className="bg-slate-900 text-white rounded-lg p-3 grid grid-cols-2 md:grid-cols-3 gap-3 text-xs font-mono font-bold text-center">
+                <div className="border-r border-slate-700 pr-2">
+                  <span className="text-[10px] text-slate-400 block font-sans uppercase font-bold">Total Board Substance</span>
+                  <span className="text-sm text-sky-400 font-extrabold">{currentConfigItem.paperGsm ? Math.round(normalizeLayers(currentConfigLayers, currentConfigItem.fluteType || 'B').reduce((acc, l) => acc + (parseFloat(l.gsm || 0) * parseFloat(l.takeUp || 1.0)), 0)) : '-'} GSM</span>
+                </div>
+                <div className="border-r border-slate-700 pr-2">
+                  <span className="text-[10px] text-slate-400 block font-sans uppercase font-bold">Predicted Box Weight</span>
+                  <span className="text-sm text-amber-400 font-extrabold">{currentConfigItem.weight || '-'} g</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block font-sans uppercase font-bold">Bursting Strength (BS)</span>
+                  <span className="text-sm text-emerald-400 font-extrabold">{currentConfigItem.targetBs || '9.5'} kg/cm²</span>
+                </div>
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
@@ -10232,7 +12947,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                 </button>
               )}
               <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 800, background: '#2563eb' }}>
-                {editingId ? 'Update Box SKU & Recipe' : `Save ${itemsInput.length} SKU(s) to Database`}
+                {editingId ? 'Update Box SKU & Full Layer Recipe' : `Save ${itemsInput.length} SKU(s) with Full Layer Recipes to Database`}
               </button>
               <button type="button" onClick={() => { setShowBatchForm(false); setEditingId(null); }} className="apex-btn apex-btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }}>
                 Cancel
@@ -10245,7 +12960,12 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       {/* Filter Row */}
       <div className="apex-card" style={{ padding: '10px 16px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>FILTER:</span>
-        <input type="text" placeholder="Search Item Name / SKU Code..." className="apex-input" style={{ width: 240, padding: '4px 8px', fontSize: 12 }} value={filters.name} onChange={e => setFilters({ ...filters, name: e.target.value })} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input type="text" placeholder="Search Item Name / SKU Code..." className="apex-input" style={{ width: 240, padding: '4px 30px 4px 8px', fontSize: 12 }} value={filters.name} onChange={e => setFilters({ ...filters, name: e.target.value })} />
+          <div style={{ position: 'absolute', right: 4 }}>
+            <VoiceInputButton size="sm" mode="search" onTranscript={text => setFilters({ ...filters, name: text })} title="Voice search items" />
+          </div>
+        </div>
         <select className="apex-select" style={{ width: 140, padding: '4px 8px', fontSize: 12 }} value={filters.ply} onChange={e => setFilters({ ...filters, ply: e.target.value })}>
           <option value="">All Plies</option><option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option><option value="2">2 Ply</option>
         </select>
@@ -10268,7 +12988,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               <th>Outer Size (OD mm)</th>
               <th>Cutting Blank (Deckle x Cut)</th>
               <th>Ply / Flute</th>
-              <th>Top Paper</th>
+              <th>Paper Recipe (All Layers)</th>
               <th>Engineered Wt.</th>
               <th style={{ textAlign: 'right', paddingRight: 14 }}>CAD &amp; BOM Actions</th>
             </tr>
@@ -10281,14 +13001,16 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               const comp = companies.find(c => c.id === item.companyId)?.name || 'Default';
               const name = item.name || item.Item_Name || 'Unnamed';
               const idDim = item.size || item.Size_mm || '-';
-              const odDim = item.od || '-';
+              // Compute OD dynamically from ID + 4mm (ignore stale stored values)
+              const _idParts = idDim !== '-' ? idDim.split(/[xX*×]+/).map(s => parseFloat(s.trim()) || 0) : [];
+              const odDim = (_idParts.length >= 3 && _idParts[0] > 0)
+                ? `${_idParts[0] + 4}x${_idParts[1] + 4}x${_idParts[2] + 4}`
+                : '-';
               const ply = item.ply || item.Ply || '3';
               const flute = item.fluteType || 'B';
-              const gsm = item.paperGsm || item.Paper_GSM || '-';
-              const bf = item.paperBf || item.Paper_BF || '-';
-              const col = item.paperColour || item.Paper_Colour || 'Kraft';
               const wt = item.weight || item.Weight_g ? `${item.weight || item.Weight_g}g` : '-';
               const deckle = item.deckleMm ? `${item.deckleMm} x ${item.cutLengthMm || '-'} mm` : '-';
+              const itemLayers = normalizeLayers(getItemLayers(item), item.fluteType || 'B');
 
               return (
                 <tr key={item.id} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
@@ -10300,7 +13022,22 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                   <td style={{ fontFamily: 'var(--font-mono)', color: '#64748b' }}>{odDim}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#16a34a' }}>{deckle}</td>
                   <td><strong style={{ color: '#2563eb' }}>{ply}-Ply</strong> <span style={{ color: '#64748b' }}>({flute} Flute)</span></td>
-                  <td style={{ fontSize: 11, color: '#475569' }}>{gsm} GSM | {bf} BF | {col}</td>
+                  <td>
+                    {itemLayers.length > 0 ? (
+                      <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ fontWeight: 700, color: '#0f172a' }}>
+                          {itemLayers.map(l => `${l.gsm}G ${l.type || l.colour || 'Kraft'}`).join(' / ')}
+                        </span>
+                        <span style={{ color: '#64748b', marginLeft: 4 }}>
+                          ({Math.round(itemLayers.reduce((acc, l) => acc + (parseFloat(l.gsm || 0) * parseFloat(l.takeUp || 1.0)), 0))} GSM)
+                        </span>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 11, color: '#475569' }}>
+                        {item.paperGsm || item.Paper_GSM || '-'} GSM | {item.paperBf || item.Paper_BF || '-'} BF
+                      </span>
+                    )}
+                  </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#d97706' }}>{wt}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingRight: 14 }}>
                     <button
@@ -10744,14 +13481,19 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
       {/* Filter & Search Bar */}
       <div className="apex-card" style={{ padding: '12px 18px', marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: '#fff' }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>🔍 SEARCH:</span>
-        <input
-          type="text"
-          placeholder="Search by client name, GST, phone, contact, state..."
-          className="apex-input"
-          style={{ width: 280, padding: '5px 10px', fontSize: 12 }}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-        />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search by client name, GST, phone, contact, state..."
+            className="apex-input"
+            style={{ width: 280, padding: '5px 30px 5px 10px', fontSize: 12 }}
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <div style={{ position: 'absolute', right: 4 }}>
+            <VoiceInputButton size="sm" mode="search" onTranscript={text => setSearchQuery(text)} title="Voice search customers" />
+          </div>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Unit:</span>
           <select
@@ -12171,10 +14913,10 @@ function TallySyncView({ inventory, production, orders, companies, customers = [
           const bfMatch = name.match(/(\d{2})\s*bf/i);
           const paperBf = bfMatch ? bfMatch[1] : '';
 
-          // Colour e.g. Golden, White, defaults to Kraft
+          // Colour e.g. Golden, Duplex, defaults to Kraft
           let paperColour = 'Kraft';
           if (name.toLowerCase().includes('golden')) paperColour = 'Golden';
-          else if (name.toLowerCase().includes('white')) paperColour = 'White';
+          else if (name.toLowerCase().includes('duplex') || name.toLowerCase().includes('white')) paperColour = 'Duplex';
 
           const rateVal = parseTallyNum(getTagText(si, "OPENINGRATE"));
 
@@ -13218,7 +15960,7 @@ function TallySyncView({ inventory, production, orders, companies, customers = [
                             >
                               <option value="Kraft">Kraft</option>
                               <option value="Golden">Golden</option>
-                              <option value="White">White</option>
+                              <option value="Duplex">Duplex</option>
                             </select>
                           </td>
                           <td className="p-3">
@@ -14377,14 +17119,19 @@ function LogsView({ logs = [], currentUser }) {
       {/* Filter & Search Bar */}
       <div className="apex-card" style={{ padding: '12px 18px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>FILTER:</span>
-        <input
-          type="text"
-          placeholder="Search activity description or user..."
-          className="apex-input"
-          style={{ width: 260, padding: '5px 10px', fontSize: 12 }}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search activity description or user..."
+            className="apex-input"
+            style={{ width: 260, padding: '5px 30px 5px 10px', fontSize: 12 }}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <div style={{ position: 'absolute', right: 4 }}>
+            <VoiceInputButton size="sm" mode="search" onTranscript={text => setSearch(text)} title="Voice search logs" />
+          </div>
+        </div>
         <select
           className="apex-select"
           style={{ width: 140, padding: '5px 10px', fontSize: 12 }}
@@ -15967,15 +18714,20 @@ function ShiftPpmRejectionWidget({ activeUnitId }) {
 // REMNANT REEL RETURN & BARCODE TAG MODAL
 // ==========================================
 function ReturnRemnantModal({ isOpen, onClose, reel, onSaveReturn, onPrintBarcode }) {
-  if (!isOpen || !reel) return null;
-
-  const [returnWeight, setReturnWeight] = useState(String(reel.balanceQty || reel.receivedQty || ''));
-  const [returnLocation, setReturnLocation] = useState(reel.location || 'Bay-01 Remnants');
+  const [returnWeight, setReturnWeight] = useState(String(reel?.balanceQty || reel?.receivedQty || ''));
+  const [returnLocation, setReturnLocation] = useState(reel?.location || 'Bay-01 Remnants');
   const [returnNotes, setReturnNotes] = useState('');
 
+  useEffect(() => {
+    if (reel) {
+      setReturnWeight(String(reel.balanceQty || reel.receivedQty || ''));
+      setReturnLocation(reel.location || 'Bay-01 Remnants');
+    }
+  }, [reel]);
+
   const retKg = parseFloat(returnWeight || 0);
-  const sizeCm = parseFloat(reel.size || 0);
-  const gsmVal = parseFloat(reel.gsm || 0);
+  const sizeCm = parseFloat(reel?.size || 0);
+  const gsmVal = parseFloat(reel?.gsm || 0);
   const linMeters = (sizeCm > 0 && gsmVal > 0 && retKg > 0) ? Math.round((retKg * 100000) / (sizeCm * gsmVal)) : 0;
 
   const handleSubmit = (e) => {
@@ -15993,6 +18745,8 @@ function ReturnRemnantModal({ isOpen, onClose, reel, onSaveReturn, onPrintBarcod
       lastReturnedAt: new Date().toISOString()
     });
   };
+
+  if (!isOpen || !reel) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
