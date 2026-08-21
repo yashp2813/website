@@ -12109,18 +12109,26 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
       const flap = Math.round(W / 2 + 3);
       creasingScores = `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`;
+    } else if (itemType === 'PPC') {
+      deckleMm = Math.round(W + H + 15);
+      cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+      creasingScores = 'PPC Partition & Plate Set Profile';
+    } else if (itemType === 'Plate') {
+      deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
+      cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
+      creasingScores = 'Flat Separator Plate / Divider Pad';
     } else if (itemType === 'Tray' || itemType === 'Lid') {
       deckleMm = Math.round(W + (2 * H) + 10);
       cutLengthMm = Math.round(L + (2 * H) + 10);
       creasingScores = `Flap: ${H}mm | Base: ${W}mm | Flap: ${H}mm`;
     } else if (itemType === 'Sheet') {
-      deckleMm = W;
-      cutLengthMm = L;
+      deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
+      cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
       creasingScores = 'Plain Corrugated Sheet';
     } else {
       deckleMm = Math.round(W + H + 15);
       cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-      creasingScores = 'PPC / Die-Cut Partition Profile';
+      creasingScores = 'Custom Die-Cut Profile';
     }
 
     const blankAreaSqM = (deckleMm > 0 && cutLengthMm > 0) ? (deckleMm * cutLengthMm) / 1000000 : 0;
@@ -13002,8 +13010,12 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                           </select>
                         </td>
                         <td className="p-1.5">
-                          <select className="w-full p-1.5 border rounded text-xs" value={itm.itemType} onChange={e => handleItemChange(idx, 'itemType', e.target.value)}>
-                            <option value="Box">Box (RSC)</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC / Die-Cut</option>
+                          <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.itemType} onChange={e => handleItemChange(idx, 'itemType', e.target.value)}>
+                            <option value="Box">Box</option>
+                            <option value="PPC">PPC</option>
+                            <option value="Plate">Plate</option>
+                            <option value="Tray">Tray</option>
+                            <option value="Sheet">Sheet</option>
                           </select>
                         </td>
                         <td className="p-1.5">
@@ -13542,8 +13554,13 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
         <select className="apex-select" style={{ width: 140, padding: '4px 8px', fontSize: 12 }} value={filters.ply} onChange={e => setFilters({ ...filters, ply: e.target.value })}>
           <option value="">All Plies</option><option value="3">3 Ply</option><option value="5">5 Ply</option><option value="7">7 Ply</option><option value="2">2 Ply</option>
         </select>
-        <select className="apex-select" style={{ width: 140, padding: '4px 8px', fontSize: 12 }} value={filters.type} onChange={e => setFilters({ ...filters, type: e.target.value })}>
-          <option value="">All Types</option><option value="Box">Box (RSC)</option><option value="Tray">Tray</option><option value="Sheet">Sheet</option><option value="PPC">PPC / Die-Cut</option>
+        <select className="apex-select" style={{ width: 140, padding: '4px 8px', fontSize: 12, fontWeight: 700 }} value={filters.type} onChange={e => setFilters({ ...filters, type: e.target.value })}>
+          <option value="">All Types</option>
+          <option value="Box">Box</option>
+          <option value="PPC">PPC</option>
+          <option value="Plate">Plate</option>
+          <option value="Tray">Tray</option>
+          <option value="Sheet">Sheet</option>
         </select>
         <button onClick={() => setFilters({ company: '', name: '', type: '', ply: '' })} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, color: '#3b82f6' }}>Clear Filters</button>
       </div>

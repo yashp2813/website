@@ -104,7 +104,7 @@ Return JSON matching the schema with action ('create' or 'edit'), targetItemName
       action: { type: 'STRING', enum: ['create', 'edit'], description: 'Whether the operator wants to create a new box or edit an existing one' },
       targetItemName: { type: 'STRING', description: 'Name of the existing box item if editing' },
       name: { type: 'STRING', description: 'Clean formatted Item / SKU Name' },
-      itemType: { type: 'STRING', enum: ['Box', 'Tray', 'Sheet', 'PPC'], description: 'Type of box' },
+      itemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet'], description: 'Type of item (Box, PPC, Plate, Tray, Sheet)' },
       size: { type: 'STRING', description: 'Inner dimensions ID format: LENGTHxWIDTHxHEIGHT e.g. 450x300x200' },
       ply: { type: 'STRING', enum: ['3', '5', '7', '2'], description: 'Number of plies' },
       fluteType: { type: 'STRING', enum: ['B', 'C', 'E', 'A', 'BC', 'AB'], description: 'Flute type profile' },
