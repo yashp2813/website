@@ -12010,8 +12010,78 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     return 3.0;
   };
 
-  // Helper to auto-calculate CAD Blank Size, Creasing Scores, Area, and Theoretical Weight
-  const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140) => {
+  // Helper to calculate exact PPC Partition & Plate Set Matrix weights
+  const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm = 450, outerBoxWeight = 0) => {
+    const raw = String(boxDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
+    const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
+    const L = dims[0] || 350;
+    const W = dims[1] || 250;
+    const H = dims[2] || 200;
+
+    const cellRows = parseInt(ppcConfig.cellRows || 4);
+    const cellCols = parseInt(ppcConfig.cellCols || 3);
+    const totalCells = cellRows * cellCols;
+
+    // 1. Long / Common Partitions (Lengthwise along L)
+    const longCount = parseInt(ppcConfig.longCount !== undefined && ppcConfig.longCount !== '' ? ppcConfig.longCount : (cellCols - 1));
+    const longLengthMm = parseFloat(ppcConfig.longLengthMm) || Math.max(50, L - 10);
+    const longHeightMm = parseFloat(ppcConfig.longHeightMm) || Math.max(50, H - 10);
+    const longAreaSqM = (longLengthMm * longHeightMm) / 1000000;
+    const longPieceWeightGrams = Math.round(longAreaSqM * totalBoardGsm);
+    const longTotalWeightGrams = longCount * longPieceWeightGrams;
+
+    // 2. Cross / Small Partitions (Widthwise along W)
+    const crossCount = parseInt(ppcConfig.crossCount !== undefined && ppcConfig.crossCount !== '' ? ppcConfig.crossCount : (cellRows - 1));
+    const crossLengthMm = parseFloat(ppcConfig.crossLengthMm) || Math.max(50, W - 10);
+    const crossHeightMm = parseFloat(ppcConfig.crossHeightMm) || Math.max(50, H - 10);
+    const crossAreaSqM = (crossLengthMm * crossHeightMm) / 1000000;
+    const crossPieceWeightGrams = Math.round(crossAreaSqM * totalBoardGsm);
+    const crossTotalWeightGrams = crossCount * crossPieceWeightGrams;
+
+    // 3. Separator Pads / Divider Plates
+    const padCount = parseInt(ppcConfig.padCount !== undefined && ppcConfig.padCount !== '' ? ppcConfig.padCount : 2);
+    const padLengthMm = parseFloat(ppcConfig.padLengthMm) || Math.max(50, L - 5);
+    const padWidthMm = parseFloat(ppcConfig.padWidthMm) || Math.max(50, W - 5);
+    const padAreaSqM = (padLengthMm * padWidthMm) / 1000000;
+    const padPieceWeightGrams = Math.round(padAreaSqM * totalBoardGsm);
+    const padTotalWeightGrams = padCount * padPieceWeightGrams;
+
+    // 4. Outer Shipper Box (RSC) Weight
+    const includeOuterBox = ppcConfig.includeOuterBox !== false;
+    const outerWeight = includeOuterBox ? (parseFloat(outerBoxWeight) || 0) : 0;
+
+    // 5. Total Combined Set Weight (Grams)
+    const totalSetWeightGrams = Math.round(outerWeight + longTotalWeightGrams + crossTotalWeightGrams + padTotalWeightGrams);
+
+    return {
+      enabled: ppcConfig.enabled !== false,
+      config: ppcConfig.config || `${totalCells} Bottles (${cellRows}x${cellCols})`,
+      cellRows,
+      cellCols,
+      totalCells,
+      includeOuterBox,
+      longCount,
+      longLengthMm: Math.round(longLengthMm),
+      longHeightMm: Math.round(longHeightMm),
+      longPieceWeightGrams,
+      longTotalWeightGrams,
+      crossCount,
+      crossLengthMm: Math.round(crossLengthMm),
+      crossHeightMm: Math.round(crossHeightMm),
+      crossPieceWeightGrams,
+      crossTotalWeightGrams,
+      padCount,
+      padLengthMm: Math.round(padLengthMm),
+      padWidthMm: Math.round(padWidthMm),
+      padPieceWeightGrams,
+      padTotalWeightGrams,
+      outerBoxWeightGrams: Math.round(outerWeight),
+      totalSetWeightGrams
+    };
+  };
+
+  // Helper to auto-calculate CAD Blank Size, Creasing Scores, Area, Theoretical Weight & PPC Matrix
+  const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140, ppcConfig = null) => {
     const raw = String(idDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
     const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
     const L = dims[0] || 0;
@@ -12050,7 +12120,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     } else {
       deckleMm = Math.round(W + H + 15);
       cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-      creasingScores = 'Custom Die-Cut Profile';
+      creasingScores = 'PPC / Die-Cut Partition Profile';
     }
 
     const blankAreaSqM = (deckleMm > 0 && cutLengthMm > 0) ? (deckleMm * cutLengthMm) / 1000000 : 0;
@@ -12089,7 +12159,16 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       calculatedEct = rct * effectiveMultiplier * 0.95;
     }
 
-    const theoreticalWeightGrams = blankAreaSqM > 0 ? Math.round(blankAreaSqM * totalBoardGsm) : 0;
+    const outerBoxWeightGrams = blankAreaSqM > 0 ? Math.round(blankAreaSqM * totalBoardGsm) : 0;
+    
+    // Check if PPC Matrix is active
+    let calculatedPpc = null;
+    let theoreticalWeightGrams = outerBoxWeightGrams;
+
+    if (itemType === 'PPC' || ppcConfig?.enabled) {
+      calculatedPpc = calculatePpcMatrix(idDimensions, ppcConfig || { enabled: true }, totalBoardGsm, outerBoxWeightGrams);
+      theoreticalWeightGrams = calculatedPpc.totalSetWeightGrams;
+    }
 
     return {
       odStr,
@@ -12098,7 +12177,9 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       blankAreaSqM: blankAreaSqM.toFixed(4),
       creasingScores,
       totalBoardGsm: Math.round(totalBoardGsm),
+      outerBoxWeightGrams,
       theoreticalWeightGrams,
+      calculatedPpc,
       estimatedBs: estimatedBs > 0 ? String(estimatedBs) : ''
     };
   };
@@ -12188,6 +12269,32 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     });
   };
 
+  const defaultPpcMatrix = {
+    enabled: false,
+    config: '12 Bottles (4x3)',
+    cellRows: 4,
+    cellCols: 3,
+    totalCells: 12,
+    includeOuterBox: true,
+    longCount: 2,
+    longLengthMm: '',
+    longHeightMm: '',
+    crossCount: 3,
+    crossLengthMm: '',
+    crossHeightMm: '',
+    padCount: 2,
+    padLengthMm: '',
+    padWidthMm: '',
+    longPieceWeightGrams: 0,
+    longTotalWeightGrams: 0,
+    crossPieceWeightGrams: 0,
+    crossTotalWeightGrams: 0,
+    padPieceWeightGrams: 0,
+    padTotalWeightGrams: 0,
+    outerBoxWeightGrams: 0,
+    totalSetWeightGrams: 0
+  };
+
   const emptyItemRow = {
     companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
     itemType: 'Box',
@@ -12209,7 +12316,8 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     punchingDieId: '',
     targetBs: '',
     targetBct: '',
-    layers: generateDefaultLayers('3', 'B')
+    layers: generateDefaultLayers('3', 'B'),
+    ppcMatrix: { ...defaultPpcMatrix }
   };
 
   const [itemsInput, setItemsInput] = useState([{ ...emptyItemRow }]);
@@ -12379,6 +12487,12 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     const updated = [...itemsInput];
     const item = { ...updated[idx], [field]: val };
 
+    // Auto-enable PPC matrix if itemType is PPC
+    if (field === 'itemType' && val === 'PPC') {
+      item.ppcMatrix = item.ppcMatrix || { ...defaultPpcMatrix, enabled: true };
+      item.ppcMatrix.enabled = true;
+    }
+
     // When Ply or Flute changes, sync and update layers
     if (field === 'ply') {
       item.layers = syncLayersForPly(item.layers, val, item.fluteType);
@@ -12386,8 +12500,8 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       item.layers = syncLayersForPly(item.layers, item.ply, val);
     }
 
-    // Auto-calculate CAD and Blank metrics
-    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, item.layers, parseFloat(item.paperGsm || 140));
+    // Auto-calculate CAD, Blank and PPC metrics
+    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, item.layers, parseFloat(item.paperGsm || 140), item.ppcMatrix);
     item.od = cad.odStr;
     item.deckleMm = cad.deckleMm > 0 ? String(cad.deckleMm) : '';
     item.cutLengthMm = cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '';
@@ -12395,8 +12509,63 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     item.weight = cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '';
     item.targetBs = cad.estimatedBs || '';
     item.targetBct = cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '';
+    if (cad.calculatedPpc) {
+      item.ppcMatrix = cad.calculatedPpc;
+    }
 
     updated[idx] = item;
+    setItemsInput(updated);
+  };
+
+  const handlePpcChange = (itemIdx, field, val) => {
+    const updated = [...itemsInput];
+    const item = { ...updated[itemIdx] };
+    const currentPpc = item.ppcMatrix || { ...defaultPpcMatrix, enabled: true };
+    const updatedPpc = { ...currentPpc, [field]: val };
+
+    if (field === 'config') {
+      if (val.includes('12 Bottles (4x3)')) {
+        updatedPpc.cellRows = 4;
+        updatedPpc.cellCols = 3;
+        updatedPpc.longCount = 2;
+        updatedPpc.crossCount = 3;
+      } else if (val.includes('24 Bottles (6x4)')) {
+        updatedPpc.cellRows = 6;
+        updatedPpc.cellCols = 4;
+        updatedPpc.longCount = 3;
+        updatedPpc.crossCount = 5;
+      } else if (val.includes('6 Bottles (3x2)')) {
+        updatedPpc.cellRows = 3;
+        updatedPpc.cellCols = 2;
+        updatedPpc.longCount = 1;
+        updatedPpc.crossCount = 2;
+      } else if (val.includes('48 Bottles (8x6)')) {
+        updatedPpc.cellRows = 8;
+        updatedPpc.cellCols = 6;
+        updatedPpc.longCount = 5;
+        updatedPpc.crossCount = 7;
+      }
+    } else if (field === 'cellRows' || field === 'cellCols') {
+      const r = parseInt(field === 'cellRows' ? val : updatedPpc.cellRows) || 1;
+      const c = parseInt(field === 'cellCols' ? val : updatedPpc.cellCols) || 1;
+      updatedPpc.totalCells = r * c;
+      updatedPpc.longCount = Math.max(1, c - 1);
+      updatedPpc.crossCount = Math.max(1, r - 1);
+    }
+
+    item.ppcMatrix = updatedPpc;
+
+    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, item.layers, parseFloat(item.paperGsm || 140), updatedPpc);
+    item.od = cad.odStr;
+    item.deckleMm = cad.deckleMm > 0 ? String(cad.deckleMm) : '';
+    item.cutLengthMm = cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '';
+    item.creasingScores = cad.creasingScores;
+    item.weight = cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '';
+    item.targetBs = cad.estimatedBs || '';
+    item.targetBct = cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '';
+    item.ppcMatrix = cad.calculatedPpc || updatedPpc;
+
+    updated[itemIdx] = item;
     setItemsInput(updated);
   };
 
@@ -12426,7 +12595,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       item.paperColour = currentLayers[0].type || currentLayers[0].colour || item.paperColour;
     }
 
-    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, currentLayers, parseFloat(item.paperGsm || 140));
+    const cad = calculateCadBlank(item.size, item.ply, item.fluteType, item.itemType, item.jointType, currentLayers, parseFloat(item.paperGsm || 140), item.ppcMatrix);
     item.od = cad.odStr;
     item.deckleMm = cad.deckleMm > 0 ? String(cad.deckleMm) : '';
     item.cutLengthMm = cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '';
@@ -12434,6 +12603,9 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     item.weight = cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '';
     item.targetBs = cad.estimatedBs || '';
     item.targetBct = cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '';
+    if (cad.calculatedPpc) {
+      item.ppcMatrix = cad.calculatedPpc;
+    }
 
     updated[itemIdx] = item;
     setItemsInput(updated);
@@ -12468,6 +12640,8 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       ? item.layers
       : generateDefaultLayers(item.ply || item.Ply || '3', item.fluteType || 'B');
 
+    const ppcConfig = item.ppcMatrix || (item.itemType === 'PPC' || item.Item_Type === 'PPC' ? { ...defaultPpcMatrix, enabled: true } : null);
+
     const cad = calculateCadBlank(
       item.size || item.Size_mm,
       item.ply || item.Ply || '3',
@@ -12475,7 +12649,8 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       item.itemType || item.Item_Type || 'Box',
       item.jointType || 'Stitching (35mm)',
       layers,
-      parseFloat(item.paperGsm || item.Paper_GSM || 140)
+      parseFloat(item.paperGsm || item.Paper_GSM || 140),
+      ppcConfig
     );
 
     setItemsInput([{
@@ -12499,7 +12674,8 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       punchingDieId: item.punchingDieId || '',
       targetBs: item.targetBs || (cad.estimatedBs || ''),
       targetBct: item.targetBct || (cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : ''),
-      layers: layers
+      layers: layers,
+      ppcMatrix: cad.calculatedPpc || ppcConfig || { ...defaultPpcMatrix }
     }]);
     setSelectedLayerConfigRow(0);
     setShowBatchForm(true);
@@ -12618,6 +12794,39 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                 </tbody>
               </table>
             </div>
+
+            {/* PPC PARTITION & PLATE MATRIX BREAKDOWN (IF ENABLED) */}
+            {(activeBomModalItem.itemType === 'PPC' || activeBomModalItem.ppcMatrix?.enabled) && (
+              <div style={{ background: '#fffbeb', border: '1.5px solid #fcd34d', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <h4 style={{ fontSize: 12, fontWeight: 800, color: '#92400e', margin: 0, display: 'flex', alignItems: 'center', gap: 6, textTransform: 'uppercase' }}>
+                    <span>🧩</span> PPC Partition Matrix ({activeBomModalItem.ppcMatrix?.config || `${activeBomModalItem.ppcMatrix?.totalCells || 12} Cells`})
+                  </h4>
+                  <span style={{ fontSize: 11, fontWeight: 800, background: '#f59e0b', color: '#fff', padding: '2px 8px', borderRadius: 6 }}>
+                    Master Set: {activeBomModalItem.ppcMatrix?.totalSetWeightGrams || activeBomModalItem.weight || '-'} g
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: 11, background: '#fff', padding: 10, borderRadius: 8, border: '1px solid #fde68a', marginBottom: 8 }}>
+                  <div>
+                    <span style={{ color: '#78350f', fontWeight: 600 }}>Bottle Layout:</span><br />
+                    <strong>{activeBomModalItem.ppcMatrix?.cellRows || 4} Rows × {activeBomModalItem.ppcMatrix?.cellCols || 3} Cols</strong> ({activeBomModalItem.ppcMatrix?.totalCells || 12} Cells)
+                  </div>
+                  <div>
+                    <span style={{ color: '#78350f', fontWeight: 600 }}>Long Partitions:</span><br />
+                    <strong>{activeBomModalItem.ppcMatrix?.longCount || 2} pcs</strong> ({activeBomModalItem.ppcMatrix?.longLengthMm || '-'} × {activeBomModalItem.ppcMatrix?.longHeightMm || '-'} mm) = <strong style={{ color: '#b45309' }}>{activeBomModalItem.ppcMatrix?.longTotalWeightGrams || 0}g</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#78350f', fontWeight: 600 }}>Cross Partitions:</span><br />
+                    <strong>{activeBomModalItem.ppcMatrix?.crossCount || 3} pcs</strong> ({activeBomModalItem.ppcMatrix?.crossLengthMm || '-'} × {activeBomModalItem.ppcMatrix?.crossHeightMm || '-'} mm) = <strong style={{ color: '#b45309' }}>{activeBomModalItem.ppcMatrix?.crossTotalWeightGrams || 0}g</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#78350f', fontWeight: 600 }}>Divider Pads:</span><br />
+                    <strong>{activeBomModalItem.ppcMatrix?.padCount || 2} pcs</strong> ({activeBomModalItem.ppcMatrix?.padLengthMm || '-'} × {activeBomModalItem.ppcMatrix?.padWidthMm || '-'} mm) = <strong style={{ color: '#b45309' }}>{activeBomModalItem.ppcMatrix?.padTotalWeightGrams || 0}g</strong>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* TOOLING & ROUTE SETUP */}
             <div style={{ background: '#f1f5f9', borderRadius: 8, padding: 12, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, fontSize: 11, marginBottom: 16 }}>
@@ -13024,6 +13233,286 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               </div>
             </div>
 
+            {/* DEDICATED PPC PARTITION & PLATE SET MATRIX CONFIGURATION */}
+            {(() => {
+              const currentPpc = currentConfigItem.ppcMatrix || { ...defaultPpcMatrix, enabled: currentConfigItem.itemType === 'PPC' };
+              const isPpcActive = currentConfigItem.itemType === 'PPC' || !!currentPpc.enabled;
+
+              return (
+                <div className={`border-2 rounded-xl p-4 mb-4 shadow-md transition ${isPpcActive ? 'bg-amber-50/40 border-amber-400' : 'bg-slate-50 border-slate-300'}`}>
+                  <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-200 flex-wrap gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-xs font-black px-2.5 py-1 rounded-md text-white ${isPpcActive ? 'bg-amber-600' : 'bg-slate-600'}`}>
+                        🧩 PPC PARTITION &amp; PLATE MATRIX
+                      </span>
+                      <span className="font-extrabold text-slate-900 text-sm">
+                        Bottle Cells, Partition Dimensions &amp; Set Weight Calculation
+                      </span>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-bold cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 text-amber-600 rounded"
+                        checked={isPpcActive}
+                        onChange={e => handlePpcChange(selectedLayerConfigRow, 'enabled', e.target.checked)}
+                      />
+                      <span>Enable PPC Partition Matrix for this Item</span>
+                    </label>
+                  </div>
+
+                  {isPpcActive ? (
+                    <div className="space-y-4">
+                      {/* Presets & Cell Grid Configuration */}
+                      <div className="bg-white p-3 rounded-lg border border-amber-300 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Standard Bottle Matrix Preset</label>
+                          <select
+                            className="w-full p-1.5 border border-slate-300 rounded font-bold bg-amber-50/60 text-amber-900"
+                            value={currentPpc.config || '12 Bottles (4x3)'}
+                            onChange={e => handlePpcChange(selectedLayerConfigRow, 'config', e.target.value)}
+                          >
+                            <option value="12 Bottles (4x3)">12 Bottles (4 Rows × 3 Cols)</option>
+                            <option value="24 Bottles (6x4)">24 Bottles (6 Rows × 4 Cols)</option>
+                            <option value="6 Bottles (3x2)">6 Bottles (3 Rows × 2 Cols)</option>
+                            <option value="48 Bottles (8x6)">48 Bottles (8 Rows × 6 Cols)</option>
+                            <option value="Custom">Custom Bottle Grid</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Bottle Rows × Cols</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="1"
+                              max="20"
+                              className="w-16 p-1.5 border border-slate-300 rounded text-center font-bold"
+                              value={currentPpc.cellRows || 4}
+                              onChange={e => handlePpcChange(selectedLayerConfigRow, 'cellRows', e.target.value)}
+                            />
+                            <span className="text-slate-400 font-bold">×</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="20"
+                              className="w-16 p-1.5 border border-slate-300 rounded text-center font-bold"
+                              value={currentPpc.cellCols || 3}
+                              onChange={e => handlePpcChange(selectedLayerConfigRow, 'cellCols', e.target.value)}
+                            />
+                            <span className="font-extrabold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                              {currentPpc.totalCells || ((currentPpc.cellRows || 4) * (currentPpc.cellCols || 3))} Cells
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Include Outer Shipper Box</label>
+                          <label className="flex items-center gap-2 mt-1 font-bold text-slate-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={currentPpc.includeOuterBox !== false}
+                              onChange={e => handlePpcChange(selectedLayerConfigRow, 'includeOuterBox', e.target.checked)}
+                            />
+                            <span>Master Set (Box + Partitions)</span>
+                          </label>
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Total Set Weight</label>
+                          <div className="text-sm font-mono font-black text-amber-600 bg-amber-50 p-1.5 rounded border border-amber-200 text-center">
+                            🏆 {currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0} g / Master Set
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Matrix Dimension & Weight Table */}
+                      <div className="overflow-x-auto border border-amber-200 rounded-lg shadow-sm bg-white">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-amber-900 text-white font-bold">
+                              <th className="p-2">Component</th>
+                              <th className="p-2 w-24 text-center">Pieces / Set</th>
+                              <th className="p-2 min-w-[140px]">Length (mm)</th>
+                              <th className="p-2 min-w-[140px]">Width / Height (mm)</th>
+                              <th className="p-2 w-24 text-right">Piece Wt (g)</th>
+                              <th className="p-2 w-28 text-right pr-3">Total Wt (g)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-amber-100 font-medium">
+                            {/* 1. Long / Common Partitions */}
+                            <tr className="hover:bg-amber-50/50">
+                              <td className="p-2 font-bold text-slate-800">
+                                📏 Long Partitions (Lengthwise)
+                              </td>
+                              <td className="p-1.5 text-center">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="w-14 p-1 border rounded text-center font-bold bg-white"
+                                  value={currentPpc.longCount !== undefined ? currentPpc.longCount : 2}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'longCount', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Length mm"
+                                  value={currentPpc.longLengthMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'longLengthMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Height mm"
+                                  value={currentPpc.longHeightMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'longHeightMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-slate-600">
+                                {currentPpc.longPieceWeightGrams || 0} g
+                              </td>
+                              <td className="p-2 text-right pr-3 font-mono font-black text-amber-700">
+                                {currentPpc.longTotalWeightGrams || 0} g
+                              </td>
+                            </tr>
+
+                            {/* 2. Cross / Small Partitions */}
+                            <tr className="hover:bg-amber-50/50">
+                              <td className="p-2 font-bold text-slate-800">
+                                📐 Cross Partitions (Widthwise)
+                              </td>
+                              <td className="p-1.5 text-center">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="w-14 p-1 border rounded text-center font-bold bg-white"
+                                  value={currentPpc.crossCount !== undefined ? currentPpc.crossCount : 3}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'crossCount', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Length mm"
+                                  value={currentPpc.crossLengthMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'crossLengthMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Height mm"
+                                  value={currentPpc.crossHeightMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'crossHeightMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-slate-600">
+                                {currentPpc.crossPieceWeightGrams || 0} g
+                              </td>
+                              <td className="p-2 text-right pr-3 font-mono font-black text-amber-700">
+                                {currentPpc.crossTotalWeightGrams || 0} g
+                              </td>
+                            </tr>
+
+                            {/* 3. Top / Bottom Divider Pads */}
+                            <tr className="hover:bg-amber-50/50">
+                              <td className="p-2 font-bold text-slate-800">
+                                📋 Top / Bottom Divider Plates (Pads)
+                              </td>
+                              <td className="p-1.5 text-center">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="w-14 p-1 border rounded text-center font-bold bg-white"
+                                  value={currentPpc.padCount !== undefined ? currentPpc.padCount : 2}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padCount', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Length mm"
+                                  value={currentPpc.padLengthMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padLengthMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-1.5">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  placeholder="Width mm"
+                                  value={currentPpc.padWidthMm || ''}
+                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padWidthMm', e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-slate-600">
+                                {currentPpc.padPieceWeightGrams || 0} g
+                              </td>
+                              <td className="p-2 text-right pr-3 font-mono font-black text-amber-700">
+                                {currentPpc.padTotalWeightGrams || 0} g
+                              </td>
+                            </tr>
+
+                            {/* 4. Outer Shipper Box (RSC) */}
+                            {currentPpc.includeOuterBox !== false && (
+                              <tr className="bg-slate-50 font-bold">
+                                <td className="p-2 text-slate-700">
+                                  📦 Outer RSC Shipper Carton
+                                </td>
+                                <td className="p-2 text-center">1 Box</td>
+                                <td className="p-2 font-mono text-slate-600" colSpan={2}>
+                                  Deckle: {currentConfigItem.deckleMm || '-'} mm × Length: {currentConfigItem.cutLengthMm || '-'} mm
+                                </td>
+                                <td className="p-2 text-right font-mono text-slate-600">
+                                  {currentPpc.outerBoxWeightGrams || 0} g
+                                </td>
+                                <td className="p-2 text-right pr-3 font-mono text-slate-900">
+                                  {currentPpc.outerBoxWeightGrams || 0} g
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Summary Breakdown Pills */}
+                      <div className="bg-amber-100/70 border border-amber-300 rounded-lg p-2.5 flex justify-between items-center text-xs flex-wrap gap-2">
+                        <span className="font-bold text-amber-900">
+                          ⚡ Weight Breakdown:
+                        </span>
+                        <div className="flex gap-2 flex-wrap font-mono font-bold text-xs text-slate-800">
+                          {currentPpc.includeOuterBox !== false && (
+                            <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
+                              Box: {currentPpc.outerBoxWeightGrams || 0}g
+                            </span>
+                          )}
+                          <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
+                            Long ({currentPpc.longCount || 2} pcs): {currentPpc.longTotalWeightGrams || 0}g
+                          </span>
+                          <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
+                            Cross ({currentPpc.crossCount || 3} pcs): {currentPpc.crossTotalWeightGrams || 0}g
+                          </span>
+                          <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
+                            Pads ({currentPpc.padCount || 2} pcs): {currentPpc.padTotalWeightGrams || 0}g
+                          </span>
+                          <span className="bg-amber-600 text-white px-2.5 py-0.5 rounded shadow-sm">
+                            Total Master Set: {currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0}g
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 italic">
+                      Check the box above to configure partition sets (Long &amp; Cross partitions, top/bottom divider plates, and calculate exact multi-component set weights).
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <div style={{ display: 'flex', gap: 8 }}>
               {!editingId && (
                 <button type="button" onClick={addItemRow} className="apex-btn apex-btn-secondary" style={{ padding: '6px 14px', fontSize: 12, fontWeight: 700 }}>
@@ -13101,7 +13590,17 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
                   <td><span style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>{comp}</span></td>
                   <td><strong style={{ color: '#0f172a' }}>{name}</strong></td>
-                  <td><span style={{ fontSize: 11, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>{item.itemType || 'Box'}</span></td>
+                  <td>
+                    {item.itemType === 'PPC' || item.ppcMatrix?.enabled ? (
+                      <span style={{ fontSize: 10.5, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '2px 6px', borderRadius: 4, fontWeight: 800 }}>
+                        🧩 PPC ({item.ppcMatrix?.totalCells || 12} Cells)
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>
+                        {item.itemType || 'Box'}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{idDim}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', color: '#64748b' }}>{odDim}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#16a34a' }}>{deckle}</td>

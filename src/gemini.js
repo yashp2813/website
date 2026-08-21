@@ -404,12 +404,23 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
   const availableItemDetails = items.slice(0, 40).map(i => ({
     id: i.id,
     name: i.name || i.Item_Name,
+    itemType: i.itemType || i.Item_Type || 'Box',
     size: i.size || i.Size_mm || '350x250x200',
     ply: i.ply || 3,
     idealDeckleMm: parseFloat(i.deckleMm || i.deckle || 900),
     cutLengthMm: parseFloat(i.cutLengthMm || i.cutLength || 1450),
     ups: parseFloat(i.plannedUps || i.upsLength || 1),
-    weightGrams: parseFloat(i.weightGrams || i.boxWeight || 350)
+    weightGrams: parseFloat(i.weight || i.Weight_g || i.weightGrams || i.boxWeight || 350),
+    ppcMatrix: i.ppcMatrix ? {
+      config: i.ppcMatrix.config,
+      totalCells: i.ppcMatrix.totalCells || 12,
+      cellRows: i.ppcMatrix.cellRows || 4,
+      cellCols: i.ppcMatrix.cellCols || 3,
+      longCount: i.ppcMatrix.longCount || 2,
+      crossCount: i.ppcMatrix.crossCount || 3,
+      padCount: i.ppcMatrix.padCount || 2,
+      totalSetWeightGrams: i.ppcMatrix.totalSetWeightGrams || i.weight
+    } : null
   }));
 
   const activeReels = inventory.filter(r => r.status !== 'Consumed' && (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0) > 0)).slice(0, 40).map(r => ({
