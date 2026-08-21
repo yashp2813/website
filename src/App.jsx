@@ -827,6 +827,90 @@ export function GlobalVoiceAssistant({
     }
 
     // =========================================================================
+    // 5.13 DECKLE SUBSTITUTION, EXTRA TRIM WASTAGE & FINANCIAL LOSS/GAIN
+    // =========================================================================
+    const isDeckleSimQuery = (
+      raw.includes('deckle') || raw.includes('reel size') || raw.includes('size reel') || raw.includes('panna')
+    ) && (
+      raw.includes('use') || raw.includes('what if') || raw.includes('instead') || raw.includes('loss') || raw.includes('gain') || raw.includes('wastage') || raw.includes('extra') || raw.includes('substitute') || raw.includes('compare') || raw.includes('agar') || raw.includes('chalega')
+    );
+
+    if (isDeckleSimQuery) {
+      // 1. Extract proposed deckle width (e.g. 1050 mm, 90 cm, 1000)
+      const deckleMatches = raw.match(/\b(500|550|600|650|700|750|800|850|900|950|1000|1050|1100|1150|1200|1250|1300|1350|1400|1450|1500|1600|1700|1800|1900|2000|60|70|80|85|90|95|100|105|110|115|120|130|140|150)\s*(mm|cm|deckle|size)?\b/gi);
+      
+      let proposedDeckleMm = null;
+      if (deckleMatches && deckleMatches.length > 0) {
+        const num = parseFloat(deckleMatches[0].replace(/[^\d.]/g, ''));
+        // If specified in cm (e.g. 100cm or 90cm), convert to mm
+        proposedDeckleMm = (num <= 200 && num >= 50) ? num * 10 : num;
+      }
+
+      // 2. Extract item
+      let targetItem = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(raw.replace(/\b(what|if|i|use|deckle|size|reel|for|instead|of|loss|gain|wastage|how|much|extra|substitute|compare)\b/gi, '').trim()));
+      if (!targetItem && items.length > 0) targetItem = items[0];
+
+      if (targetItem && proposedDeckleMm) {
+        const sizeStr = targetItem.size || targetItem.Size_mm || '350x250x200';
+        const parts = String(sizeStr).split(/[xX*]/).map(p => parseFloat(p.trim())).filter(p => !isNaN(p));
+        const L = parts[0] || 350;
+        const W = parts[1] || 250;
+        const H = parts[2] || 200;
+        const ply = parseInt(targetItem.ply || 3);
+        const ups = parseInt(targetItem.plannedUps || targetItem.upsLength || 1);
+
+        const singleBlankWidthMm = parseFloat(targetItem.singleSheetWidth || (W + H + 20));
+        const cutLengthMm = parseFloat(targetItem.cutLengthMm || ((2 * L) + (2 * W) + 35));
+        const requiredBlankWidthMm = singleBlankWidthMm * ups;
+        const idealDeckleMm = parseFloat(targetItem.deckleMm || targetItem.deckle) || (Math.ceil((requiredBlankWidthMm + 30) / 50) * 50);
+
+        const deckleDiffMm = proposedDeckleMm - idealDeckleMm;
+        const orderQty = 5000;
+        const totalSheetsNeeded = Math.ceil(orderQty / Math.max(1, ups));
+        const linearMetersNeeded = (totalSheetsNeeded * cutLengthMm) / 1000;
+
+        let totalBoardGsm = parseFloat(targetItem.paperGsm || 120) * (ply === 5 ? 2.3 : (ply === 7 ? 3.4 : 1.4));
+        const extraAreaSqM = linearMetersNeeded * (deckleDiffMm / 1000);
+        const extraPaperKg = Math.round((extraAreaSqM * totalBoardGsm) / 1000);
+
+        const paperRate = parseFloat(targetItem.avgPaperRate || 34.0);
+        const scrapRate = 12.0;
+        const netCostDiffPerKg = Math.max(0, paperRate - scrapRate);
+        const financialLossInr = Math.round(extraPaperKg * netCostDiffPerKg);
+
+        const idealTrimPct = (((idealDeckleMm - requiredBlankWidthMm) / idealDeckleMm) * 100).toFixed(1);
+        const proposedTrimPct = (((proposedDeckleMm - requiredBlankWidthMm) / proposedDeckleMm) * 100).toFixed(1);
+
+        if (deckleDiffMm > 0) {
+          const speechMsg = `Using ${proposedDeckleMm}mm deckle instead of ideal ${idealDeckleMm}mm for ${targetItem.name || 'this box'} will create ${deckleDiffMm}mm extra side trim (${proposedTrimPct}% total trim scrap). For 5,000 boxes, this consumes ${extraPaperKg.toLocaleString('en-IN')} kg extra paper, causing a net financial loss of ₹${financialLossInr.toLocaleString('en-IN')}.`;
+          
+          showToast(`⚠️ Deckle Wastage & Financial Impact`, 'warning', 10000, {
+            title: `${proposedDeckleMm}mm vs ${idealDeckleMm}mm Deckle (+${deckleDiffMm}mm Excess Trim)`,
+            desc: `Extra Scrap: ${extraPaperKg} kg (+${(proposedTrimPct - idealTrimPct).toFixed(1)}% scrap) | Net Financial Loss: ₹${financialLossInr.toLocaleString('en-IN')} (@ ₹${netCostDiffPerKg}/kg differential)`
+          });
+          speakFeedback(speechMsg);
+          return;
+        } else if (deckleDiffMm < 0) {
+          const speechMsg = `Using smaller ${proposedDeckleMm}mm deckle instead of ${idealDeckleMm}mm will reduce trim scrap by ${Math.abs(deckleDiffMm)}mm, saving approximately ${Math.abs(extraPaperKg)} kg of paper (₹${Math.abs(financialLossInr).toLocaleString('en-IN')} gain), provided minimum edge trim allowance is met.`;
+          showToast(`🟢 Deckle Reduction & Savings`, 'success', 10000, {
+            title: `${proposedDeckleMm}mm vs ${idealDeckleMm}mm Deckle (${deckleDiffMm}mm)`,
+            desc: `Paper Saved: ${Math.abs(extraPaperKg)} kg | Net Savings: ₹${Math.abs(financialLossInr).toLocaleString('en-IN')}`
+          });
+          speakFeedback(speechMsg);
+          return;
+        } else {
+          const speechMsg = `${proposedDeckleMm}mm is already the exact ideal deckle size for ${targetItem.name || 'this box'} with optimal ${idealTrimPct}% minimum trim scrap.`;
+          showToast(`✅ Optimal Deckle Selected`, 'info', 7000, {
+            title: `Ideal Deckle: ${idealDeckleMm}mm`,
+            desc: `Optimal side trim of ${(idealDeckleMm - requiredBlankWidthMm)}mm (${idealTrimPct}%)`
+          });
+          speakFeedback(speechMsg);
+          return;
+        }
+      }
+    }
+
+    // =========================================================================
     // 6. FINANCIALS & PENDING REVENUE (e.g. "Total pending order value", "Pending revenue", "Kitne ka order bacha hai")
     // =========================================================================
     if (raw.includes('revenue') || raw.includes('order value') || raw.includes('pending value') || raw.includes('valuation') || raw.includes('paisa') || raw.includes('kitne ka order')) {
@@ -1488,14 +1572,14 @@ export function GlobalVoiceAssistant({
                 </ul>
               </div>
 
-              {/* Card 3: Paper Stock & Consumables */}
+              {/* Card 3: Paper Stock & Deckle Substitution */}
               <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1px solid #334155' }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24', marginBottom: 6 }}>📜 Paper Stock &amp; Consumables</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24', marginBottom: 6 }}>📜 Paper Stock &amp; Deckle Wastage</div>
                 <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: '#cbd5e1', lineHeight: '1.6' }}>
+                  <li><em>"What if I use 1050 deckle for 180ml IB Master?"</em></li>
+                  <li><em>"Can I use 100cm reel instead of 90cm for Radico?"</em></li>
                   <li><em>"How much 150 GSM paper in stock?"</em></li>
-                  <li><em>"Status of reel RL-00012"</em></li>
-                  <li><em>"How much gum, coal, wire, and ink left?"</em></li>
-                  <li><em>"Show aging reels / Low stock reels"</em></li>
+                  <li><em>"Mount reel RL-00045 on Top stand for 180ml IB"</em></li>
                 </ul>
               </div>
 

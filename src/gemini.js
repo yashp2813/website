@@ -401,7 +401,16 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
     deliveryDate: o.deliveryDate
   }));
 
-  const availableItemNames = items.map(i => i.name || i.Item_Name).filter(Boolean).slice(0, 40);
+  const availableItemDetails = items.slice(0, 40).map(i => ({
+    id: i.id,
+    name: i.name || i.Item_Name,
+    size: i.size || i.Size_mm || '350x250x200',
+    ply: i.ply || 3,
+    idealDeckleMm: parseFloat(i.deckleMm || i.deckle || 900),
+    cutLengthMm: parseFloat(i.cutLengthMm || i.cutLength || 1450),
+    ups: parseFloat(i.plannedUps || i.upsLength || 1),
+    weightGrams: parseFloat(i.weightGrams || i.boxWeight || 350)
+  }));
 
   const activeReels = inventory.filter(r => r.status !== 'Consumed' && (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty || 0) > 0)).slice(0, 40).map(r => ({
     id: r.systemReelId || r.uniqueReelId || `RL-${r.reelNo}`,
@@ -416,7 +425,7 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
 
   const contextJson = JSON.stringify({
     computedKPIs: kpis,
-    availableBoxItemNames: availableItemNames,
+    boxItemSpecs: availableItemDetails,
     activeOrdersSample: activeOrders,
     inventorySample: activeReels,
     companyList: companies.map(c => c.name)
@@ -425,17 +434,23 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
   const systemInstruction = `You are the Executive AI Manufacturing & Financial Intelligence Director for APEX Corrugation Packaging ERP.
 You have omniscient, instant real-time visibility into the plant's 360-degree database:
 1. FULL COST BREAKDOWN PER BOX & PER KG: Raw paper cost, starch/gum cost, power & fuel conversion cost, printing ink & stereo cost, stitching wire cost, freight, total manufacturing cost, selling price, and net profit margin (%).
-2. PRODUCTION PERFORMANCE & DAILY REPORTS: Today's boxes produced, running linear meters, month-to-date MT tonnage, active machine WIP jobs.
-3. WIP ITEM-WISE BREAKDOWN: When asked for an item-wise breakdown of WIP, list every active item name, current machine stage, scheduled sheets, completed sheets, and remaining balance sheets.
-4. PLANNING SCHEDULE FOR TODAY / TOMORROW: When asked "What's the planning for today or tomorrow?", summarize total queued jobs and provide a clear machine-wise breakdown (e.g. Line 1 Corrugator, 2-Color Printer, Die-Cutter) with item names and quantities.
-5. AUTOMATIC JOB CREATION & PLANNING QUEUE: When asked to create/plan a job (e.g. "Create job for 180ml IB Master 5000 boxes" or "Plan 10000 boxes of Radico"):
-   - Extract the matched item name, quantity (orderQty), customer name (if any), delivery date, and plannedUps.
-   - If details are complete, set action.type = 'create_job' with jobPayload.
-   - If any critical detail like quantity or item name is missing, ask the operator politely in spokenResponse and prompt for the missing info.
-6. WASTAGE, POWER & BOILER FUEL: Monthly scrap KG & %, corrugation vs printing scrap, coal/wood fuel usage (KG & ₹), kWh electricity units.
-7. PAPER INVENTORY & REEL LOCATIONS: Exact balance weights, GSM/BF, deckle width, warehouse bay locations, aging paper alerts.
-8. CONSUMABLES INVENTORY: Gum powder, stitching wire, boiler coal/wood, and printing inks.
-9. CLIENT ACCOUNTS & PENDING REVENUE: Customer-wise pending order amounts, dispatch readiness, and delivery deadlines.
+2. DECKLE SUBSTITUTION, WASTAGE & FINANCIAL LOSS / GAIN:
+   When an operator asks what happens if they use an alternative or non-standard deckle width (e.g. "What if I use 1050 deckle for 180ml IB Master?", "Can I use 100cm reel instead of 90cm for Radico 750ml?", "Deckle comparison 900 vs 1050 for 5000 boxes"):
+   - Identify the item's Ideal Deckle Width (mm) vs the Proposed Alternative Deckle (mm).
+   - Compute the excess side-trim (in mm and excess trim %).
+   - Compute total extra raw paper weight consumed in KG across the order quantity: Extra Area (m²) * Total Board GSM / 1000.
+   - Compute exact Net Financial Loss (₹) or Gain (₹) using: Extra Paper KG * (Kraft Paper Rate ₹34/kg - Scrap Resale Value ₹12/kg = ₹22/kg net differential).
+   - Check and recommend if any closer matching reel exists in inventorySample (e.g. "Alternative: You have a 950mm reel in Bay-02 which only causes ₹1,800 loss").
+3. PRODUCTION PERFORMANCE & DAILY REPORTS: Today's boxes produced, running linear meters, month-to-date MT tonnage, active machine WIP jobs.
+4. WIP ITEM-WISE BREAKDOWN: When asked for an item-wise breakdown of WIP, list every active item name, current machine stage, scheduled sheets, completed sheets, and remaining balance sheets.
+5. PLANNING SCHEDULE FOR TODAY / TOMORROW: When asked "What's the planning for today or tomorrow?", summarize total queued jobs and provide a clear machine-wise breakdown (e.g. Line 1 Corrugator, 2-Color Printer, Die-Cutter) with item names and quantities.
+6. AUTOMATIC JOB CREATION & REEL MOUNTING:
+   - When asked to create/plan a job, extract itemName, orderQty, customerName, and set action.type = 'create_job'.
+   - When asked to mount/attach a reel, extract reelQuery, targetOrderId, and stand, and set action.type = 'attach_reel'.
+7. WASTAGE, POWER & BOILER FUEL: Monthly scrap KG & %, corrugation vs printing scrap, coal/wood fuel usage (KG & ₹), kWh electricity units.
+8. PAPER INVENTORY & REEL LOCATIONS: Exact balance weights, GSM/BF, deckle width, warehouse bay locations, aging paper alerts.
+9. CONSUMABLES INVENTORY: Gum powder, stitching wire, boiler coal/wood, and printing inks.
+10. CLIENT ACCOUNTS & PENDING REVENUE: Customer-wise pending order amounts, dispatch readiness, and delivery deadlines.
 
 Live Factory Context:
 ${contextJson}`;
@@ -448,7 +463,7 @@ ${contextJson}`;
         type: 'OBJECT',
         properties: {
           title: { type: 'STRING', description: 'Headline title for the visual HUD card' },
-          metricValue: { type: 'STRING', description: 'Key primary metric (e.g. ₹18.40/box, 28,000 Boxes Planned, 4 WIP Items)' },
+          metricValue: { type: 'STRING', description: 'Key primary metric (e.g. ₹18.40/box, +150mm Trim Scrap (₹9,240 Loss), 28,000 Boxes Planned)' },
           details: { type: 'STRING', description: 'Comprehensive structured breakdown or bullet points' }
         },
         required: ['title', 'details']
