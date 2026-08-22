@@ -470,6 +470,7 @@ export function GlobalVoiceAssistant({
   const [feedbackToast, setFeedbackToast] = useState(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const recognitionRef = useRef(null);
   const toastTimeoutRef = useRef(null);
 
@@ -515,8 +516,95 @@ export function GlobalVoiceAssistant({
     }
   };
 
+  const handleConfirmPendingUpdate = async () => {
+    if (!pendingConfirmation || !pendingConfirmation.targetItems || !updateDoc || !getDocRef) return;
+    const { targetItems, itemPayload: ip, isBulk } = pendingConfirmation;
+
+    try {
+      for (const matched of targetItems) {
+        const uName = isBulk ? (matched.name || matched.Item_Name) : (ip.name || matched.name || matched.Item_Name);
+        const uSize = isBulk ? (matched.size || matched.Size_mm || '350x250x200') : (ip.size || matched.size || matched.Size_mm || '350x250x200');
+        const uPly = String(ip.ply || matched.ply || matched.Ply || '3');
+        const uFlute = ip.fluteType || matched.fluteType || 'B';
+        const uType = ip.itemType || matched.itemType || matched.Item_Type || 'Box';
+        const uGsm = ip.paperGsm || matched.paperGsm || matched.Paper_GSM || '140';
+        const uBf = ip.paperBf || matched.paperBf || matched.Paper_BF || '18';
+        const uColour = ip.paperColour || matched.paperColour || matched.Paper_Colour || 'Kraft';
+
+        let uLayers = matched.layers || generateDefaultLayers(uPly, uFlute);
+        if (ip.layers && Array.isArray(ip.layers) && ip.layers.length > 0) {
+          uLayers = ip.layers.map((l, lIdx) => ({
+            id: `lyr_${lIdx + 1}`,
+            name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
+            type: l.type || 'Kraft',
+            gsm: String(l.gsm || 120),
+            bf: String(l.bf || 16),
+            takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[uFlute] || 1.35) : 1.0)),
+            isFlute: l.isFlute || false
+          }));
+        } else if (uPly !== String(matched.ply || 3) || uFlute !== (matched.fluteType || 'B')) {
+          uLayers = generateDefaultLayers(uPly, uFlute);
+        }
+
+        let uPpc = ip.ppcMatrix || matched.ppcMatrix || null;
+        const cad = calculateCadBlank(uSize, uPly, uFlute, uType, matched.jointType || 'Stitching (35mm)', uLayers, parseFloat(uGsm), uPpc);
+
+        const payload = {
+          ...matched,
+          name: uName,
+          size: uSize,
+          ply: uPly,
+          fluteType: uFlute,
+          itemType: uType,
+          paperGsm: uGsm,
+          paperBf: uBf,
+          paperColour: uColour,
+          layers: uLayers,
+          ppcMatrix: cad.calculatedPpc || uPpc,
+          od: cad.odStr,
+          deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+          cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+          creasingScores: cad.creasingScores,
+          weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+          targetBs: cad.estimatedBs || '',
+          targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
+          updatedAt: new Date().toISOString()
+        };
+
+        await updateDoc(getDocRef('items', matched.id), payload);
+      }
+
+      const logMsg = isBulk
+        ? `AI Batch Updated ${targetItems.length} items (${ip.paperGsm || ''} GSM, ${ip.fluteType || ''} Flute)`
+        : `AI Updated Box: ${targetItems[0]?.name}`;
+      if (addLog) addLog(logMsg);
+      if (setActiveTab) setActiveTab('items');
+
+      showToast(`✓ Updated ${targetItems.length} item${targetItems.length > 1 ? 's' : ''} successfully!`, 'success', 6000);
+      speakFeedback(`Successfully updated ${targetItems.length} item${targetItems.length > 1 ? 's' : ''} in the database.`);
+      setPendingConfirmation(null);
+    } catch (e) {
+      console.error('Error confirming item update:', e);
+      showToast('❌ Failed to update items: ' + e.message, 'error');
+    }
+  };
+
   const executeCommand = async (transcript) => {
     const raw = transcript.toLowerCase().trim();
+
+    // Affirmation to confirm pending update
+    if (pendingConfirmation) {
+      if (raw === 'yes' || raw === 'confirm' || raw === 'apply' || raw === 'proceed' || raw === 'haan' || raw.includes('confirm') || raw.includes('kar do') || raw.includes('thik hai')) {
+        await handleConfirmPendingUpdate();
+        return;
+      }
+      if (raw === 'no' || raw === 'cancel' || raw === 'nahi' || raw === 'stop' || raw.includes('cancel')) {
+        setPendingConfirmation(null);
+        showToast('✕ Update cancelled', 'info', 4000);
+        speakFeedback('Update cancelled.');
+        return;
+      }
+    }
 
     // =========================================================================
     // 0. HELP / WHAT CAN I SAY / SETTINGS
@@ -558,10 +646,10 @@ export function GlobalVoiceAssistant({
           for (const action of actionsToRun) {
             if (!action || !action.type || action.type === 'none') continue;
 
-            // --- 1. UPDATE ITEM / BOX SPECS & BOM LAYERS (SINGLE & BULK/BATCH) ---
+            // --- 1. UPDATE ITEM / BOX SPECS & BOM LAYERS (SINGLE & BULK/BATCH WITH CONFIRMATION) ---
             if (action.type === 'update_item' || action.type === 'bulk_update_items') {
               const ip = action.itemPayload || {};
-              const isBulk = action.type === 'bulk_update_items' || ip.applyToAllMatching || !!ip.filterItemType || (ip.targetItemName && ip.targetItemName.toLowerCase().includes('all'));
+              const isBulk = action.type === 'bulk_update_items' || ip.applyToAllMatching || !!ip.filterItemType || !!ip.filterCategory || (ip.targetItemName && ip.targetItemName.toLowerCase().includes('all'));
               
               let targetItems = [];
               if (isBulk) {
@@ -622,68 +710,22 @@ export function GlobalVoiceAssistant({
                 if (matched) targetItems = [matched];
               }
 
-              if (targetItems.length > 0 && updateDoc && getDocRef) {
-                for (const matched of targetItems) {
-                  const uName = isBulk ? (matched.name || matched.Item_Name) : (ip.name || matched.name || matched.Item_Name);
-                  const uSize = isBulk ? (matched.size || matched.Size_mm || '350x250x200') : (ip.size || matched.size || matched.Size_mm || '350x250x200');
-                  const uPly = String(ip.ply || matched.ply || matched.Ply || '3');
-                  const uFlute = ip.fluteType || matched.fluteType || 'B';
-                  const uType = ip.itemType || matched.itemType || matched.Item_Type || 'Box';
-                  const uGsm = ip.paperGsm || matched.paperGsm || matched.Paper_GSM || '140';
-                  const uBf = ip.paperBf || matched.paperBf || matched.Paper_BF || '18';
-                  const uColour = ip.paperColour || matched.paperColour || matched.Paper_Colour || 'Kraft';
+              if (targetItems.length > 0) {
+                const confirmTitle = targetItems.length > 1
+                  ? `Confirm Bulk Update for ${targetItems.length} Items`
+                  : `Confirm Specification Update: ${targetItems[0]?.name || targetItems[0]?.Item_Name}`;
+                
+                setPendingConfirmation({
+                  title: confirmTitle,
+                  targetItems,
+                  itemPayload: ip,
+                  isBulk,
+                  actionType: action.type
+                });
 
-                  let uLayers = matched.layers || generateDefaultLayers(uPly, uFlute);
-                  if (ip.layers && Array.isArray(ip.layers) && ip.layers.length > 0) {
-                    uLayers = ip.layers.map((l, lIdx) => ({
-                      id: `lyr_${lIdx + 1}`,
-                      name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
-                      type: l.type || 'Kraft',
-                      gsm: String(l.gsm || 120),
-                      bf: String(l.bf || 16),
-                      takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[uFlute] || 1.35) : 1.0)),
-                      isFlute: l.isFlute || false
-                    }));
-                  } else if (uPly !== String(matched.ply || 3) || uFlute !== (matched.fluteType || 'B')) {
-                    uLayers = generateDefaultLayers(uPly, uFlute);
-                  }
-
-                  let uPpc = ip.ppcMatrix || matched.ppcMatrix || null;
-                  const cad = calculateCadBlank(uSize, uPly, uFlute, uType, matched.jointType || 'Stitching (35mm)', uLayers, parseFloat(uGsm), uPpc);
-
-                  const payload = {
-                    ...matched,
-                    name: uName,
-                    size: uSize,
-                    ply: uPly,
-                    fluteType: uFlute,
-                    itemType: uType,
-                    paperGsm: uGsm,
-                    paperBf: uBf,
-                    paperColour: uColour,
-                    layers: uLayers,
-                    ppcMatrix: cad.calculatedPpc || uPpc,
-                    od: cad.odStr,
-                    deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
-                    cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
-                    creasingScores: cad.creasingScores,
-                    weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
-                    targetBs: cad.estimatedBs || '',
-                    targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
-                    updatedAt: new Date().toISOString()
-                  };
-
-                  await updateDoc(getDocRef('items', matched.id), payload);
-                }
-
-                if (addLog) {
-                  if (isBulk) {
-                    addLog(`AI Batch Updated ${targetItems.length} items to ${ip.itemType || ip.filterItemType || 'custom'} specs (${ip.paperGsm || ''} GSM, ${ip.fluteType || ''} Flute)`);
-                  } else {
-                    addLog(`AI Voice Updated Box: ${targetItems[0]?.name} (${targetItems[0]?.size}, ${targetItems[0]?.ply}-Ply)`);
-                  }
-                }
-                executedActionCount += targetItems.length;
+                if (setActiveTab) setActiveTab('items');
+                speakFeedback(`Found ${targetItems.length} matching item${targetItems.length > 1 ? 's' : ''}. Please confirm on screen to apply update.`);
+                return;
               }
             }
 
@@ -2013,6 +2055,153 @@ export function GlobalVoiceAssistant({
               <strong style={{ color: '#38bdf8' }}>{feedbackToast.details.title}: </strong> {feedbackToast.details.desc}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Interactive Box Update Confirmation Modal */}
+      {pendingConfirmation && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(6px)',
+          zIndex: 100000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{
+            background: '#ffffff',
+            borderRadius: 16,
+            maxWidth: 620,
+            width: '100%',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+            border: '1.5px solid #e2e8f0',
+            overflow: 'hidden'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              background: 'linear-gradient(135deg, #1e1b4b, #312e81)',
+              padding: '18px 24px',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>⚡</span>
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: '#fff' }}>
+                    {pendingConfirmation.title || 'Confirm Specification Update'}
+                  </h3>
+                  <p style={{ fontSize: 12, margin: '2px 0 0', color: '#c7d2fe' }}>
+                    Review targeted items and new paper specifications before applying
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPendingConfirmation(null)}
+                style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: '50%', cursor: 'pointer', fontWeight: 800 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '20px 24px', maxHeight: '65vh', overflowY: 'auto' }}>
+              {/* Target Items List */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                  Target Items ({pendingConfirmation.targetItems.length})
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto', padding: 8, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  {pendingConfirmation.targetItems.map(item => (
+                    <span key={item.id} style={{
+                      background: '#e0e7ff',
+                      color: '#3730a3',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: '1px solid #c7d2fe'
+                    }}>
+                      📦 {item.name || item.Item_Name} ({item.size || item.Size_mm || 'Custom'})
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* New Specs to Apply */}
+              <div style={{ marginBottom: 16, background: '#f0fdf4', padding: 14, borderRadius: 10, border: '1.5px solid #86efac' }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                  ✨ Proposed Specification Updates
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
+                  {pendingConfirmation.itemPayload.paperGsm && (
+                    <div><strong>Top Paper GSM:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.paperGsm} GSM</span></div>
+                  )}
+                  {pendingConfirmation.itemPayload.paperBf && (
+                    <div><strong>Paper BF:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.paperBf} BF</span></div>
+                  )}
+                  {pendingConfirmation.itemPayload.fluteType && (
+                    <div><strong>Flute Type:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.fluteType}-Flute</span></div>
+                  )}
+                  {pendingConfirmation.itemPayload.ply && (
+                    <div><strong>Ply Count:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.ply}-Ply</span></div>
+                  )}
+                  {pendingConfirmation.itemPayload.itemType && (
+                    <div><strong>Item Type:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.itemType}</span></div>
+                  )}
+                  {pendingConfirmation.itemPayload.size && (
+                    <div><strong>Size (LxWxH):</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingConfirmation.itemPayload.size} mm</span></div>
+                  )}
+                </div>
+
+                {/* Detailed Layers if available */}
+                {pendingConfirmation.itemPayload.layers && pendingConfirmation.itemPayload.layers.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #86efac' }}>
+                    <strong style={{ fontSize: 11, color: '#166534' }}>Layers BOM Recipe:</strong>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
+                      {pendingConfirmation.itemPayload.layers.map((l, lIdx) => (
+                        <span key={lIdx} style={{ fontSize: 11.5, color: '#14532d' }}>
+                          • {l.name || (l.isFlute ? 'Fluting Medium' : `Liner ${lIdx + 1}`)}: <strong>{l.gsm || 120} GSM</strong> ({l.type || 'Kraft'}, {l.bf || 16} BF)
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{
+              padding: '14px 24px',
+              background: '#f8fafc',
+              borderTop: '1px solid #e2e8f0',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 10
+            }}>
+              <button
+                type="button"
+                onClick={() => setPendingConfirmation(null)}
+                className="apex-btn"
+                style={{ padding: '8px 18px', fontSize: 13, background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', fontWeight: 700 }}
+              >
+                ✕ Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPendingUpdate}
+                className="apex-btn apex-btn-primary"
+                style={{ padding: '8px 22px', fontSize: 13, background: '#16a34a', color: '#fff', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                ✓ Confirm & Apply Update ({pendingConfirmation.targetItems.length} Items)
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -12617,9 +12806,85 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [activeBomModalItem, setActiveBomModalItem] = useState(null);
+  const [pendingBatchConfirm, setPendingBatchConfirm] = useState(null);
   const [isAiDictating, setIsAiDictating] = useState(false);
   const [aiDictationStatus, setAiDictationStatus] = useState('');
   const aiRecognitionRef = useRef(null);
+
+  const handleConfirmBatchUpdate = async () => {
+    if (!pendingBatchConfirm || !pendingBatchConfirm.targetItems || !updateDoc || !getDocRef) return;
+    const { targetItems, parsed, isBulk } = pendingBatchConfirm;
+
+    try {
+      for (const matched of targetItems) {
+        const uName = isBulk ? (matched.name || matched.Item_Name) : (parsed.name || matched.name || matched.Item_Name);
+        const uSize = isBulk ? (matched.size || matched.Size_mm || '350x250x200') : (parsed.size || matched.size || matched.Size_mm || '350x250x200');
+        const uPly = String(parsed.ply || matched.ply || matched.Ply || '3');
+        const uFlute = parsed.fluteType || matched.fluteType || 'B';
+        const uType = parsed.itemType || matched.itemType || matched.Item_Type || 'Box';
+        const uGsm = parsed.paperGsm || matched.paperGsm || matched.Paper_GSM || '140';
+        const uBf = parsed.paperBf || matched.paperBf || matched.Paper_BF || '18';
+        const uColour = parsed.paperColour || matched.paperColour || matched.Paper_Colour || 'Kraft';
+
+        let uLayers = matched.layers || generateDefaultLayers(uPly, uFlute);
+        if (parsed.layers && Array.isArray(parsed.layers) && parsed.layers.length > 0) {
+          uLayers = parsed.layers.map((l, lIdx) => ({
+            id: `lyr_${lIdx + 1}`,
+            name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
+            type: l.type || 'Kraft',
+            gsm: String(l.gsm || 120),
+            bf: String(l.bf || 16),
+            takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[uFlute] || 1.35) : 1.0)),
+            isFlute: l.isFlute || false
+          }));
+        } else if (uPly !== String(matched.ply || 3) || uFlute !== (matched.fluteType || 'B')) {
+          uLayers = generateDefaultLayers(uPly, uFlute);
+        }
+
+        let uPpc = parsed.ppcMatrix || matched.ppcMatrix || null;
+        const cad = calculateCadBlank(uSize, uPly, uFlute, uType, matched.jointType || 'Stitching (35mm)', uLayers, parseFloat(uGsm), uPpc);
+
+        const payload = {
+          ...matched,
+          name: uName,
+          size: uSize,
+          ply: uPly,
+          fluteType: uFlute,
+          itemType: uType,
+          paperGsm: uGsm,
+          paperBf: uBf,
+          paperColour: uColour,
+          layers: uLayers,
+          ppcMatrix: cad.calculatedPpc || uPpc,
+          od: cad.odStr,
+          deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+          cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+          creasingScores: cad.creasingScores,
+          weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+          targetBs: cad.estimatedBs || '',
+          targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
+          updatedAt: new Date().toISOString()
+        };
+
+        await updateDoc(getDocRef('items', matched.id), payload);
+      }
+
+      if (addLog) {
+        if (isBulk) {
+          addLog(`AI Batch Updated ${targetItems.length} items to ${parsed.itemType || 'custom'} specs`);
+        } else {
+          addLog(`AI Updated Box: ${targetItems[0]?.name}`);
+        }
+      }
+
+      setAiDictationStatus(`✓ Successfully updated ${targetItems.length} items!`);
+      setPendingBatchConfirm(null);
+      setShowBatchForm(false);
+    } catch (e) {
+      console.error('Error applying batch update:', e);
+      setAiDictationStatus('❌ Update failed: ' + e.message);
+    }
+  };
 
   const startAiBoxDictation = () => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -12642,7 +12907,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
 
     rec.onstart = () => {
       setIsAiDictating(true);
-      setAiDictationStatus('🎙️ Listening... Dictate box specs (e.g. "Edit 180ml IB Master. Size 450x300x200, 3 ply B flute. Top golden 150 16bf, fluting 120 16bf, bottom kraft 140 18bf")');
+      setAiDictationStatus('🎙️ Listening... Dictate box specs (e.g. "Edit all PPC items to 180 GSM Golden and 140 GSM Fluting" or "Edit 180ml IB Master...")');
       playBeepSound();
     };
 
@@ -12669,30 +12934,76 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
             return;
           }
 
+          const rawLower = transcript.toLowerCase();
           const parsed = await parseBoxRecipeWithAI(transcript, items);
           if (!parsed) {
             setAiDictationStatus('⚠️ Could not parse box recipe.');
             return;
           }
 
+          const isUpdateIntent = rawLower.includes('edit') || rawLower.includes('update') || rawLower.includes('change') || rawLower.includes('set') || rawLower.includes('all') || rawLower.includes('karo') || rawLower.includes('badlo') || parsed.action === 'edit' || parsed.action === 'bulk_update';
+          const isBulk = rawLower.includes('all') || parsed.action === 'bulk_update' || rawLower.includes('all ppc') || rawLower.includes('all plate') || rawLower.includes('all tray') || rawLower.includes('all sheet') || rawLower.includes('all 5 ply') || rawLower.includes('all 3 ply');
+
+          let targetItems = [];
+          if (isBulk) {
+            const isPpc = rawLower.includes('ppc') || rawLower.includes('partition') || (parsed.itemType || '').toLowerCase() === 'ppc';
+            const isPlate = rawLower.includes('plate') || rawLower.includes('divider') || rawLower.includes('separator') || rawLower.includes('pad') || (parsed.itemType || '').toLowerCase() === 'plate';
+            const isTray = rawLower.includes('tray') || rawLower.includes('lid') || (parsed.itemType || '').toLowerCase() === 'tray';
+            const isSheet = rawLower.includes('sheet') || (parsed.itemType || '').toLowerCase() === 'sheet';
+            const is5Ply = rawLower.includes('5 ply') || rawLower.includes('5-ply') || rawLower.includes('5ply') || parsed.ply === '5';
+            const is3Ply = rawLower.includes('3 ply') || rawLower.includes('3-ply') || rawLower.includes('3ply') || parsed.ply === '3';
+            const is7Ply = rawLower.includes('7 ply') || rawLower.includes('7-ply') || rawLower.includes('7ply') || parsed.ply === '7';
+
+            targetItems = items.filter(i => {
+              const iType = (i.itemType || i.Item_Type || 'Box').toLowerCase();
+              const iName = (i.name || i.Item_Name || '').toLowerCase();
+              const iPly = String(i.ply || i.Ply || '3');
+
+              if (is5Ply && iPly !== '5') return false;
+              if (is3Ply && iPly !== '3') return false;
+              if (is7Ply && iPly !== '7') return false;
+
+              if (isPpc) return iType === 'ppc' || iName.includes('ppc') || iName.includes('partition');
+              if (isPlate) return iType === 'plate' || iName.includes('plate') || iName.includes('separator') || iName.includes('pad') || iName.includes('divider');
+              if (isTray) return iType === 'tray' || iType === 'lid' || iName.includes('tray') || iName.includes('lid');
+              if (isSheet) return iType === 'sheet' || iName.includes('sheet');
+
+              return true;
+            });
+
+            if (targetItems.length === 0 && rawLower.includes('all')) {
+              targetItems = [...items];
+            }
+          } else if (isUpdateIntent || parsed.targetItemName) {
+            const targetQ = (parsed.targetItemName || parsed.name || '').toLowerCase();
+            const matched = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(targetQ));
+            if (matched) targetItems = [matched];
+          }
+
+          // If updating existing items, show confirmation modal (DO NOT open manual entry form)
+          if (targetItems.length > 0 && isUpdateIntent) {
+            const confirmTitle = targetItems.length > 1
+              ? `Confirm Bulk Update for ${targetItems.length} Items`
+              : `Confirm Specification Update: ${targetItems[0]?.name || targetItems[0]?.Item_Name}`;
+
+            setPendingBatchConfirm({
+              title: confirmTitle,
+              targetItems,
+              parsed,
+              isBulk
+            });
+            setShowBatchForm(false);
+            setAiDictationStatus(`Found ${targetItems.length} matching items. Please confirm on screen to apply.`);
+            return;
+          }
+
+          // Otherwise, if user wants to add a new box row manually:
           setShowBatchForm(true);
 
           let targetRowIndex = selectedLayerConfigRow;
-
-          // If editing an existing item, find it
-          if (parsed.action === 'edit' && parsed.targetItemName) {
-            const foundExisting = items.find(i => 
-              (i.name || i.Item_Name || '').toLowerCase().includes(parsed.targetItemName.toLowerCase())
-            );
-            if (foundExisting) {
-              setEditingId(foundExisting.id);
-            }
-          }
-
           const updated = [...itemsInput];
           const cur = updated[targetRowIndex] || { ...emptyItemRow };
 
-          // Extract size from parsed or transcript regex fallback
           let newSize = parsed.size || '';
           if (!newSize) {
             const nums = transcript.match(/\b\d{2,4}\b/g);
@@ -12712,7 +13023,6 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
           const newName = parsed.name || cur.name || '';
           const newItemType = parsed.itemType || cur.itemType || 'Box';
 
-          // Layers from parsed or fallback sync
           let newLayers = Array.isArray(parsed.layers) && parsed.layers.length > 0
             ? parsed.layers.map((l, lIdx) => ({
                 id: `lyr_${lIdx + 1}`,
@@ -12725,7 +13035,6 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               }))
             : syncLayersForPly(cur.layers, newPly, newFlute);
 
-          // Calculate CAD metrics
           const cad = calculateCadBlank(newSize, newPly, newFlute, newItemType, cur.jointType, newLayers, parseFloat(newLayers[0]?.gsm || 140), cur.ppcMatrix);
 
           const updatedRow = {
@@ -12752,7 +13061,6 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
 
           setAiDictationStatus(`✓ Auto-filled ${newName || 'Box'} (${newSize || 'Custom Size'}) with ${newPly}-Ply ${newFlute}-Flute recipe`);
 
-          // Voice audio response
           if (parsed.summaryVoiceText && 'speechSynthesis' in window) {
             try {
               window.speechSynthesis.cancel();
@@ -13023,6 +13331,153 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', paddingBottom: 48 }}>
       
+      {/* Interactive Box / Category Update Confirmation Modal */}
+      {pendingBatchConfirm && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(6px)',
+          zIndex: 100000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{
+            background: '#ffffff',
+            borderRadius: 16,
+            maxWidth: 620,
+            width: '100%',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+            border: '1.5px solid #e2e8f0',
+            overflow: 'hidden'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              background: 'linear-gradient(135deg, #1e1b4b, #312e81)',
+              padding: '18px 24px',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>⚡</span>
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: '#fff' }}>
+                    {pendingBatchConfirm.title || 'Confirm Specification Update'}
+                  </h3>
+                  <p style={{ fontSize: 12, margin: '2px 0 0', color: '#c7d2fe' }}>
+                    Review matching box SKUs and new paper specifications before applying
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPendingBatchConfirm(null)}
+                style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: '50%', cursor: 'pointer', fontWeight: 800 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '20px 24px', maxHeight: '65vh', overflowY: 'auto' }}>
+              {/* Target Items List */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                  Target Items ({pendingBatchConfirm.targetItems.length})
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto', padding: 8, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  {pendingBatchConfirm.targetItems.map(item => (
+                    <span key={item.id} style={{
+                      background: '#e0e7ff',
+                      color: '#3730a3',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: '1px solid #c7d2fe'
+                    }}>
+                      📦 {item.name || item.Item_Name} ({item.size || item.Size_mm || 'Custom'})
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* New Specs to Apply */}
+              <div style={{ marginBottom: 16, background: '#f0fdf4', padding: 14, borderRadius: 10, border: '1.5px solid #86efac' }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                  ✨ Proposed Specification Updates
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
+                  {pendingBatchConfirm.parsed.paperGsm && (
+                    <div><strong>Top Paper GSM:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.paperGsm} GSM</span></div>
+                  )}
+                  {pendingBatchConfirm.parsed.paperBf && (
+                    <div><strong>Paper BF:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.paperBf} BF</span></div>
+                  )}
+                  {pendingBatchConfirm.parsed.fluteType && (
+                    <div><strong>Flute Type:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.fluteType}-Flute</span></div>
+                  )}
+                  {pendingBatchConfirm.parsed.ply && (
+                    <div><strong>Ply Count:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.ply}-Ply</span></div>
+                  )}
+                  {pendingBatchConfirm.parsed.itemType && (
+                    <div><strong>Item Type:</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.itemType}</span></div>
+                  )}
+                  {pendingBatchConfirm.parsed.size && (
+                    <div><strong>Size (LxWxH):</strong> <span style={{ color: '#15803d', fontWeight: 700 }}>{pendingBatchConfirm.parsed.size} mm</span></div>
+                  )}
+                </div>
+
+                {/* Detailed Layers if available */}
+                {pendingBatchConfirm.parsed.layers && pendingBatchConfirm.parsed.layers.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #86efac' }}>
+                    <strong style={{ fontSize: 11, color: '#166534' }}>Layers BOM Recipe:</strong>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
+                      {pendingBatchConfirm.parsed.layers.map((l, lIdx) => (
+                        <span key={lIdx} style={{ fontSize: 11.5, color: '#14532d' }}>
+                          • {l.name || (l.isFlute ? 'Fluting Medium' : `Liner ${lIdx + 1}`)}: <strong>{l.gsm || 120} GSM</strong> ({l.type || 'Kraft'}, {l.bf || 16} BF)
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{
+              padding: '14px 24px',
+              background: '#f8fafc',
+              borderTop: '1px solid #e2e8f0',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 10
+            }}>
+              <button
+                type="button"
+                onClick={() => setPendingBatchConfirm(null)}
+                className="apex-btn"
+                style={{ padding: '8px 18px', fontSize: 13, background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', fontWeight: 700 }}
+              >
+                ✕ Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBatchUpdate}
+                className="apex-btn apex-btn-primary"
+                style={{ padding: '8px 22px', fontSize: 13, background: '#16a34a', color: '#fff', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                ✓ Confirm & Apply Update ({pendingBatchConfirm.targetItems.length} Items)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CAD & LAYER BOM VISUALIZER MODAL */}
       {activeBomModalItem && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
