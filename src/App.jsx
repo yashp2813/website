@@ -327,6 +327,11 @@ export function VoiceInputButton({
       e.stopPropagation();
     }
 
+    if (localStorage.getItem('apex_mic_disabled') === 'true') {
+      alert('Microphone is currently shut off. Click "Mic: OFF" in the bottom-right corner to re-enable voice input.');
+      return;
+    }
+
     if (!isSupported) {
       alert('Speech Recognition is not supported in this browser. Please use Google Chrome, Apple Safari, or Microsoft Edge.');
       return;
@@ -475,6 +480,9 @@ export function GlobalVoiceAssistant({
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const [isMicDisabled, setIsMicDisabled] = useState(() => {
+    return localStorage.getItem('apex_mic_disabled') === 'true';
+  });
   const recognitionRef = useRef(null);
   const toastTimeoutRef = useRef(null);
   const safetyTimeoutRef = useRef(null);
@@ -489,6 +497,34 @@ export function GlobalVoiceAssistant({
     }
     setIsListening(false);
   };
+
+  const toggleMicMute = () => {
+    const nextState = !isMicDisabled;
+    setIsMicDisabled(nextState);
+    if (nextState) {
+      stopAssistant();
+      localStorage.setItem('apex_mic_disabled', 'true');
+      showToast('🔇 Microphone is now completely SHUT OFF across the entire app.', 'warning', 5000);
+      window.dispatchEvent(new CustomEvent('apex-mic-status-changed', { detail: { disabled: true } }));
+    } else {
+      localStorage.removeItem('apex_mic_disabled');
+      showToast('🎙️ Microphone turned ON. Click the button or press Alt+V to speak.', 'info', 4000);
+      window.dispatchEvent(new CustomEvent('apex-mic-status-changed', { detail: { disabled: false } }));
+    }
+  };
+
+  useEffect(() => {
+    const handleStatus = (e) => {
+      if (e && e.detail) {
+        setIsMicDisabled(!!e.detail.disabled);
+        if (e.detail.disabled) {
+          stopAssistant();
+        }
+      }
+    };
+    window.addEventListener('apex-mic-status-changed', handleStatus);
+    return () => window.removeEventListener('apex-mic-status-changed', handleStatus);
+  }, []);
 
   useEffect(() => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -515,7 +551,7 @@ export function GlobalVoiceAssistant({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isListening]);
+  }, [isListening, isMicDisabled]);
 
   const showToast = (message, type = 'info', duration = 6000, details = null) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -1919,6 +1955,11 @@ export function GlobalVoiceAssistant({
       e.stopPropagation();
     }
 
+    if (isMicDisabled) {
+      showToast('🔇 Microphone is currently shut off. Click "Mic: OFF" button to turn it back ON.', 'warning', 4000);
+      return;
+    }
+
     if (!isSupported) {
       alert('Speech Recognition is not supported in this browser. Please use Google Chrome, Edge, or Safari.');
       return;
@@ -2006,6 +2047,35 @@ export function GlobalVoiceAssistant({
           </div>
         )}
 
+        {/* 1-Click Master Microphone Shut-off / Enable Button */}
+        <button
+          type="button"
+          onClick={toggleMicMute}
+          style={{
+            padding: '7px 14px',
+            borderRadius: 20,
+            background: isMicDisabled ? '#dc2626' : '#1e293b',
+            color: '#fff',
+            border: isMicDisabled ? '1.5px solid #ef4444' : '1.5px solid #475569',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 800,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+            backdropFilter: 'blur(6px)',
+            transition: 'all 0.2s'
+          }}
+          title={isMicDisabled ? "Microphone is shut off across the entire app. Click to turn mic ON." : "Click to shut off microphone completely (avoids picking up background noise)."}
+        >
+          {isMicDisabled ? (
+            <><MicOff style={{ width: 15, height: 15, color: '#fff' }} /> <span>Mic: OFF (Muted)</span></>
+          ) : (
+            <><MicOff style={{ width: 14, height: 14, color: '#f87171' }} /> <span>Shut Off Mic</span></>
+          )}
+        </button>
+
         <button
           type="button"
           onClick={() => setShowHelpModal(true)}
@@ -2029,32 +2099,34 @@ export function GlobalVoiceAssistant({
           ?
         </button>
 
-        <button
-          type="button"
-          onClick={toggleAssistant}
-          style={{
-            width: 54,
-            height: 54,
-            borderRadius: '50%',
-            background: isListening ? 'linear-gradient(135deg, #ef4444, #e11d48)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-            color: '#fff',
-            border: 'none',
-            boxShadow: isListening ? '0 0 24px rgba(239, 68, 68, 0.7)' : '0 8px 24px rgba(37, 99, 235, 0.45)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-            transform: isListening ? 'scale(1.08)' : 'scale(1)'
-          }}
-          title={isListening ? 'Stop listening' : '🎙️ System Voice Assistant (Alt + V) - Click and speak any command'}
-        >
-          {isListening ? (
-            <MicOff style={{ width: 24, height: 24 }} />
-          ) : (
-            <Mic style={{ width: 24, height: 24 }} />
-          )}
-        </button>
+        {!isMicDisabled && (
+          <button
+            type="button"
+            onClick={toggleAssistant}
+            style={{
+              width: 54,
+              height: 54,
+              borderRadius: '50%',
+              background: isListening ? 'linear-gradient(135deg, #ef4444, #e11d48)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+              color: '#fff',
+              border: 'none',
+              boxShadow: isListening ? '0 0 24px rgba(239, 68, 68, 0.7)' : '0 8px 24px rgba(37, 99, 235, 0.45)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              transform: isListening ? 'scale(1.08)' : 'scale(1)'
+            }}
+            title={isListening ? 'Stop listening' : '🎙️ System Voice Assistant (Alt + V) - Click and speak any command'}
+          >
+            {isListening ? (
+              <MicOff style={{ width: 24, height: 24 }} />
+            ) : (
+              <Mic style={{ width: 24, height: 24 }} />
+            )}
+          </button>
+        )}
       </div>
 
       {/* Floating HUD Command Notification Toast */}
@@ -4356,6 +4428,32 @@ export default function App() {
   const [attachPrefillOrderId, setAttachPrefillOrderId] = useState('');
   const [completeJobModalOrder, setCompleteJobModalOrder] = useState(null);
 
+  const [isGlobalMicDisabled, setIsGlobalMicDisabled] = useState(() => {
+    return localStorage.getItem('apex_mic_disabled') === 'true';
+  });
+
+  const toggleGlobalMic = () => {
+    const next = !isGlobalMicDisabled;
+    setIsGlobalMicDisabled(next);
+    if (next) {
+      localStorage.setItem('apex_mic_disabled', 'true');
+      window.dispatchEvent(new CustomEvent('apex-mic-status-changed', { detail: { disabled: true } }));
+    } else {
+      localStorage.removeItem('apex_mic_disabled');
+      window.dispatchEvent(new CustomEvent('apex-mic-status-changed', { detail: { disabled: false } }));
+    }
+  };
+
+  useEffect(() => {
+    const handleStatus = (e) => {
+      if (e && e.detail) {
+        setIsGlobalMicDisabled(!!e.detail.disabled);
+      }
+    };
+    window.addEventListener('apex-mic-status-changed', handleStatus);
+    return () => window.removeEventListener('apex-mic-status-changed', handleStatus);
+  }, []);
+
   const handleAttachReelToJob = async (orderId, reel, stand) => {
     const sysId = reel.systemReelId || formatSystemReelId(reel, inventory);
     let targetOrder = orders.find(o => o.id === orderId);
@@ -5121,6 +5219,19 @@ export default function App() {
           {canAccess(currentErpUser.role, 'users') && <NavButton icon={<Users />} label="Users & Access" isActive={activeTab === 'users'} onClick={() => setActiveTab('users')} />}
         </nav>
         <div className="apex-sidebar-footer">
+          <button
+            onClick={toggleGlobalMic}
+            className="apex-logout-btn"
+            style={{ color: isGlobalMicDisabled ? '#ef4444' : '#4ade80', borderTop: 'none', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}
+            title={isGlobalMicDisabled ? "Microphone is shut off across the app. Click to turn mic ON." : "Click to shut off microphone across the entire app."}
+          >
+            {isGlobalMicDisabled ? (
+              <><MicOff style={{ width: 14, height: 14, color: '#ef4444' }} /> Mic: OFF (Muted)</>
+            ) : (
+              <><Mic style={{ width: 14, height: 14, color: '#4ade80' }} /> Mic: Active (Click to Shut Off)</>
+            )}
+          </button>
+
           {currentErpUser.role === 'admin' && (
             <button onClick={downloadFullBackup} className="apex-logout-btn" style={{ color: 'var(--amber)', borderTop: 'none', marginBottom: 2 }} title="Download full system backup as ZIP">
               <Download style={{ width: 14, height: 14 }} /> Full Backup
@@ -6996,6 +7107,11 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
       alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    if (localStorage.getItem('apex_mic_disabled') === 'true') {
+      alert('Microphone is currently shut off. Click "Mic: OFF" in the bottom-right corner to re-enable voice dictation.');
       return;
     }
 
@@ -13334,6 +13450,11 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
       alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    if (localStorage.getItem('apex_mic_disabled') === 'true') {
+      alert('Microphone is currently shut off. Click "Mic: OFF" in the bottom-right corner to re-enable voice dictation.');
       return;
     }
 
