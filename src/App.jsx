@@ -2980,10 +2980,77 @@ const getDispatchSchedule = (o) => {
   return [];
 };
 
-const getSetComponents = (item) => {
-  if (!item || !item.setComponents) return [];
-  if (Array.isArray(item.setComponents)) return item.setComponents;
-  if (typeof item.setComponents === 'string') return safeJsonParse(item.setComponents, []);
+export const getSetComponents = (item) => {
+  if (!item) return [];
+
+  // 1. Explicit set components array
+  if (item.setComponents) {
+    let comps = [];
+    if (Array.isArray(item.setComponents)) comps = item.setComponents;
+    else if (typeof item.setComponents === 'string') comps = safeJsonParse(item.setComponents, []);
+    if (comps.length > 0) return comps;
+  }
+
+  // 2. PPC Partition Matrix attached to the item or PPC item type
+  const ppc = item.ppcMatrix;
+  const isPpc = (item.itemType || item.Item_Type) === 'PPC' || (ppc && ppc.enabled) || (item.name && (item.name.toLowerCase().includes('ppc') || item.name.toLowerCase().includes('partition')));
+
+  if (isPpc && ppc) {
+    const list = [];
+    // Outer Box (if enabled or included)
+    if (ppc.includeOuterBox !== false) {
+      list.push({
+        key: 'outer_box',
+        name: 'Outer Master Carton',
+        ratio: 1,
+        ply: item.ply || item.Ply || '3',
+        flute: item.fluteType || 'B',
+        size: item.size || item.Size_mm || 'Standard',
+        desc: 'Outer corrugated shipping carton'
+      });
+    }
+    // Long Partitions
+    const longCount = parseInt(ppc.longCount || 0);
+    if (longCount > 0) {
+      list.push({
+        key: 'long_partition',
+        name: `Long Partitions (${longCount} pcs/set)`,
+        ratio: longCount,
+        ply: '3',
+        flute: 'B',
+        size: ppc.longLengthMm && ppc.longHeightMm ? `${ppc.longLengthMm} × ${ppc.longHeightMm} mm` : 'PPC Long',
+        desc: `${longCount} long divider strips per set`
+      });
+    }
+    // Cross Partitions
+    const crossCount = parseInt(ppc.crossCount || 0);
+    if (crossCount > 0) {
+      list.push({
+        key: 'cross_partition',
+        name: `Cross Partitions (${crossCount} pcs/set)`,
+        ratio: crossCount,
+        ply: '3',
+        flute: 'B',
+        size: ppc.crossLengthMm && ppc.crossHeightMm ? `${ppc.crossLengthMm} × ${ppc.crossHeightMm} mm` : 'PPC Cross',
+        desc: `${crossCount} cross divider strips per set`
+      });
+    }
+    // Top/Bottom Pads
+    const padCount = parseInt(ppc.padCount || 0);
+    if (padCount > 0) {
+      list.push({
+        key: 'pad_plate',
+        name: `Top/Bottom Pads (${padCount} pcs/set)`,
+        ratio: padCount,
+        ply: '3',
+        flute: 'B',
+        size: ppc.padLengthMm && ppc.padWidthMm ? `${ppc.padLengthMm} × ${ppc.padWidthMm} mm` : 'PPC Pad',
+        desc: `${padCount} separator pads/plates per set`
+      });
+    }
+    if (list.length > 0) return list;
+  }
+
   return [];
 };
 
@@ -10392,13 +10459,26 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
     });
   }, [queuesList, plannedJobs, validQueueIds]);
 
-  // AUTO SUBTRACT QUEUED/PLANNED JOB QUANTITY FROM PENDING ORDERS
-  const getOrderPlannedQty = (orderId) => {
-    return (plannedJobs || []).filter(j => j.orderId === orderId).reduce((sum, j) => sum + (parseInt(j.plannedQty || 0)), 0);
+  // AUTO SUBTRACT QUEUED/PLANNED JOB QUANTITY FROM PENDING ORDERS (SUPPORTS SET COMPONENTS)
+  const getOrderPlannedQty = (orderId, componentKey = null) => {
+    return (plannedJobs || []).filter(j => {
+      if (j.orderId !== orderId) return false;
+      if (componentKey) return j.componentKey === componentKey || (!j.componentKey && componentKey === 'outer_box');
+      return true;
+    }).reduce((sum, j) => sum + (parseInt(j.plannedQty || 0)), 0);
   };
 
   const activeOrders = filteredOrders.filter(o => {
     if (o.isParentSetOrder || o.status === 'Completed') return false;
+    const itm = items.find(i => i.id === o.itemId || i.name === o.itemName || i.Item_Name === o.itemName);
+    const comps = getSetComponents(itm);
+    if (comps && comps.length > 0) {
+      return comps.some(comp => {
+        const compTotalReq = parseInt(o.orderQty || 0) * parseInt(comp.ratio || 1);
+        const compPlanned = getOrderPlannedQty(o.id, comp.key);
+        return compTotalReq - compPlanned > 0;
+      });
+    }
     const remainingPending = parseInt(o.orderQty || 0) - parseInt(o.dispatchedQty || 0) - getOrderPlannedQty(o.id);
     return remainingPending > 0;
   });
@@ -10512,33 +10592,63 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
 
   const openCreateJobModal = (order) => {
     setCreateJobModalOrder(order);
-    const plannedForOrder = getOrderPlannedQty(order.id);
-    const pending = Math.max(0, parseInt(order.orderQty || 0) - parseInt(order.dispatchedQty || 0) - plannedForOrder);
-    setJobPlanForm({
-      queueId: queuesList[0]?.id || 'q_line1',
-      plannedQty: String(pending || order.orderQty || 1000),
-      ups: String(order.plannedUps || order.upsLength || 1),
-      notes: ''
-    });
+    const matchedItem = items.find(i => i.id === order.itemId || i.name === order.itemName || i.Item_Name === order.itemName);
+    const comps = getSetComponents(matchedItem);
+
+    if (comps && comps.length > 0) {
+      const firstComp = comps[0];
+      const compTotalReq = parseInt(order.orderQty || 0) * parseInt(firstComp.ratio || 1);
+      const compPlanned = getOrderPlannedQty(order.id, firstComp.key);
+      const pendingComp = Math.max(0, compTotalReq - compPlanned);
+
+      setJobPlanForm({
+        queueId: queuesList[0]?.id || 'q_line1',
+        componentKey: firstComp.key,
+        componentName: firstComp.name,
+        componentRatio: firstComp.ratio || 1,
+        plannedQty: String(pendingComp > 0 ? pendingComp : compTotalReq),
+        ups: String(firstComp.ups || order.plannedUps || 1),
+        notes: ''
+      });
+    } else {
+      const plannedForOrder = getOrderPlannedQty(order.id);
+      const pending = Math.max(0, parseInt(order.orderQty || 0) - parseInt(order.dispatchedQty || 0) - plannedForOrder);
+      setJobPlanForm({
+        queueId: queuesList[0]?.id || 'q_line1',
+        componentKey: null,
+        componentName: null,
+        componentRatio: 1,
+        plannedQty: String(pending || order.orderQty || 1000),
+        ups: String(order.plannedUps || order.upsLength || 1),
+        notes: ''
+      });
+    }
   };
 
   const submitCreateJobAndPlan = async (e) => {
     e.preventDefault();
     if (!createJobModalOrder) return;
 
+    const compSuffix = jobPlanForm.componentName ? ` [${jobPlanForm.componentName}]` : '';
+    const finalJobItemName = `${createJobModalOrder.itemName || 'Box Item'}${compSuffix}`;
+    const compTag = jobPlanForm.componentKey ? `-${jobPlanForm.componentKey.substring(0, 4).toUpperCase()}` : '';
+
     const newJob = {
       id: `planned_${Date.now()}`,
-      jobNo: `JC-${(createJobModalOrder.id || '').substring(0, 8).toUpperCase()}`,
+      jobNo: `JC-${(createJobModalOrder.id || '').substring(0, 6).toUpperCase()}${compTag}`,
       orderId: createJobModalOrder.id,
       companyId: createJobModalOrder.companyId,
       customerId: createJobModalOrder.customerId,
       itemId: createJobModalOrder.itemId,
-      itemName: createJobModalOrder.itemName || 'Box Item',
+      itemName: finalJobItemName,
+      componentKey: jobPlanForm.componentKey || null,
+      componentName: jobPlanForm.componentName || null,
+      componentRatio: jobPlanForm.componentRatio || 1,
       plannedQty: parseInt(jobPlanForm.plannedQty || createJobModalOrder.orderQty || 0),
       ups: parseInt(jobPlanForm.ups || 1),
       queueId: jobPlanForm.queueId || queuesList[0]?.id || 'q_line1',
       status: 'Queued',
-      notes: jobPlanForm.notes,
+      notes: jobPlanForm.notes || '',
       createdAt: new Date().toISOString()
     };
 
@@ -10565,7 +10675,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
       } catch(err) {}
     }
 
-    if (addLog) addLog(`Created Job Card #${newJob.jobNo} for ${createJobModalOrder.itemName} & synced to WIP`);
+    if (addLog) addLog(`Created Job Card #${newJob.jobNo} for ${finalJobItemName} & synced to WIP`);
     setCreateJobModalOrder(null);
   };
 
@@ -11000,6 +11110,9 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                 const cust = customers.find(c => c.id === o.customerId)?.name || companies.find(c => c.id === o.companyId)?.name || 'Client';
                 const plannedForOrder = getOrderPlannedQty(o.id);
                 const pending = Math.max(0, parseInt(o.orderQty || 0) - parseInt(o.dispatchedQty || 0) - plannedForOrder);
+                const itm = items.find(i => i.id === o.itemId || i.name === o.itemName || i.Item_Name === o.itemName);
+                const comps = getSetComponents(itm);
+                const isSet = comps && comps.length > 0;
 
                 return (
                   <tr key={o.id}>
@@ -11008,19 +11121,26 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                     <td>{cust}</td>
                     {/* FULL ITEM NAME CELL (No clipping, no ellipsis) */}
                     <td style={{ fontWeight: 800, color: '#0f172a', wordBreak: 'break-word', whiteSpace: 'normal', minWidth: 280 }}>
-                      {o.itemName}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span>{o.itemName}</span>
+                        {isSet && (
+                          <span style={{ fontSize: 10, fontWeight: 800, background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: 6, border: '1px solid #ddd6fe' }}>
+                            🧩 Set ({comps.length} Parts)
+                          </span>
+                        )}
+                      </div>
                     </td>
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>{parseInt(o.orderQty || 0).toLocaleString()} pcs</td>
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>{parseInt(o.dispatchedQty || 0).toLocaleString()} pcs</td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#f59e0b' }}>{pending.toLocaleString()} pcs</td>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{parseInt(o.orderQty || 0).toLocaleString()} {isSet ? 'Sets' : 'pcs'}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{parseInt(o.dispatchedQty || 0).toLocaleString()} {isSet ? 'Sets' : 'pcs'}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#f59e0b' }}>{pending.toLocaleString()} {isSet ? 'Sets' : 'pcs'}</td>
                     <td>{o.deliveryDate || '-'}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         onClick={() => openCreateJobModal(o)}
                         className="apex-btn apex-btn-primary"
-                        style={{ padding: '5px 14px', fontSize: 11, fontWeight: 800, background: '#2563eb', whiteSpace: 'nowrap' }}
+                        style={{ padding: '5px 14px', fontSize: 11, fontWeight: 800, background: isSet ? '#7c3aed' : '#2563eb', whiteSpace: 'nowrap' }}
                       >
-                        ➕ Create Job
+                        {isSet ? '🧩 Plan Part Job' : '➕ Create Job'}
                       </button>
                     </td>
                   </tr>
@@ -11031,49 +11151,123 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
         </div>
       </div>
 
-      {/* SIMPLIFIED MODAL (Target Qty, Ups, Target Queue ONLY - NO DATE & NO RUN PRIORITY) */}
-      {createJobModalOrder && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
-          <div className="apex-card" style={{ maxWidth: 460, width: '100%', padding: 22, background: '#fff', borderRadius: 12 }}>
-            <h4 style={{ fontSize: 17, fontWeight: 800, marginBottom: 4, color: '#0f172a' }}>📋 Create Job Card &amp; Schedule</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-              Order: <strong>{createJobModalOrder.itemName}</strong> (Pending: {Math.max(0, parseInt(createJobModalOrder.orderQty || 0) - parseInt(createJobModalOrder.dispatchedQty || 0) - getOrderPlannedQty(createJobModalOrder.id))} pcs)
-            </p>
-            <form onSubmit={submitCreateJobAndPlan} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Target Job Qty (pcs) *</label>
-                  <input type="number" className="apex-input" required value={jobPlanForm.plannedQty} onChange={e => setJobPlanForm({...jobPlanForm, plannedQty: e.target.value})} />
+      {/* SIMPLIFIED MODAL (WITH ON-DEMAND SET COMPONENT SELECTOR) */}
+      {createJobModalOrder && (() => {
+        const modalItem = items.find(i => i.id === createJobModalOrder.itemId || i.name === createJobModalOrder.itemName || i.Item_Name === createJobModalOrder.itemName);
+        const modalComponents = getSetComponents(modalItem);
+        const isSetItem = modalComponents && modalComponents.length > 0;
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
+            <div className="apex-card" style={{ maxWidth: 520, width: '100%', padding: 22, background: '#fff', borderRadius: 14, maxHeight: '90vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <h4 style={{ fontSize: 17, fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  📋 {isSetItem ? 'Plan Set Component Job' : 'Create Job Card & Schedule'}
+                </h4>
+                {isSetItem && (
+                  <span style={{ fontSize: 11, fontWeight: 800, background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: 6 }}>
+                    Kit / Set Order
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+                Order: <strong>{createJobModalOrder.itemName}</strong> ({parseInt(createJobModalOrder.orderQty || 0).toLocaleString()} {isSetItem ? 'Sets' : 'pcs'})
+              </p>
+
+              {/* On-Demand Component Selector for Set Orders */}
+              {isSetItem && (
+                <div style={{ marginBottom: 14, background: '#f8fafc', padding: 12, borderRadius: 10, border: '1.5px solid #cbd5e1' }}>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                    🧩 Which component do you want to plan for today?
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {modalComponents.map(comp => {
+                      const compTotalReq = parseInt(createJobModalOrder.orderQty || 0) * parseInt(comp.ratio || 1);
+                      const compPlanned = getOrderPlannedQty(createJobModalOrder.id, comp.key);
+                      const compRemaining = Math.max(0, compTotalReq - compPlanned);
+                      const isSelected = jobPlanForm.componentKey === comp.key;
+
+                      return (
+                        <div
+                          key={comp.key}
+                          onClick={() => {
+                            setJobPlanForm(prev => ({
+                              ...prev,
+                              componentKey: comp.key,
+                              componentName: comp.name,
+                              componentRatio: comp.ratio || 1,
+                              plannedQty: String(compRemaining > 0 ? compRemaining : compTotalReq),
+                              ups: String(comp.ups || 1)
+                            }));
+                          }}
+                          style={{
+                            padding: '9px 12px',
+                            borderRadius: 8,
+                            border: `1.5px solid ${isSelected ? '#7c3aed' : '#e2e8f0'}`,
+                            background: isSelected ? '#f5f3ff' : '#fff',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <input type="radio" checked={isSelected} readOnly />
+                            <div>
+                              <strong style={{ fontSize: 12.5, color: isSelected ? '#5b21b6' : '#0f172a' }}>{comp.name}</strong>
+                              {comp.size && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 6 }}>({comp.size})</span>}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right', fontSize: 11 }}>
+                            <span style={{ fontWeight: 800, color: compRemaining > 0 ? '#b45309' : '#16a34a' }}>
+                              {compRemaining.toLocaleString()} pcs remaining
+                            </span>
+                            <span style={{ color: '#94a3b8', marginLeft: 4 }}>/ {compTotalReq.toLocaleString()} total</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Number of Ups *</label>
-                  <input type="number" min="1" className="apex-input" required value={jobPlanForm.ups} onChange={e => setJobPlanForm({...jobPlanForm, ups: e.target.value})} />
+              )}
+
+              <form onSubmit={submitCreateJobAndPlan} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Target Job Qty (pcs) *</label>
+                    <input type="number" className="apex-input" required value={jobPlanForm.plannedQty} onChange={e => setJobPlanForm({...jobPlanForm, plannedQty: e.target.value})} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Number of Ups *</label>
+                    <input type="number" min="1" className="apex-input" required value={jobPlanForm.ups} onChange={e => setJobPlanForm({...jobPlanForm, ups: e.target.value})} />
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Select Target Queue</label>
-                <select className="apex-select" value={jobPlanForm.queueId} onChange={e => setJobPlanForm({...jobPlanForm, queueId: e.target.value})}>
-                  {queuesList.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
-                </select>
-              </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Select Target Queue</label>
+                  <select className="apex-select" value={jobPlanForm.queueId} onChange={e => setJobPlanForm({...jobPlanForm, queueId: e.target.value})}>
+                    {queuesList.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
+                  </select>
+                </div>
 
-              <div style={{ background: '#f8fafc', padding: 10, borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 11, color: '#475569' }}>
-                💡 <strong>Calculated Output:</strong> {Math.ceil((parseInt(jobPlanForm.plannedQty || 0) / Math.max(1, parseInt(jobPlanForm.ups || 1))))} Sheets Required (+2% Wastage). Will sync to WIP Board automatically.
-              </div>
+                <div style={{ background: '#f8fafc', padding: 10, borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 11, color: '#475569' }}>
+                  💡 <strong>Calculated Output:</strong> {Math.ceil((parseInt(jobPlanForm.plannedQty || 0) / Math.max(1, parseInt(jobPlanForm.ups || 1))))} Sheets Required (+2% Wastage). Will sync to WIP Board automatically.
+                </div>
 
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', fontWeight: 800, padding: '10px 16px', background: '#2563eb' }}>
-                  ➕ Schedule Job &amp; Sync WIP
-                </button>
-                <button type="button" onClick={() => setCreateJobModalOrder(null)} className="apex-btn apex-btn-secondary" style={{ padding: '10px 16px' }}>
-                  Cancel
-                </button>
-              </div>
-            </form>
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                  <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', fontWeight: 800, padding: '10px 16px', background: isSetItem ? '#7c3aed' : '#2563eb' }}>
+                    ➕ Schedule Job &amp; Sync WIP
+                  </button>
+                  <button type="button" onClick={() => setCreateJobModalOrder(null)} className="apex-btn apex-btn-secondary" style={{ padding: '10px 16px' }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Render JobCardViewModal when clicked */}
       {selectedJobCardOrder && (
