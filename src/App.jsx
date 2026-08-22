@@ -294,13 +294,32 @@ export function VoiceInputButton({
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const recognitionRef = useRef(null);
+  const timeoutRef = useRef(null);
 
   useEffect(() => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
       setIsSupported(false);
     }
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (err) {}
+        recognitionRef.current = null;
+      }
+    };
   }, []);
+
+  const stopListening = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch (err) {}
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+  };
 
   const toggleListening = (e) => {
     if (e) {
@@ -314,10 +333,7 @@ export function VoiceInputButton({
     }
 
     if (isListening) {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch (err) {}
-      }
-      setIsListening(false);
+      stopListening();
       return;
     }
 
@@ -333,15 +349,20 @@ export function VoiceInputButton({
     recognition.onstart = () => {
       setIsListening(true);
       playBeepSound();
+      // Auto-off safety timer: stop listening after 7 seconds if no voice detected
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        stopListening();
+      }, 7000);
     };
 
     recognition.onend = () => {
-      setIsListening(false);
+      stopListening();
     };
 
     recognition.onerror = (event) => {
       console.warn('Speech Recognition error:', event?.error);
-      setIsListening(false);
+      stopListening();
       if (event?.error === 'not-allowed') {
         alert('Microphone access was denied. Please allow microphone permissions in your browser address bar.');
       }
@@ -350,46 +371,44 @@ export function VoiceInputButton({
     recognition.onresult = (event) => {
       if (event.results && event.results[0] && event.results[0][0]) {
         let transcript = (event.results[0][0].transcript || '').trim();
-        if (!transcript) return;
-
-        if (mode === 'dimension') {
-          // Normalize spoken dimension into strict "LxWxH" or "LxW"
-          // Handles "450 by 300 by 200", "450 300 200", "450 into 300 into 200", "450 x 300 x 200", "450*300*200"
-          const nums = transcript.match(/\b\d+(\.\d+)?\b/g);
-          if (nums && nums.length >= 2) {
-            onTranscript(nums.slice(0, 3).join('x'));
-          } else {
-            let cleaned = transcript
-              .replace(/\b(by|into|cross|multiplied by|\*|x|X)\b/gi, 'x')
-              .replace(/\s*x\s*/gi, 'x')
-              .replace(/[^0-9xX.]/g, '');
+        if (transcript) {
+          if (mode === 'dimension') {
+            const nums = transcript.match(/\b\d+(\.\d+)?\b/g);
+            if (nums && nums.length >= 2) {
+              onTranscript(nums.slice(0, 3).join('x'));
+            } else {
+              let cleaned = transcript
+                .replace(/\b(by|into|cross|multiplied by|\*|x|X)\b/gi, 'x')
+                .replace(/\s*x\s*/gi, 'x')
+                .replace(/[^0-9xX.]/g, '');
+              onTranscript(cleaned || transcript);
+            }
+          } else if (mode === 'search') {
+            let cleaned = transcript.replace(/\.$/, '').trim();
+            onTranscript(cleaned);
+          } else if (mode === 'number') {
+            let cleaned = transcript.replace(/[^0-9.]/g, '');
             onTranscript(cleaned || transcript);
+          } else if (mode === 'material') {
+            const low = transcript.toLowerCase();
+            if (low.includes('gold')) onTranscript('Golden');
+            else if (low.includes('dup')) onTranscript('Duplex');
+            else if (low.includes('kraft') || low.includes('craft') || low.includes('brown')) onTranscript('Kraft');
+            else onTranscript(transcript);
+          } else {
+            let cleaned = transcript.replace(/\.$/, '').trim();
+            onTranscript(cleaned);
           }
-        } else if (mode === 'search') {
-          // Removes trailing period added by speech recognition
-          let cleaned = transcript.replace(/\.$/, '').trim();
-          onTranscript(cleaned);
-        } else if (mode === 'number') {
-          let cleaned = transcript.replace(/[^0-9.]/g, '');
-          onTranscript(cleaned || transcript);
-        } else if (mode === 'material') {
-          const low = transcript.toLowerCase();
-          if (low.includes('gold')) onTranscript('Golden');
-          else if (low.includes('dup')) onTranscript('Duplex');
-          else if (low.includes('kraft') || low.includes('craft') || low.includes('brown')) onTranscript('Kraft');
-          else onTranscript(transcript);
-        } else {
-          let cleaned = transcript.replace(/\.$/, '').trim();
-          onTranscript(cleaned);
         }
       }
+      stopListening();
     };
 
     try {
       recognition.start();
     } catch (err) {
       console.warn('Recognition start failed:', err);
-      setIsListening(false);
+      stopListening();
     }
   };
 
@@ -458,10 +477,31 @@ export function GlobalVoiceAssistant({
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const recognitionRef = useRef(null);
   const toastTimeoutRef = useRef(null);
+  const safetyTimeoutRef = useRef(null);
+
+  const stopAssistant = () => {
+    if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch (err) {}
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+  };
 
   useEffect(() => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) setIsSupported(false);
+
+    return () => {
+      if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (err) {}
+        recognitionRef.current = null;
+      }
+    };
   }, []);
 
   // Keyboard shortcut: Alt + V or Ctrl + Shift + V
@@ -1885,8 +1925,7 @@ export function GlobalVoiceAssistant({
     }
 
     if (isListening) {
-      try { recognitionRef.current?.stop(); } catch (err) {}
-      setIsListening(false);
+      stopAssistant();
       return;
     }
 
@@ -1902,26 +1941,34 @@ export function GlobalVoiceAssistant({
       setIsListening(true);
       playBeepSound();
       showToast('🎙️ Listening... (Ask about Job Cards, Paper Stock, WIP, Wastage, or Say "Help")', 'info', 7000);
+      
+      // Auto-off timer: shut mic completely off after 8 seconds of silence
+      if (safetyTimeoutRef.current) clearTimeout(safetyTimeoutRef.current);
+      safetyTimeoutRef.current = setTimeout(() => {
+        stopAssistant();
+      }, 8000);
     };
 
     recognition.onend = () => {
-      setIsListening(false);
+      stopAssistant();
     };
 
     recognition.onerror = (event) => {
       console.warn('Voice assistant error:', event?.error);
-      setIsListening(false);
+      stopAssistant();
       if (event?.error === 'not-allowed') {
         showToast('❌ Microphone permission denied', 'error');
       }
     };
 
     recognition.onresult = (event) => {
+      let capturedTranscript = '';
       if (event.results && event.results[0] && event.results[0][0]) {
-        const transcript = (event.results[0][0].transcript || '').trim();
-        if (transcript) {
-          executeCommand(transcript);
-        }
+        capturedTranscript = (event.results[0][0].transcript || '').trim();
+      }
+      stopAssistant();
+      if (capturedTranscript) {
+        executeCommand(capturedTranscript);
       }
     };
 
@@ -1929,7 +1976,7 @@ export function GlobalVoiceAssistant({
       recognition.start();
     } catch (err) {
       console.warn('Failed to start voice assistant:', err);
-      setIsListening(false);
+      stopAssistant();
     }
   };
 
@@ -6928,6 +6975,22 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const [isAiReelDictating, setIsAiReelDictating] = useState(false);
   const [aiReelStatus, setAiReelStatus] = useState('');
   const aiReelRecRef = useRef(null);
+  const aiReelTimerRef = useRef(null);
+
+  const stopAiReelDictation = () => {
+    if (aiReelTimerRef.current) clearTimeout(aiReelTimerRef.current);
+    if (aiReelRecRef.current) {
+      try { aiReelRecRef.current.abort(); } catch (e) {}
+      aiReelRecRef.current = null;
+    }
+    setIsAiReelDictating(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopAiReelDictation();
+    };
+  }, []);
 
   const startAiReelDictation = () => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -6937,8 +7000,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     }
 
     if (isAiReelDictating) {
-      try { aiReelRecRef.current?.stop(); } catch(e) {}
-      setIsAiReelDictating(false);
+      stopAiReelDictation();
       return;
     }
 
@@ -6950,25 +7012,35 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
     rec.onstart = () => {
       setIsAiReelDictating(true);
-      setAiReelStatus('🎙️ Listening... Dictate inward reels (e.g. "Inward from Star Paper Mill invoice 4521. Reel 101: 150 GSM 18 BF 900 size 650 kg. Reel 102: 150 GSM 18 BF 900 size 680 kg. Reel 103: 120 GSM 16 BF 1000 size 720 kg")');
+      setAiReelStatus('🎙️ Listening... Dictate inward reels (e.g. "Inward from Star Paper Mill invoice 4521. Reel 101: 150 GSM 18 BF 900 size 650 kg. Reel 102: 150 GSM 18 BF 900 size 680 kg...")');
       playBeepSound();
+
+      // Auto-off safety timer after 10s of silence
+      if (aiReelTimerRef.current) clearTimeout(aiReelTimerRef.current);
+      aiReelTimerRef.current = setTimeout(() => {
+        stopAiReelDictation();
+        setAiReelStatus('Microphone switched off after silence.');
+      }, 10000);
     };
 
     rec.onend = () => {
-      setIsAiReelDictating(false);
+      stopAiReelDictation();
     };
 
     rec.onerror = (e) => {
-      setIsAiReelDictating(false);
+      stopAiReelDictation();
       setAiReelStatus('❌ Microphone error: ' + (e?.error || 'unknown'));
     };
 
     rec.onresult = async (event) => {
+      let transcript = '';
       if (event.results && event.results[0] && event.results[0][0]) {
-        const transcript = (event.results[0][0].transcript || '').trim();
-        if (!transcript) return;
+        transcript = (event.results[0][0].transcript || '').trim();
+      }
+      stopAiReelDictation();
+      if (!transcript) return;
 
-        setAiReelStatus('🧠 Gemini AI parsing multiple reels: "' + transcript + '"...');
+      setAiReelStatus('🧠 Gemini AI parsing multiple reels: "' + transcript + '"...');
 
         try {
           if (!isGeminiConfigured()) {
@@ -7022,13 +7094,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           console.error('AI Reel Inward error:', err);
           setAiReelStatus('❌ AI Reel Parsing failed: ' + (err.message || err));
         }
-      }
     };
 
     try {
       rec.start();
     } catch(e) {
-      setIsAiReelDictating(false);
+      stopAiReelDictation();
     }
   };
 
@@ -12988,6 +13059,22 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   const [isAiDictating, setIsAiDictating] = useState(false);
   const [aiDictationStatus, setAiDictationStatus] = useState('');
   const aiRecognitionRef = useRef(null);
+  const aiBoxTimerRef = useRef(null);
+
+  const stopAiBoxDictation = () => {
+    if (aiBoxTimerRef.current) clearTimeout(aiBoxTimerRef.current);
+    if (aiRecognitionRef.current) {
+      try { aiRecognitionRef.current.abort(); } catch (e) {}
+      aiRecognitionRef.current = null;
+    }
+    setIsAiDictating(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopAiBoxDictation();
+    };
+  }, []);
 
   // Dedicated Set / Kit Builder State (Box, PPC, Plate/Pad)
   const [showSetBuilderModal, setShowSetBuilderModal] = useState(false);
@@ -13251,8 +13338,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     }
 
     if (isAiDictating) {
-      try { aiRecognitionRef.current?.stop(); } catch(e) {}
-      setIsAiDictating(false);
+      stopAiBoxDictation();
       return;
     }
 
@@ -13266,23 +13352,33 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
       setIsAiDictating(true);
       setAiDictationStatus('🎙️ Listening... Dictate box specs (e.g. "Edit all PPC items to 180 GSM Golden and 140 GSM Fluting" or "Edit 180ml IB Master...")');
       playBeepSound();
+
+      // Auto-off safety timer after 10s of silence
+      if (aiBoxTimerRef.current) clearTimeout(aiBoxTimerRef.current);
+      aiBoxTimerRef.current = setTimeout(() => {
+        stopAiBoxDictation();
+        setAiDictationStatus('Microphone switched off after silence.');
+      }, 10000);
     };
 
     rec.onend = () => {
-      setIsAiDictating(false);
+      stopAiBoxDictation();
     };
 
     rec.onerror = (e) => {
-      setIsAiDictating(false);
+      stopAiBoxDictation();
       setAiDictationStatus('❌ Microphone error: ' + (e?.error || 'unknown'));
     };
 
     rec.onresult = async (event) => {
+      let transcript = '';
       if (event.results && event.results[0] && event.results[0][0]) {
-        const transcript = (event.results[0][0].transcript || '').trim();
-        if (!transcript) return;
+        transcript = (event.results[0][0].transcript || '').trim();
+      }
+      stopAiBoxDictation();
+      if (!transcript) return;
 
-        setAiDictationStatus('🧠 Gemini AI parsing box recipe: "' + transcript + '"...');
+      setAiDictationStatus('🧠 Gemini AI parsing box recipe: "' + transcript + '"...');
 
         try {
           if (!isGeminiConfigured()) {
@@ -13430,13 +13526,12 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
           console.error('AI Dictation Error:', err);
           setAiDictationStatus('❌ AI Parsing failed: ' + (err.message || err));
         }
-      }
     };
 
     try {
       rec.start();
     } catch(e) {
-      setIsAiDictating(false);
+      stopAiBoxDictation();
     }
   };
 
