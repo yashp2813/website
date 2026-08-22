@@ -3,6 +3,16 @@
 // =========================================================================
 
 const STORAGE_KEY_GEMINI = 'apex_gemini_api_key';
+const STORAGE_KEY_GEMINI_MODEL = 'apex_gemini_model';
+
+// Supported Google Gemini models in order of priority
+export const GEMINI_CANDIDATE_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-2.5-flash',
+  'gemini-1.5-pro',
+  'gemini-2.0-flash-exp',
+  'gemini-2.0-flash'
+];
 
 export function getGeminiApiKey() {
   return localStorage.getItem(STORAGE_KEY_GEMINI) || import.meta.env.VITE_GEMINI_API_KEY || '';
@@ -16,12 +26,23 @@ export function setGeminiApiKey(key) {
   }
 }
 
+export function getPreferredGeminiModel() {
+  return localStorage.getItem(STORAGE_KEY_GEMINI_MODEL) || 'gemini-1.5-flash';
+}
+
+export function setPreferredGeminiModel(modelName) {
+  if (modelName && modelName.trim()) {
+    localStorage.setItem(STORAGE_KEY_GEMINI_MODEL, modelName.trim());
+  }
+}
+
 export function isGeminiConfigured() {
   return !!getGeminiApiKey();
 }
 
 /**
- * Calls Gemini 2.0 / 1.5 Flash API with JSON Structured Output or Chat
+ * Calls Gemini API with latest models (1.5 Flash / 2.5 Flash / 1.5 Pro)
+ * with automatic fallback cascade if a specific model endpoint is unavailable.
  */
 async function callGeminiApi({ prompt, systemInstruction = '', responseSchema = null, temperature = 0.2 }) {
   const apiKey = getGeminiApiKey();
@@ -29,48 +50,90 @@ async function callGeminiApi({ prompt, systemInstruction = '', responseSchema = 
     throw new Error('GEMINI_KEY_MISSING');
   }
 
-  // Use Gemini 2.0 Flash endpoint
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const preferred = getPreferredGeminiModel();
+  const modelsToTry = [
+    preferred,
+    ...GEMINI_CANDIDATE_MODELS.filter(m => m !== preferred)
+  ];
 
-  const payload = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: prompt }]
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const payload = {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature,
+          maxOutputTokens: 2048
+        }
+      };
+
+      if (systemInstruction) {
+        payload.systemInstruction = {
+          parts: [{ text: systemInstruction }]
+        };
       }
-    ],
-    generationConfig: {
-      temperature,
-      maxOutputTokens: 2048
+
+      if (responseSchema) {
+        payload.generationConfig.responseMimeType = 'application/json';
+        payload.generationConfig.responseSchema = responseSchema;
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        const errorMsg = errorBody.error?.message || `Gemini API Error (${response.status})`;
+
+        // If model is not available or 404, cascade to next candidate model
+        if (
+          response.status === 404 ||
+          errorMsg.toLowerCase().includes('no longer available') ||
+          errorMsg.toLowerCase().includes('not found') ||
+          errorMsg.toLowerCase().includes('is not supported')
+        ) {
+          console.warn(`[Gemini AI] Model ${model} unavailable (${errorMsg}), trying fallback...`);
+          lastError = new Error(errorMsg);
+          continue;
+        }
+
+        throw new Error(errorMsg);
+      }
+
+      const result = await response.json();
+      const textOutput = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      // If a fallback model worked, remember it for future calls
+      if (model !== preferred) {
+        setPreferredGeminiModel(model);
+      }
+
+      return textOutput;
+    } catch (err) {
+      if (
+        err.message.toLowerCase().includes('no longer available') ||
+        err.message.toLowerCase().includes('not found') ||
+        err.message.toLowerCase().includes('404')
+      ) {
+        lastError = err;
+        continue;
+      }
+      throw err;
     }
-  };
-
-  if (systemInstruction) {
-    payload.systemInstruction = {
-      parts: [{ text: systemInstruction }]
-    };
   }
 
-  if (responseSchema) {
-    payload.generationConfig.responseMimeType = 'application/json';
-    payload.generationConfig.responseSchema = responseSchema;
-  }
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    const errorMsg = errorBody.error?.message || `Gemini API Error (${response.status})`;
-    throw new Error(errorMsg);
-  }
-
-  const result = await response.json();
-  const textOutput = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return textOutput;
+  throw lastError || new Error('All Gemini models failed. Please verify your API Key.');
 }
 
 /**

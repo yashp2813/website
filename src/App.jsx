@@ -14,7 +14,7 @@ import Barcode from 'react-barcode';
 // 1. TURSO DATABASE SETUP & GEMINI AI SERVICE
 // ==========================================
 import { executeQuery, executeBatch, generateId, initDb, getNextCounter } from './db.js';
-import { getGeminiApiKey, setGeminiApiKey, isGeminiConfigured, parseBoxRecipeWithAI, askFactoryAI, parseReelsInwardWithAI, calculateFactoryKPIs } from './gemini.js';
+import { getGeminiApiKey, setGeminiApiKey, isGeminiConfigured, getPreferredGeminiModel, setPreferredGeminiModel, GEMINI_CANDIDATE_MODELS, parseBoxRecipeWithAI, askFactoryAI, parseReelsInwardWithAI, calculateFactoryKPIs } from './gemini.js';
 
 
 // Audio synthesizer for barcode scan feedback
@@ -1485,7 +1485,7 @@ export function GlobalVoiceAssistant({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Sparkles style={{ width: 16, height: 16, color: '#818cf8' }} />
-                  <span style={{ fontSize: 13, fontWeight: 800, color: '#e0e7ff' }}>Google Gemini 2.0 Flash AI Engine</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: '#e0e7ff' }}>Google Gemini AI Engine (Latest Flash / Pro)</span>
                 </div>
                 <span style={{
                   fontSize: 11,
@@ -1499,9 +1499,9 @@ export function GlobalVoiceAssistant({
                 </span>
               </div>
               <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '0 0 10px 0' }}>
-                Enables natural language reasoning across all orders, WIP stages, paper stock, and complex Box BOM voice dictation.
+                Enables natural language reasoning across all orders, WIP stages, paper stock, and complex Box BOM voice dictation with automatic multi-model fallback cascade.
               </p>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                 <div style={{ position: 'relative', flex: 1 }}>
                   <input
                     type="password"
@@ -1526,7 +1526,7 @@ export function GlobalVoiceAssistant({
                     if (apiKeyInput.trim()) {
                       setGeminiApiKey(apiKeyInput.trim());
                       setApiKeyInput('');
-                      alert('✓ Gemini API Key saved successfully! Full conversational AI & Box Dictation is now active.');
+                      alert('✓ Gemini API Key saved successfully! Latest Gemini models are active.');
                     } else if (isGeminiConfigured()) {
                       setGeminiApiKey('');
                       alert('Gemini API Key removed. Reverted to fast native pattern mode.');
@@ -1538,11 +1538,16 @@ export function GlobalVoiceAssistant({
                   {apiKeyInput.trim() ? 'Save Key' : (isGeminiConfigured() ? 'Remove Key' : 'Save')}
                 </button>
               </div>
-              {!isGeminiConfigured() && (
-                <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 6 }}>
-                  Free key in 30 sec: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline', fontWeight: 600 }}>Get Free API Key from Google AI Studio →</a>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#94a3b8', flexWrap: 'wrap', gap: 6 }}>
+                <div>
+                  Active Model: <strong style={{ color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{getPreferredGeminiModel()}</strong> (Auto-cascade: 1.5-Flash, 2.5-Flash, 1.5-Pro)
                 </div>
-              )}
+                {!isGeminiConfigured() && (
+                  <div>
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline', fontWeight: 600 }}>Get Free Key from Google AI Studio →</a>
+                  </div>
+                )}
+              </div>
             </div>
 
             <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
