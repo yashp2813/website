@@ -137,14 +137,112 @@ async function callGeminiApi({ prompt, systemInstruction = '', responseSchema = 
 }
 
 /**
+ * Robust JSON extraction and repair helper
+ */
+export function cleanAndParseJson(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+
+  let cleaned = rawText.trim();
+  // Strip markdown code fences
+  cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  // Find outermost object or array
+  const firstBrace = cleaned.indexOf('{');
+  const firstBracket = cleaned.indexOf('[');
+
+  let startIdx = -1;
+  let isObject = true;
+  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    startIdx = firstBrace;
+    isObject = true;
+  } else if (firstBracket !== -1) {
+    startIdx = firstBracket;
+    isObject = false;
+  }
+
+  if (startIdx !== -1) {
+    const endChar = isObject ? '}' : ']';
+    const lastIdx = cleaned.lastIndexOf(endChar);
+    if (lastIdx !== -1 && lastIdx >= startIdx) {
+      cleaned = cleaned.substring(startIdx, lastIdx + 1);
+    } else {
+      // Truncation repair: append missing closing bracket/brace
+      cleaned = cleaned.substring(startIdx) + (isObject ? '}' : ']');
+    }
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e1) {
+    try {
+      const repaired = cleaned
+        .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
+        .replace(/[\u0000-\u001F]+/g, ' '); // remove control characters
+      return JSON.parse(repaired);
+    } catch (e2) {
+      console.warn('cleanAndParseJson failed to parse:', cleaned);
+      return null;
+    }
+  }
+}
+
+/**
+ * Regex-based fast extractor for box dimensions, ply, flute, and item type
+ */
+export function parseBoxRecipeRegexFallback(transcript) {
+  const text = String(transcript || '').trim();
+  if (!text) return null;
+
+  let size = '';
+  // Extract dimensions: e.g. "450 by 300 by 200", "450x300x200", "450 300 200", "450 into 300 into 200"
+  const nums = text.match(/\b\d{2,4}\b/g);
+  if (nums && nums.length >= 2) {
+    size = nums.slice(0, 3).join('x');
+  } else {
+    const dimMatch = text.match(/(\d+)\s*(?:x|\*|by|into|cross|\s+)\s*(\d+)(?:\s*(?:x|\*|by|into|cross|\s+)\s*(\d+))?/i);
+    if (dimMatch) {
+      size = dimMatch[3] ? `${dimMatch[1]}x${dimMatch[2]}x${dimMatch[3]}` : `${dimMatch[1]}x${dimMatch[2]}`;
+    }
+  }
+
+  let ply = '';
+  const plyMatch = text.match(/([23579])\s*(?:ply|plies)/i);
+  if (plyMatch) ply = plyMatch[1];
+
+  let fluteType = '';
+  const fluteMatch = text.match(/\b([BCEAbcea]|BC|AB|bc|ab)\s*(?:flute|fluting)?\b/i);
+  if (fluteMatch) fluteType = fluteMatch[1].toUpperCase();
+
+  let itemType = 'Box';
+  if (/\bppc\b/i.test(text)) itemType = 'PPC';
+  else if (/\bplate\b/i.test(text)) itemType = 'Plate';
+  else if (/\btray\b/i.test(text)) itemType = 'Tray';
+  else if (/\bsheet\b/i.test(text)) itemType = 'Sheet';
+
+  return {
+    action: /edit|update|change|set/i.test(text) ? 'edit' : 'create',
+    name: '',
+    size,
+    ply,
+    fluteType,
+    itemType,
+    layers: [],
+    summaryVoiceText: size ? `Updated box size to ${size} mm.` : 'Box parameters extracted.'
+  };
+}
+
+/**
  * 1. AI BOX SPECIFICATION & LAYER BOM RECIPE DICTATION PARSER
  * Transforms speech like "Edit 180ml IB Master. Size 450x300x200, 3 ply B flute. Top golden 150 16bf, fluting 120 16bf, bottom kraft 140 18bf"
  * into a complete structured Box & Paper Layer Matrix.
  */
 export async function parseBoxRecipeWithAI(speechTranscript, existingItems = []) {
-  const itemsContext = existingItems.map(i => i.name || i.Item_Name).filter(Boolean).slice(0, 50).join(', ');
+  const fallback = parseBoxRecipeRegexFallback(speechTranscript);
 
-  const systemInstruction = `You are an expert AI Corrugation Packaging Engineer assisting an operator in dictating Box Specifications and Paper Layer Recipes (BOM).
+  try {
+    const itemsContext = existingItems.map(i => i.name || i.Item_Name).filter(Boolean).slice(0, 50).join(', ');
+
+    const systemInstruction = `You are an expert AI Corrugation Packaging Engineer assisting an operator in dictating Box Specifications and Paper Layer Recipes (BOM).
 Your task is to parse unstructured spoken dictation into a structured JSON Box Recipe.
 
 Corrugation Packaging Rules:
@@ -153,53 +251,67 @@ Corrugation Packaging Rules:
 - Paper types/materials: 'Kraft', 'Golden', 'Duplex'.
 - Standard Layer Roles for 3-Ply: 1: "Top Liner", 2: "Fluting Medium", 3: "Bottom Liner".
 - Standard Layer Roles for 5-Ply: 1: "Top Liner", 2: "Fluting Medium 1", 3: "Center Liner", 4: "Fluting Medium 2", 5: "Bottom Liner".
-- Dimensions format: "LENGTHxWIDTHxHEIGHT" in mm (e.g., "450x300x200"). If dimensions spoken as "450 by 300 by 200", format as "450x300x200".
+- Dimensions format: "LENGTHxWIDTHxHEIGHT" in mm (e.g., "450x300x200"). If dimensions spoken as "450 by 300 by 200", "450 into 300 into 200", "450 300 200", or "change size to 450x300x200", extract size strictly as "450x300x200".
 - Known existing item names in database: [${itemsContext}]`;
 
-  const prompt = `Parse the following spoken operator dictation into a box specification:
+    const prompt = `Parse the following spoken operator dictation into a box specification:
 Dictation: "${speechTranscript}"
 
-Return JSON matching the schema with action ('create' or 'edit'), targetItemName (if editing), name, size, ply, fluteType, itemType, and the complete array of layers with gsm, bf, type, and takeUp.`;
+Return JSON with action ('create' or 'edit'), targetItemName (if editing), name, size (e.g. 450x300x200), ply ('3', '5', '7', '2'), fluteType ('B', 'C', 'E', 'A', 'BC', 'AB'), itemType ('Box', 'PPC', 'Plate', 'Tray', 'Sheet'), and layers array.`;
 
-  const schema = {
-    type: 'OBJECT',
-    properties: {
-      action: { type: 'STRING', enum: ['create', 'edit'], description: 'Whether the operator wants to create a new box or edit an existing one' },
-      targetItemName: { type: 'STRING', description: 'Name of the existing box item if editing' },
-      name: { type: 'STRING', description: 'Clean formatted Item / SKU Name' },
-      itemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet'], description: 'Type of item (Box, PPC, Plate, Tray, Sheet)' },
-      size: { type: 'STRING', description: 'Inner dimensions ID format: LENGTHxWIDTHxHEIGHT e.g. 450x300x200' },
-      ply: { type: 'STRING', enum: ['3', '5', '7', '2'], description: 'Number of plies' },
-      fluteType: { type: 'STRING', enum: ['B', 'C', 'E', 'A', 'BC', 'AB'], description: 'Flute type profile' },
-      layers: {
-        type: 'ARRAY',
-        description: 'Layer by layer paper recipe from Top to Bottom',
-        items: {
-          type: 'OBJECT',
-          properties: {
-            name: { type: 'STRING', description: 'Layer role name e.g. Top Liner, Fluting Medium, Bottom Liner' },
-            type: { type: 'STRING', enum: ['Kraft', 'Golden', 'Duplex'], description: 'Paper material shade' },
-            gsm: { type: 'NUMBER', description: 'Grammage per square meter (e.g. 120, 150, 180)' },
-            bf: { type: 'NUMBER', description: 'Burst factor (e.g. 16, 18, 20, 22, 28)' },
-            takeUp: { type: 'NUMBER', description: 'Fluting factor (1.0 for liners, 1.35 for B flute, etc.)' },
-            isFlute: { type: 'BOOLEAN', description: 'True if this layer is a fluting medium' }
-          },
-          required: ['name', 'type', 'gsm', 'bf', 'takeUp', 'isFlute']
-        }
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        action: { type: 'STRING', enum: ['create', 'edit'], description: 'Whether the operator wants to create a new box or edit an existing one' },
+        targetItemName: { type: 'STRING', description: 'Name of the existing box item if editing' },
+        name: { type: 'STRING', description: 'Clean formatted Item / SKU Name' },
+        itemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet'], description: 'Type of item' },
+        size: { type: 'STRING', description: 'Inner dimensions ID format: LENGTHxWIDTHxHEIGHT e.g. 450x300x200' },
+        ply: { type: 'STRING', enum: ['3', '5', '7', '2'], description: 'Number of plies' },
+        fluteType: { type: 'STRING', enum: ['B', 'C', 'E', 'A', 'BC', 'AB'], description: 'Flute type profile' },
+        layers: {
+          type: 'ARRAY',
+          description: 'Layer by layer paper recipe from Top to Bottom',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              name: { type: 'STRING', description: 'Layer role name e.g. Top Liner, Fluting Medium, Bottom Liner' },
+              type: { type: 'STRING', enum: ['Kraft', 'Golden', 'Duplex'], description: 'Paper material shade' },
+              gsm: { type: 'NUMBER', description: 'Grammage per square meter (e.g. 120, 150, 180)' },
+              bf: { type: 'NUMBER', description: 'Burst factor (e.g. 16, 18, 20, 22, 28)' },
+              takeUp: { type: 'NUMBER', description: 'Fluting factor (1.0 for liners, 1.35 for B flute, etc.)' },
+              isFlute: { type: 'BOOLEAN', description: 'True if this layer is a fluting medium' }
+            },
+            required: ['name', 'type', 'gsm', 'bf', 'takeUp', 'isFlute']
+          }
+        },
+        summaryVoiceText: { type: 'STRING', description: 'Short 1-sentence friendly confirmation to speak back to the operator' }
       },
-      summaryVoiceText: { type: 'STRING', description: 'Short 1-sentence friendly confirmation to speak back to the operator' }
-    },
-    required: ['action', 'name', 'size', 'ply', 'fluteType', 'layers', 'summaryVoiceText']
-  };
+      required: ['action', 'summaryVoiceText']
+    };
 
-  const rawJson = await callGeminiApi({
-    prompt,
-    systemInstruction,
-    responseSchema: schema,
-    temperature: 0.1
-  });
+    const rawJson = await callGeminiApi({
+      prompt,
+      systemInstruction,
+      responseSchema: schema,
+      temperature: 0.1
+    });
 
-  return JSON.parse(rawJson);
+    const parsed = cleanAndParseJson(rawJson);
+    if (parsed) {
+      if (!parsed.size && fallback?.size) {
+        parsed.size = fallback.size;
+      }
+      return parsed;
+    }
+    return fallback;
+  } catch (err) {
+    console.warn('parseBoxRecipeWithAI failed, falling back to regex parser:', err);
+    if (fallback && (fallback.size || fallback.ply || fallback.name)) {
+      return fallback;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -505,26 +617,41 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
     companyList: companies.map(c => c.name)
   });
 
-  const systemInstruction = `You are the Executive AI Manufacturing & Financial Intelligence Director for APEX Corrugation Packaging ERP.
-You have omniscient, instant real-time visibility into the plant's 360-degree database:
-1. FULL COST BREAKDOWN PER BOX & PER KG: Raw paper cost, starch/gum cost, power & fuel conversion cost, printing ink & stereo cost, stitching wire cost, freight, total manufacturing cost, selling price, and net profit margin (%).
-2. DECKLE SUBSTITUTION, WASTAGE & FINANCIAL LOSS / GAIN:
-   When an operator asks what happens if they use an alternative or non-standard deckle width (e.g. "What if I use 1050 deckle for 180ml IB Master?", "Can I use 100cm reel instead of 90cm for Radico 750ml?", "Deckle comparison 900 vs 1050 for 5000 boxes"):
-   - Identify the item's Ideal Deckle Width (mm) vs the Proposed Alternative Deckle (mm).
-   - Compute the excess side-trim (in mm and excess trim %).
-   - Compute total extra raw paper weight consumed in KG across the order quantity: Extra Area (m²) * Total Board GSM / 1000.
-   - Compute exact Net Financial Loss (₹) or Gain (₹) using: Extra Paper KG * (Kraft Paper Rate ₹34/kg - Scrap Resale Value ₹12/kg = ₹22/kg net differential).
-   - Check and recommend if any closer matching reel exists in inventorySample (e.g. "Alternative: You have a 950mm reel in Bay-02 which only causes ₹1,800 loss").
-3. PRODUCTION PERFORMANCE & DAILY REPORTS: Today's boxes produced, running linear meters, month-to-date MT tonnage, active machine WIP jobs.
-4. WIP ITEM-WISE BREAKDOWN: When asked for an item-wise breakdown of WIP, list every active item name, current machine stage, scheduled sheets, completed sheets, and remaining balance sheets.
-5. PLANNING SCHEDULE FOR TODAY / TOMORROW: When asked "What's the planning for today or tomorrow?", summarize total queued jobs and provide a clear machine-wise breakdown (e.g. Line 1 Corrugator, 2-Color Printer, Die-Cutter) with item names and quantities.
-6. AUTOMATIC JOB CREATION & REEL MOUNTING:
-   - When asked to create/plan a job, extract itemName, orderQty, customerName, and set action.type = 'create_job'.
-   - When asked to mount/attach a reel, extract reelQuery, targetOrderId, and stand, and set action.type = 'attach_reel'.
-7. WASTAGE, POWER & BOILER FUEL: Monthly scrap KG & %, corrugation vs printing scrap, coal/wood fuel usage (KG & ₹), kWh electricity units.
-8. PAPER INVENTORY & REEL LOCATIONS: Exact balance weights, GSM/BF, deckle width, warehouse bay locations, aging paper alerts.
-9. CONSUMABLES INVENTORY: Gum powder, stitching wire, boiler coal/wood, and printing inks.
-10. CLIENT ACCOUNTS & PENDING REVENUE: Customer-wise pending order amounts, dispatch readiness, and delivery deadlines.
+  const systemInstruction = `You are the Master AI Corrugation Chief Engineer, Plant Operations Consultant & Financial Director for APEX Corrugation Packaging ERP.
+You possess deep industrial packaging engineering knowledge and autonomous multi-action execution capability across the plant:
+
+1. MULTI-INTENT & COMPOUND ACTIONS ("DO MULTIPLE THINGS AT ONCE"):
+   Operators can give compound multi-action dictations in a single breath!
+   For example: "Change 180ml IB Master size to 450x300x200, log 120 kg trim wastage, create an order for 5000 boxes of Radico 750ml, and show me today's production report."
+   -> Parse ALL distinct commands into the 'actions' array in execution sequence!
+
+2. INDUSTRIAL PACKAGING TROUBLESHOOTING & DEFECT DIAGNOSTICS:
+   When operators describe quality failures, laboratory rejections, or machine defects:
+   - **Board Warping (Normal / Reverse / S-Warp / Twist)**: Moisture imbalance between top/bottom liners (ideal delta <2%), preheater wrap angle, starch application rate, corrugator speed.
+   - **Flute Crush / Caliper Loss**: Slitter nip clearance, corrugating roll wear/pressure roll gap (<0.1mm variation), fingerless single facer vacuum suction.
+   - **Delamination / Loose Paper**: Gelatinization temp (target 62–66°C), glue pan temperature, low starch solids ratio, excessive line speed.
+   - **Washboarding**: Excess starch solids/water, light top liner (<120 GSM) across coarse C-flute profile.
+   - **Low Bursting Strength (BS) / BCT Failure**: Crushed flutes, excessive moisture (>9%), low BF bottom liner, starch penetration failure.
+   - **Score Cracking / Flap Breakage**: Low liner moisture (<6%), sharp male scorer profile, incorrect gap clearance on creaser.
+   - **Printing Defects (Smudge / Bleed / Ghosting)**: Anilox cell volume, ink pH (8.5–9.2), viscosity (18–22s Zahn #2), blade pressure.
+   Provide exact root causes and step-by-step corrective actions in displayCard and troubleshooting objects.
+
+3. FACTORY PERFORMANCE OPTIMIZATION & "WHERE TO IMPROVE":
+   When asked where the factory can improve or how to optimize:
+   - **Deckle Trim Optimization**: Analyze side-trim waste. Recommend reel width combinations (e.g. combining orders on corrugator) to minimize trim scrap to <3%.
+   - **Energy & Boiler Efficiency**: Standard benchmark is 90–110 kg coal per Metric Tonne of paper converted. Steam pressure target 10.5–12.0 bar.
+   - **WIP & Machine Speed Balancing**: Corrugator output vs 2-Color Printer/Slotter vs Auto Folder Gluer. Identify staging bottlenecks.
+   - **Consumables Cost**: Starch consumption benchmark (18–22 g/m² dry solids), stitching wire waste.
+
+4. REAL-TIME FACTORY DATABASE MUTATIONS (CRUD & BULK):
+   - **Items / Box Specs (Single & Bulk Updates)**:
+     * Single Item: update_item, create_item, delete_item.
+     * Bulk / Batch Items: When operator asks to update ALL items of a category/type/ply (e.g. "Edit all PPC items to have 180 GSM Golden top liner and 140 GSM fluting", "Change all 5 ply boxes to BC flute", "Update all Plates to 200 GSM 20 BF"):
+       -> set action.type = 'bulk_update_items' (or 'update_item' with applyToAllMatching: true), filterItemType: 'PPC'|'Box'|'Plate'|'Tray'|'Sheet'|'all', filterPly: '3'|'5'|'7'|'all', and provide updated layers, gsm, bf, fluteType, etc. in itemPayload!
+   - **Orders & Jobs**: create_order, update_order, create_job, start_production, log_production.
+   - **Inventory & Stands**: attach_reel (Top, Flute(C), Backing(C), Flute(B), Backing(B)), inward_reels.
+   - **Wastage & Fuel**: log_wastage (Corrugator Trim, Printing Scrap, Die-Cut Scrap), log_fuel_power (coal, firewood, power kWh).
+   - **Navigation & Filtering**: navigate_tab, switch_unit, open_job_card, filter_view.
 
 Live Factory Context:
 ${contextJson}`;
@@ -537,38 +664,159 @@ ${contextJson}`;
         type: 'OBJECT',
         properties: {
           title: { type: 'STRING', description: 'Headline title for the visual HUD card' },
-          metricValue: { type: 'STRING', description: 'Key primary metric (e.g. ₹18.40/box, +150mm Trim Scrap (₹9,240 Loss), 28,000 Boxes Planned)' },
-          details: { type: 'STRING', description: 'Comprehensive structured breakdown or bullet points' }
+          metricValue: { type: 'STRING', description: 'Key primary metric or badge' },
+          details: { type: 'STRING', description: 'Comprehensive structured breakdown or bullet points' },
+          recommendations: {
+            type: 'ARRAY',
+            description: 'Actionable optimization advice or engineering remedies',
+            items: { type: 'STRING' }
+          }
         },
         required: ['title', 'details']
       },
-      action: {
+      troubleshooting: {
         type: 'OBJECT',
         properties: {
-          type: { type: 'STRING', enum: ['none', 'open_job_card', 'navigate_tab', 'filter_view', 'switch_unit', 'create_job', 'open_create_job_modal', 'attach_reel', 'start_production'] },
-          targetTab: { type: 'STRING', description: 'Tab name if navigating (orders, inventory, items, planning, reports, wastage, costing, wip_tracker, production, etc.)' },
-          targetOrderId: { type: 'STRING', description: 'Order ID or Order No if opening job card or attaching reel' },
-          unitName: { type: 'STRING', description: 'Unit name if switching plant' },
-          filterQuery: { type: 'STRING', description: 'Search term to auto-filter on the target screen' },
-          reelQuery: { type: 'STRING', description: 'Reel No, system reel ID, or reel spec to attach' },
-          stand: { type: 'STRING', description: 'Machine stand: Top, Flute(C), Backing(C), Flute(B), Backing(B)' },
-          jobPayload: {
-            type: 'OBJECT',
-            properties: {
-              itemName: { type: 'STRING', description: 'Matched box item name from database' },
-              orderQty: { type: 'NUMBER', description: 'Quantity of boxes to produce' },
-              customerName: { type: 'STRING', description: 'Client / Customer Name' },
-              deliveryDate: { type: 'STRING', description: 'Target delivery date in YYYY-MM-DD' },
-              plannedUps: { type: 'NUMBER', description: 'Number of ups on die/plate (default 1)' },
-              notes: { type: 'STRING', description: 'Production notes' }
+          issue: { type: 'STRING', description: 'Identified packaging or machine defect' },
+          rootCauses: { type: 'ARRAY', items: { type: 'STRING' } },
+          correctiveActions: { type: 'ARRAY', items: { type: 'STRING' } }
+        }
+      },
+      actions: {
+        type: 'ARRAY',
+        description: 'Ordered list of autonomous database mutation and navigation actions to execute',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            type: {
+              type: 'STRING',
+              enum: [
+                'none',
+                'update_item',
+                'bulk_update_items',
+                'create_item',
+                'delete_item',
+                'create_order',
+                'update_order',
+                'create_job',
+                'open_create_job_modal',
+                'open_job_card',
+                'attach_reel',
+                'start_production',
+                'log_production',
+                'log_wastage',
+                'log_fuel_power',
+                'inward_reels',
+                'navigate_tab',
+                'filter_view',
+                'switch_unit'
+              ]
             },
-            required: ['itemName', 'orderQty']
-          }
-        },
-        required: ['type']
+            targetTab: { type: 'STRING', description: 'Target navigation screen' },
+            targetOrderId: { type: 'STRING', description: 'Target Order ID / No' },
+            targetItemName: { type: 'STRING', description: 'Target Box / Item Name' },
+            unitName: { type: 'STRING', description: 'Manufacturing unit name' },
+            filterQuery: { type: 'STRING', description: 'Search/filter text' },
+            reelQuery: { type: 'STRING', description: 'Reel identification' },
+            stand: { type: 'STRING', description: 'Machine stand position' },
+            itemPayload: {
+              type: 'OBJECT',
+              properties: {
+                targetItemName: { type: 'STRING' },
+                applyToAllMatching: { type: 'BOOLEAN', description: 'True when updating all items matching category/type' },
+                filterItemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet', 'all'] },
+                filterPly: { type: 'STRING', enum: ['3', '5', '7', '2', 'all'] },
+                name: { type: 'STRING' },
+                size: { type: 'STRING', description: 'Dimensions in LxWxH mm' },
+                ply: { type: 'STRING', enum: ['3', '5', '7', '2'] },
+                fluteType: { type: 'STRING', enum: ['B', 'C', 'E', 'A', 'BC', 'AB'] },
+                itemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet'] },
+                paperGsm: { type: 'STRING' },
+                paperBf: { type: 'STRING' },
+                paperColour: { type: 'STRING' },
+                layers: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      name: { type: 'STRING' },
+                      type: { type: 'STRING' },
+                      gsm: { type: 'NUMBER' },
+                      bf: { type: 'NUMBER' },
+                      takeUp: { type: 'NUMBER' },
+                      isFlute: { type: 'BOOLEAN' }
+                    }
+                  }
+                },
+                ppcMatrix: {
+                  type: 'OBJECT',
+                  properties: {
+                    enabled: { type: 'BOOLEAN' },
+                    config: { type: 'STRING' },
+                    cellRows: { type: 'NUMBER' },
+                    cellCols: { type: 'NUMBER' },
+                    totalCells: { type: 'NUMBER' },
+                    longCount: { type: 'NUMBER' },
+                    crossCount: { type: 'NUMBER' },
+                    padCount: { type: 'NUMBER' },
+                    includeOuterBox: { type: 'BOOLEAN' }
+                  }
+                }
+              }
+            },
+            orderPayload: {
+              type: 'OBJECT',
+              properties: {
+                itemName: { type: 'STRING' },
+                customerName: { type: 'STRING' },
+                orderQty: { type: 'NUMBER' },
+                unitPrice: { type: 'NUMBER' },
+                deliveryDate: { type: 'STRING' },
+                poNumber: { type: 'STRING' }
+              }
+            },
+            jobPayload: {
+              type: 'OBJECT',
+              properties: {
+                itemName: { type: 'STRING' },
+                orderQty: { type: 'NUMBER' },
+                customerName: { type: 'STRING' },
+                deliveryDate: { type: 'STRING' },
+                plannedUps: { type: 'NUMBER' },
+                notes: { type: 'STRING' }
+              }
+            },
+            productionPayload: {
+              type: 'OBJECT',
+              properties: {
+                sheetsProduced: { type: 'NUMBER' },
+                boxesPacked: { type: 'NUMBER' },
+                wastageKg: { type: 'NUMBER' },
+                machine: { type: 'STRING' }
+              }
+            },
+            wastagePayload: {
+              type: 'OBJECT',
+              properties: {
+                wastageKg: { type: 'NUMBER' },
+                type: { type: 'STRING' },
+                reason: { type: 'STRING' }
+              }
+            },
+            fuelPowerPayload: {
+              type: 'OBJECT',
+              properties: {
+                coalKg: { type: 'NUMBER' },
+                firewoodKg: { type: 'NUMBER' },
+                powerKwh: { type: 'NUMBER' }
+              }
+            }
+          },
+          required: ['type']
+        }
       }
     },
-    required: ['spokenResponse', 'displayCard', 'action']
+    required: ['spokenResponse', 'displayCard', 'actions']
   };
 
   const rawJson = await callGeminiApi({
@@ -578,7 +826,7 @@ ${contextJson}`;
     temperature: 0.2
   });
 
-  return JSON.parse(rawJson);
+  return cleanAndParseJson(rawJson);
 }
 
 /**
@@ -650,5 +898,5 @@ Return JSON matching the schema with millName, invoiceNo, vehicleNo, date, and t
     temperature: 0.1
   });
 
-  return JSON.parse(rawJson);
+  return cleanAndParseJson(rawJson);
 }

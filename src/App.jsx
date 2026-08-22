@@ -36,6 +36,267 @@ const playBeepSound = () => {
   }
 };
 
+// --- GLOBAL SHARED CORRUGATED CAD & PPC MATRIX ENGINE ---
+export const FLUTE_FACTORS = {
+  'B': 1.35,
+  'C': 1.43,
+  'E': 1.27,
+  'A': 1.52,
+  'BC': 1.35,
+  'AB': 1.52
+};
+
+export const getBoardCaliperMm = (ply, flute) => {
+  const plyNum = parseInt(ply, 10) || 3;
+  const fluteType = (flute || 'B').toUpperCase();
+  if (plyNum === 2) return 1.5;
+  if (plyNum === 3) {
+    if (fluteType === 'E') return 1.8;
+    if (fluteType === 'C') return 4.0;
+    if (fluteType === 'A') return 4.8;
+    return 3.0;
+  }
+  if (plyNum === 5) {
+    if (fluteType === 'BC') return 6.8;
+    if (fluteType === 'AB') return 7.5;
+    if (fluteType === 'E') return 3.0;
+    return 6.5;
+  }
+  if (plyNum >= 7) return 10.5;
+  return 3.0;
+};
+
+export const normalizeLayers = (layers = [], flute = 'B') => {
+  if (!layers || !Array.isArray(layers)) return [];
+  const fType = (flute || 'B').toUpperCase();
+  let fluteIdx = 0;
+  return layers.map((lyr) => {
+    const isFlute = lyr.isFlute || (lyr.name && lyr.name.toLowerCase().includes('flut'));
+    let correctFactor = 1.0;
+    if (isFlute) {
+      if (fType === 'BC') {
+        correctFactor = fluteIdx === 0 ? 1.43 : 1.35;
+        fluteIdx++;
+      } else if (fType === 'AB') {
+        correctFactor = fluteIdx === 0 ? 1.52 : 1.35;
+        fluteIdx++;
+      } else {
+        correctFactor = FLUTE_FACTORS[fType] || 1.35;
+      }
+    }
+    return {
+      ...lyr,
+      isFlute,
+      takeUp: isFlute ? correctFactor : 1.0
+    };
+  });
+};
+
+export const generateDefaultLayers = (plyStr = '3', flute = 'B') => {
+  const ply = parseInt(plyStr, 10) || 3;
+  const fFactor = FLUTE_FACTORS[flute] || 1.35;
+  if (ply === 2) {
+    return [
+      { id: 'lyr_1', name: 'Top Liner', type: 'Golden', gsm: '150', bf: '18', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_2', name: 'Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', takeUp: fFactor, isFlute: true }
+    ];
+  }
+  if (ply === 5) {
+    const f1 = flute === 'BC' ? 1.43 : (flute === 'AB' ? 1.52 : fFactor);
+    const f2 = flute === 'BC' ? 1.35 : (flute === 'AB' ? 1.35 : fFactor);
+    return [
+      { id: 'lyr_1', name: 'Top Liner', type: 'Golden', gsm: '180', bf: '20', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_2', name: 'Fluting Medium 1 (C/Outer)', type: 'Kraft', gsm: '140', bf: '18', takeUp: f1, isFlute: true },
+      { id: 'lyr_3', name: 'Center Liner', type: 'Kraft', gsm: '140', bf: '16', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_4', name: 'Fluting Medium 2 (B/Inner)', type: 'Kraft', gsm: '140', bf: '18', takeUp: f2, isFlute: true },
+      { id: 'lyr_5', name: 'Bottom Liner', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.0, isFlute: false }
+    ];
+  }
+  if (ply === 7) {
+    return [
+      { id: 'lyr_1', name: 'Top Liner', type: 'Golden', gsm: '200', bf: '24', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_2', name: 'Fluting Medium 1', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.52, isFlute: true },
+      { id: 'lyr_3', name: 'Center Liner 1', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_4', name: 'Fluting Medium 2', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.43, isFlute: true },
+      { id: 'lyr_5', name: 'Center Liner 2', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.0, isFlute: false },
+      { id: 'lyr_6', name: 'Fluting Medium 3', type: 'Kraft', gsm: '150', bf: '18', takeUp: 1.35, isFlute: true },
+      { id: 'lyr_7', name: 'Bottom Liner', type: 'Kraft', gsm: '180', bf: '20', takeUp: 1.0, isFlute: false }
+    ];
+  }
+  return [
+    { id: 'lyr_1', name: 'Top Liner', type: 'Golden', gsm: '150', bf: '18', takeUp: 1.0, isFlute: false },
+    { id: 'lyr_2', name: 'Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', takeUp: fFactor, isFlute: true },
+    { id: 'lyr_3', name: 'Bottom Liner', type: 'Kraft', gsm: '140', bf: '16', takeUp: 1.0, isFlute: false }
+  ];
+};
+
+export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm = 450, outerBoxWeight = 0) => {
+  const raw = String(boxDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
+  const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
+  const L = dims[0] || 350;
+  const W = dims[1] || 250;
+  const H = dims[2] || 200;
+
+  const cellRows = parseInt(ppcConfig.cellRows || 4);
+  const cellCols = parseInt(ppcConfig.cellCols || 3);
+  const totalCells = cellRows * cellCols;
+
+  const longCount = parseInt(ppcConfig.longCount !== undefined && ppcConfig.longCount !== '' ? ppcConfig.longCount : (cellCols - 1));
+  const longLengthMm = parseFloat(ppcConfig.longLengthMm) || Math.max(50, L - 10);
+  const longHeightMm = parseFloat(ppcConfig.longHeightMm) || Math.max(50, H - 10);
+  const longAreaSqM = (longLengthMm * longHeightMm) / 1000000;
+  const longPieceWeightGrams = Math.round(longAreaSqM * totalBoardGsm);
+  const longTotalWeightGrams = longCount * longPieceWeightGrams;
+
+  const crossCount = parseInt(ppcConfig.crossCount !== undefined && ppcConfig.crossCount !== '' ? ppcConfig.crossCount : (cellRows - 1));
+  const crossLengthMm = parseFloat(ppcConfig.crossLengthMm) || Math.max(50, W - 10);
+  const crossHeightMm = parseFloat(ppcConfig.crossHeightMm) || Math.max(50, H - 10);
+  const crossAreaSqM = (crossLengthMm * crossHeightMm) / 1000000;
+  const crossPieceWeightGrams = Math.round(crossAreaSqM * totalBoardGsm);
+  const crossTotalWeightGrams = crossCount * crossPieceWeightGrams;
+
+  const padCount = parseInt(ppcConfig.padCount !== undefined && ppcConfig.padCount !== '' ? ppcConfig.padCount : 2);
+  const padLengthMm = parseFloat(ppcConfig.padLengthMm) || Math.max(50, L - 5);
+  const padWidthMm = parseFloat(ppcConfig.padWidthMm) || Math.max(50, W - 5);
+  const padAreaSqM = (padLengthMm * padWidthMm) / 1000000;
+  const padPieceWeightGrams = Math.round(padAreaSqM * totalBoardGsm);
+  const padTotalWeightGrams = padCount * padPieceWeightGrams;
+
+  const includeOuterBox = ppcConfig.includeOuterBox !== false;
+  const outerWeight = includeOuterBox ? (parseFloat(outerBoxWeight) || 0) : 0;
+  const totalSetWeightGrams = Math.round(outerWeight + longTotalWeightGrams + crossTotalWeightGrams + padTotalWeightGrams);
+
+  return {
+    enabled: ppcConfig.enabled !== false,
+    config: ppcConfig.config || `${totalCells} Bottles (${cellRows}x${cellCols})`,
+    cellRows,
+    cellCols,
+    totalCells,
+    includeOuterBox,
+    longCount,
+    longLengthMm: Math.round(longLengthMm),
+    longHeightMm: Math.round(longHeightMm),
+    longPieceWeightGrams,
+    longTotalWeightGrams,
+    crossCount,
+    crossLengthMm: Math.round(crossLengthMm),
+    crossHeightMm: Math.round(crossHeightMm),
+    crossPieceWeightGrams,
+    crossTotalWeightGrams,
+    padCount,
+    padLengthMm: Math.round(padLengthMm),
+    padWidthMm: Math.round(padWidthMm),
+    padPieceWeightGrams,
+    padTotalWeightGrams,
+    outerBoxWeightGrams: Math.round(outerWeight),
+    totalSetWeightGrams
+  };
+};
+
+export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140, ppcConfig = null) => {
+  const raw = String(idDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
+  const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
+  const L = dims[0] || 0;
+  const W = dims[1] || 0;
+  const H = dims[2] || 0;
+
+  const ply = parseInt(plyStr, 10) || 3;
+  const odAllowance = 4;
+  const odL = L > 0 ? L + odAllowance : 0;
+  const odW = W > 0 ? W + odAllowance : 0;
+  const odH = H > 0 ? H + odAllowance : 0;
+  const odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : '';
+
+  let lapMm = 35;
+  if (jointType && jointType.includes('Gluing')) lapMm = 30;
+  else if (jointType && (jointType.includes('Interlock') || jointType.includes('None'))) lapMm = 0;
+
+  let deckleMm = 0;
+  let cutLengthMm = 0;
+  let creasingScores = '';
+
+  if (itemType === 'Box') {
+    deckleMm = Math.round(W + H + 20);
+    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+    const flap = Math.round(W / 2 + 3);
+    creasingScores = `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`;
+  } else if (itemType === 'PPC') {
+    deckleMm = Math.round(W + H + 15);
+    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+    creasingScores = 'PPC Partition & Plate Set Profile';
+  } else if (itemType === 'Plate') {
+    deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
+    cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
+    creasingScores = 'Flat Separator Plate / Divider Pad';
+  } else if (itemType === 'Tray' || itemType === 'Lid') {
+    deckleMm = Math.round(W + (2 * H) + 10);
+    cutLengthMm = Math.round(L + (2 * H) + 10);
+    creasingScores = `Flap: ${H}mm | Base: ${W}mm | Flap: ${H}mm`;
+  } else if (itemType === 'Sheet') {
+    deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
+    cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
+    creasingScores = 'Plain Corrugated Sheet';
+  } else {
+    deckleMm = Math.round(W + H + 15);
+    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+    creasingScores = 'Custom Die-Cut Profile';
+  }
+
+  const blankAreaSqM = (deckleMm > 0 && cutLengthMm > 0) ? (deckleMm * cutLengthMm) / 1000000 : 0;
+
+  let totalBoardGsm = 0;
+  let estimatedBs = 0;
+  let calculatedEct = 0;
+
+  if (layers && Array.isArray(layers) && layers.length > 0) {
+    const normalizedLayers = normalizeLayers(layers, flute);
+    normalizedLayers.forEach(lyr => {
+      const lyrGsm = parseFloat(lyr.gsm || 0);
+      const lyrBf = parseFloat(lyr.bf || 16);
+      const lyrFactor = parseFloat(lyr.takeUp);
+      totalBoardGsm += lyrGsm * lyrFactor;
+
+      const rct = lyrGsm * ((lyrBf * 0.00045) + 0.005);
+      calculatedEct += rct * lyrFactor;
+
+      if (!lyr.isFlute && lyrGsm > 0 && lyrBf > 0) {
+        estimatedBs += (lyrGsm * lyrBf) / 1000;
+      }
+    });
+    estimatedBs = (estimatedBs * 0.95).toFixed(1);
+    calculatedEct = calculatedEct * 0.95;
+  } else {
+    const fluteFactor = FLUTE_FACTORS[flute] || 1.35;
+    const effectiveMultiplier = ply === 3 ? (1.0 + fluteFactor + 1.0) : (ply === 5 ? (1.0 + fluteFactor + 1.0 + fluteFactor + 1.0) : 4.5);
+    totalBoardGsm = defaultGsm * (effectiveMultiplier / ply);
+    estimatedBs = ((defaultGsm * 18 * (ply === 5 ? 3 : 2)) / 1000 * 0.95).toFixed(1);
+    const rct = defaultGsm * ((18 * 0.00045) + 0.005);
+    calculatedEct = rct * effectiveMultiplier * 0.95;
+  }
+
+  const outerBoxWeightGrams = blankAreaSqM > 0 ? Math.round(blankAreaSqM * totalBoardGsm) : 0;
+  let calculatedPpc = null;
+  let theoreticalWeightGrams = outerBoxWeightGrams;
+
+  if (itemType === 'PPC' || ppcConfig?.enabled) {
+    calculatedPpc = calculatePpcMatrix(idDimensions, ppcConfig || { enabled: true }, totalBoardGsm, outerBoxWeightGrams);
+    theoreticalWeightGrams = calculatedPpc.totalSetWeightGrams;
+  }
+
+  return {
+    odStr,
+    deckleMm,
+    cutLengthMm,
+    blankAreaSqM: blankAreaSqM.toFixed(4),
+    creasingScores,
+    totalBoardGsm: Math.round(totalBoardGsm),
+    outerBoxWeightGrams,
+    theoreticalWeightGrams,
+    calculatedPpc,
+    estimatedBs: estimatedBs > 0 ? String(estimatedBs) : ''
+  };
+};
+
 // --- NATIVE WEB SPEECH-TO-TEXT BUTTON COMPONENT ---
 export function VoiceInputButton({
   onTranscript,
@@ -107,12 +368,18 @@ export function VoiceInputButton({
         if (!transcript) return;
 
         if (mode === 'dimension') {
-          // Converts e.g. "472 by 405 by 135", "472 into 405 into 135", "472 cross 405 cross 135" -> "472x405x135"
-          let cleaned = transcript
-            .replace(/\b(by|into|cross|multiplied by|\*|x|X)\b/gi, 'x')
-            .replace(/\s*x\s*/gi, 'x')
-            .replace(/[^0-9xX]/g, '');
-          onTranscript(cleaned || transcript);
+          // Normalize spoken dimension into strict "LxWxH" or "LxW"
+          // Handles "450 by 300 by 200", "450 300 200", "450 into 300 into 200", "450 x 300 x 200", "450*300*200"
+          const nums = transcript.match(/\b\d+(\.\d+)?\b/g);
+          if (nums && nums.length >= 2) {
+            onTranscript(nums.slice(0, 3).join('x'));
+          } else {
+            let cleaned = transcript
+              .replace(/\b(by|into|cross|multiplied by|\*|x|X)\b/gi, 'x')
+              .replace(/\s*x\s*/gi, 'x')
+              .replace(/[^0-9xX.]/g, '');
+            onTranscript(cleaned || transcript);
+          }
         } else if (mode === 'search') {
           // Removes trailing period added by speech recognition
           let cleaned = transcript.replace(/\.$/, '').trim();
@@ -190,7 +457,13 @@ export function GlobalVoiceAssistant({
   onOpenCreateBoxModal,
   onOpenCreateOrderModal,
   onAttachReel,
-  onStartProduction
+  onStartProduction,
+  getColRef,
+  getDocRef,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  addLog
 }) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
@@ -256,10 +529,10 @@ export function GlobalVoiceAssistant({
     }
 
     // =========================================================================
-    // 0.1 GEMINI 2.0 FLASH AI REASONING (IF CONFIGURED)
+    // 0.1 GEMINI ENTERPRISE AI ENGINE & AUTONOMOUS ACTION EXECUTOR
     // =========================================================================
     if (isGeminiConfigured()) {
-      showToast('🧠 Gemini AI Analyzing...', 'info', 4000);
+      showToast('🧠 Gemini AI Processing Command...', 'info', 4000);
       try {
         const aiResult = await askFactoryAI(transcript, {
           orders,
@@ -275,79 +548,345 @@ export function GlobalVoiceAssistant({
           plannedJobs
         });
 
-        if (aiResult && aiResult.spokenResponse) {
-          // Perform action if requested
-          if (aiResult.action?.type === 'open_job_card' && aiResult.action.targetOrderId) {
-            const ordQuery = String(aiResult.action.targetOrderId).toLowerCase();
-            const matched = orders.find(o => 
-              String(o.id) === ordQuery || 
-              String(o.orderNo || '').toLowerCase().includes(ordQuery) ||
-              String(o.itemName || '').toLowerCase().includes(ordQuery)
-            );
-            if (matched && onOpenJobCard) onOpenJobCard(matched);
-          } else if (aiResult.action?.type === 'navigate_tab' && aiResult.action.targetTab) {
-            if (!canAccess || canAccess(currentUser?.role, aiResult.action.targetTab)) {
-              setActiveTab(aiResult.action.targetTab);
-            }
-          } else if (aiResult.action?.type === 'switch_unit' && aiResult.action.unitName) {
-            const comp = companies.find(c => c.name.toLowerCase().includes(aiResult.action.unitName.toLowerCase()));
-            if (comp && setActiveUnitId) setActiveUnitId(comp.id);
-          } else if (aiResult.action?.type === 'create_job' && aiResult.action.jobPayload) {
-            const jp = aiResult.action.jobPayload;
-            if (onCreateDirectJob) {
-              const matchedBox = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes((jp.itemName || '').toLowerCase())) || items[0];
-              await onCreateDirectJob({
-                jobNo: `JOB-${Date.now().toString().slice(-6)}`,
-                companyId: activeUnitId || '',
-                customerId: '',
-                customerName: jp.customerName || 'Advance Planned Job',
-                itemId: matchedBox?.id || '',
-                itemName: matchedBox?.name || matchedBox?.Item_Name || jp.itemName,
-                orderQty: parseInt(jp.orderQty || 1000),
-                plannedUps: parseInt(jp.plannedUps || matchedBox?.ups || 1),
-                deliveryDate: jp.deliveryDate || new Date().toISOString().split('T')[0],
-                notes: jp.notes || 'Voice Created Job Card'
-              });
-              if (setActiveTab) setActiveTab('planning');
-            }
-          } else if (aiResult.action?.type === 'open_create_job_modal') {
-            if (onOpenCreateJobModal) onOpenCreateJobModal();
-          } else if (aiResult.action?.type === 'attach_reel' && aiResult.action.reelQuery) {
-            const rQ = aiResult.action.reelQuery.toLowerCase();
-            const matchedReel = inventory.find(r => 
-              (r.systemReelId || '').toLowerCase().includes(rQ) ||
-              (r.uniqueReelId || '').toLowerCase().includes(rQ) ||
-              String(r.reelNo || '').toLowerCase().includes(rQ) ||
-              String(r.supplierReelNo || '').toLowerCase().includes(rQ)
-            );
-            const ordQ = (aiResult.action.targetOrderId || '').toLowerCase();
-            let targetOrder = orders.find(o => 
-              String(o.id).toLowerCase() === ordQ || 
-              String(o.orderNo || '').toLowerCase().includes(ordQ) ||
-              String(o.itemName || '').toLowerCase().includes(ordQ)
-            );
-            if (!targetOrder && orders.length > 0) targetOrder = orders.find(o => o.status === 'In Production') || orders[0];
+        if (aiResult && (aiResult.spokenResponse || aiResult.displayCard)) {
+          const actionsToRun = Array.isArray(aiResult.actions) && aiResult.actions.length > 0
+            ? aiResult.actions
+            : (aiResult.action ? [aiResult.action] : []);
 
-            if (matchedReel && targetOrder && onAttachReel) {
-              await onAttachReel(targetOrder.id, matchedReel, aiResult.action.stand || 'Top');
-              if (setActiveTab) setActiveTab('production');
+          let executedActionCount = 0;
+
+          for (const action of actionsToRun) {
+            if (!action || !action.type || action.type === 'none') continue;
+
+            // --- 1. UPDATE ITEM / BOX SPECS & BOM LAYERS (SINGLE & BULK/BATCH) ---
+            if (action.type === 'update_item' || action.type === 'bulk_update_items') {
+              const ip = action.itemPayload || {};
+              const isBulk = action.type === 'bulk_update_items' || ip.applyToAllMatching || !!ip.filterItemType || (ip.targetItemName && ip.targetItemName.toLowerCase().includes('all'));
+              
+              let targetItems = [];
+              if (isBulk) {
+                const fType = (ip.filterItemType || ip.itemType || '').toLowerCase();
+                const fPly = String(ip.filterPly || ip.ply || '');
+                const fQuery = (ip.targetItemName || action.targetItemName || '').toLowerCase().replace(/\ball\b/gi, '').trim();
+
+                targetItems = items.filter(i => {
+                  const iType = (i.itemType || i.Item_Type || 'Box').toLowerCase();
+                  const iPly = String(i.ply || i.Ply || '3');
+                  const iName = (i.name || i.Item_Name || '').toLowerCase();
+
+                  let match = true;
+                  if (fType && fType !== 'all' && iType !== fType) match = false;
+                  if (fPly && fPly !== 'all' && iPly !== fPly) match = false;
+                  if (fQuery && fQuery !== 'all' && !iName.includes(fQuery)) match = false;
+                  return match;
+                });
+              } else {
+                const targetQuery = (ip.targetItemName || ip.name || action.targetItemName || '').toLowerCase();
+                const matched = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(targetQuery)) || items[0];
+                if (matched) targetItems = [matched];
+              }
+
+              if (targetItems.length > 0 && updateDoc && getDocRef) {
+                for (const matched of targetItems) {
+                  const uName = isBulk ? (matched.name || matched.Item_Name) : (ip.name || matched.name || matched.Item_Name);
+                  const uSize = isBulk ? (matched.size || matched.Size_mm || '350x250x200') : (ip.size || matched.size || matched.Size_mm || '350x250x200');
+                  const uPly = String(ip.ply || matched.ply || matched.Ply || '3');
+                  const uFlute = ip.fluteType || matched.fluteType || 'B';
+                  const uType = ip.itemType || matched.itemType || matched.Item_Type || 'Box';
+                  const uGsm = ip.paperGsm || matched.paperGsm || matched.Paper_GSM || '140';
+                  const uBf = ip.paperBf || matched.paperBf || matched.Paper_BF || '18';
+                  const uColour = ip.paperColour || matched.paperColour || matched.Paper_Colour || 'Kraft';
+
+                  let uLayers = matched.layers || generateDefaultLayers(uPly, uFlute);
+                  if (ip.layers && Array.isArray(ip.layers) && ip.layers.length > 0) {
+                    uLayers = ip.layers.map((l, lIdx) => ({
+                      id: `lyr_${lIdx + 1}`,
+                      name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
+                      type: l.type || 'Kraft',
+                      gsm: String(l.gsm || 120),
+                      bf: String(l.bf || 16),
+                      takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[uFlute] || 1.35) : 1.0)),
+                      isFlute: l.isFlute || false
+                    }));
+                  } else if (uPly !== String(matched.ply || 3) || uFlute !== (matched.fluteType || 'B')) {
+                    uLayers = generateDefaultLayers(uPly, uFlute);
+                  }
+
+                  let uPpc = ip.ppcMatrix || matched.ppcMatrix || null;
+                  const cad = calculateCadBlank(uSize, uPly, uFlute, uType, matched.jointType || 'Stitching (35mm)', uLayers, parseFloat(uGsm), uPpc);
+
+                  const payload = {
+                    ...matched,
+                    name: uName,
+                    size: uSize,
+                    ply: uPly,
+                    fluteType: uFlute,
+                    itemType: uType,
+                    paperGsm: uGsm,
+                    paperBf: uBf,
+                    paperColour: uColour,
+                    layers: uLayers,
+                    ppcMatrix: cad.calculatedPpc || uPpc,
+                    od: cad.odStr,
+                    deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+                    cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+                    creasingScores: cad.creasingScores,
+                    weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+                    targetBs: cad.estimatedBs || '',
+                    targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
+                    updatedAt: new Date().toISOString()
+                  };
+
+                  await updateDoc(getDocRef('items', matched.id), payload);
+                }
+
+                if (addLog) {
+                  if (isBulk) {
+                    addLog(`AI Batch Updated ${targetItems.length} items to ${ip.itemType || ip.filterItemType || 'custom'} specs (${ip.paperGsm || ''} GSM, ${ip.fluteType || ''} Flute)`);
+                  } else {
+                    addLog(`AI Voice Updated Box: ${targetItems[0]?.name} (${targetItems[0]?.size}, ${targetItems[0]?.ply}-Ply)`);
+                  }
+                }
+                executedActionCount += targetItems.length;
+              }
             }
-          } else if (aiResult.action?.type === 'start_production' && aiResult.action.targetOrderId) {
-            const ordQ = aiResult.action.targetOrderId.toLowerCase();
-            const matched = orders.find(o => 
-              String(o.id).toLowerCase() === ordQ || 
-              String(o.orderNo || '').toLowerCase().includes(ordQ) ||
-              String(o.itemName || '').toLowerCase().includes(ordQ)
-            );
-            if (matched && onStartProduction) {
-              onStartProduction(matched);
-              if (setActiveTab) setActiveTab('production');
+
+            // --- 2. CREATE NEW ITEM / SKU ---
+            else if (action.type === 'create_item') {
+              const ip = action.itemPayload || {};
+              if (addDoc && getColRef) {
+                const uName = ip.name || 'New AI Box SKU';
+                const uSize = ip.size || '350x250x200';
+                const uPly = String(ip.ply || '3');
+                const uFlute = ip.fluteType || 'B';
+                const uType = ip.itemType || 'Box';
+                const uGsm = ip.paperGsm || '140';
+                const uBf = ip.paperBf || '18';
+                const uColour = ip.paperColour || 'Kraft';
+                const uLayers = ip.layers && Array.isArray(ip.layers) && ip.layers.length > 0
+                  ? ip.layers.map((l, lIdx) => ({
+                      id: `lyr_${lIdx + 1}`,
+                      name: l.name || (l.isFlute ? 'Fluting Medium' : (lIdx === 0 ? 'Top Liner' : 'Bottom Liner')),
+                      type: l.type || 'Kraft',
+                      gsm: String(l.gsm || 120),
+                      bf: String(l.bf || 16),
+                      takeUp: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[uFlute] || 1.35) : 1.0)),
+                      isFlute: l.isFlute || false
+                    }))
+                  : generateDefaultLayers(uPly, uFlute);
+
+                const uPpc = ip.ppcMatrix || null;
+                const cad = calculateCadBlank(uSize, uPly, uFlute, uType, 'Stitching (35mm)', uLayers, parseFloat(uGsm), uPpc);
+
+                const newItem = {
+                  companyId: activeUnitId || (companies[0]?.id || ''),
+                  name: uName,
+                  size: uSize,
+                  ply: uPly,
+                  fluteType: uFlute,
+                  itemType: uType,
+                  jointType: 'Stitching (35mm)',
+                  paperGsm: uGsm,
+                  paperBf: uBf,
+                  paperColour: uColour,
+                  layers: uLayers,
+                  ppcMatrix: cad.calculatedPpc || uPpc,
+                  od: cad.odStr,
+                  deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+                  cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+                  creasingScores: cad.creasingScores,
+                  weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+                  targetBs: cad.estimatedBs || '',
+                  targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
+                  createdAt: new Date().toISOString()
+                };
+
+                await addDoc(getColRef('items'), newItem);
+                if (addLog) addLog(`AI Created Item SKU: ${uName} (${uSize})`);
+                executedActionCount++;
+              }
+            }
+
+            // --- 3. DELETE ITEM ---
+            else if (action.type === 'delete_item') {
+              const targetQuery = (action.targetItemName || action.itemPayload?.name || '').toLowerCase();
+              const matched = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(targetQuery));
+              if (matched && deleteDoc && getDocRef) {
+                await deleteDoc(getDocRef('items', matched.id));
+                if (addLog) addLog(`AI Deleted Item SKU: ${matched.name || matched.Item_Name}`);
+                executedActionCount++;
+              }
+            }
+
+            // --- 4. CREATE CUSTOMER ORDER ---
+            else if (action.type === 'create_order') {
+              const op = action.orderPayload || {};
+              const matchedBox = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes((op.itemName || '').toLowerCase())) || items[0];
+              const matchedCust = customers.find(c => (c.name || '').toLowerCase().includes((op.customerName || '').toLowerCase())) || customers[0];
+              if (addDoc && getColRef) {
+                const newOrder = {
+                  orderNo: `ORD-${Date.now().toString().slice(-5)}`,
+                  companyId: activeUnitId || (companies[0]?.id || ''),
+                  itemId: matchedBox?.id || '',
+                  itemName: matchedBox?.name || matchedBox?.Item_Name || op.itemName || 'Custom Box',
+                  customerId: matchedCust?.id || '',
+                  customerName: matchedCust?.name || op.customerName || 'Direct Customer',
+                  orderQty: parseInt(op.orderQty || 1000),
+                  unitPrice: parseFloat(op.unitPrice || 25),
+                  deliveryDate: op.deliveryDate || new Date().toISOString().split('T')[0],
+                  poNumber: op.poNumber || '',
+                  status: 'Pending',
+                  dispatchedQty: 0,
+                  createdAt: new Date().toISOString()
+                };
+                await addDoc(getColRef('orders'), newOrder);
+                if (addLog) addLog(`AI Created Order: ${newOrder.orderNo} for ${newOrder.customerName}`);
+                executedActionCount++;
+              }
+            }
+
+            // --- 5. LOG WASTAGE / SCRAP ---
+            else if (action.type === 'log_wastage') {
+              const wp = action.wastagePayload || {};
+              if (addDoc && getColRef) {
+                await addDoc(getColRef('wastage_logs'), {
+                  companyId: activeUnitId || (companies[0]?.id || ''),
+                  date: new Date().toISOString().split('T')[0],
+                  wastageKg: parseFloat(wp.wastageKg || 50),
+                  type: wp.type || 'Corrugator Trim',
+                  reason: wp.reason || 'AI Voice logged wastage',
+                  loggedBy: currentUser?.name || 'AI Assistant',
+                  createdAt: new Date().toISOString()
+                });
+                if (addLog) addLog(`AI Logged Wastage: ${wp.wastageKg || 50} kg (${wp.type || 'Corrugator Trim'})`);
+                executedActionCount++;
+              }
+            }
+
+            // --- 6. LOG BOILER FUEL & POWER ---
+            else if (action.type === 'log_fuel_power') {
+              const fp = action.fuelPowerPayload || {};
+              if (addDoc && getColRef) {
+                await addDoc(getColRef('fuel_power_logs'), {
+                  companyId: activeUnitId || (companies[0]?.id || ''),
+                  date: new Date().toISOString().split('T')[0],
+                  coalKg: parseFloat(fp.coalKg || 0),
+                  firewoodKg: parseFloat(fp.firewoodKg || 0),
+                  powerKwh: parseFloat(fp.powerKwh || 0),
+                  loggedBy: currentUser?.name || 'AI Assistant',
+                  createdAt: new Date().toISOString()
+                });
+                if (addLog) addLog(`AI Logged Boiler Fuel & Electricity usage`);
+                executedActionCount++;
+              }
+            }
+
+            // --- 7. OPEN JOB CARD ---
+            else if (action.type === 'open_job_card' && action.targetOrderId) {
+              const ordQuery = String(action.targetOrderId).toLowerCase();
+              const matched = orders.find(o => 
+                String(o.id) === ordQuery || 
+                String(o.orderNo || '').toLowerCase().includes(ordQuery) ||
+                String(o.itemName || '').toLowerCase().includes(ordQuery)
+              );
+              if (matched && onOpenJobCard) onOpenJobCard(matched);
+            }
+
+            // --- 8. NAVIGATE VIEW / TAB ---
+            else if (action.type === 'navigate_tab' && action.targetTab) {
+              if (!canAccess || canAccess(currentUser?.role, action.targetTab)) {
+                setActiveTab(action.targetTab);
+              }
+            }
+
+            // --- 9. SWITCH MANUFACTURING UNIT ---
+            else if (action.type === 'switch_unit' && action.unitName) {
+              const comp = companies.find(c => c.name.toLowerCase().includes(action.unitName.toLowerCase()));
+              if (comp && setActiveUnitId) setActiveUnitId(comp.id);
+            }
+
+            // --- 10. CREATE / PLAN DIRECT PRODUCTION JOB ---
+            else if (action.type === 'create_job' && action.jobPayload) {
+              const jp = action.jobPayload;
+              if (onCreateDirectJob) {
+                const matchedBox = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes((jp.itemName || '').toLowerCase())) || items[0];
+                await onCreateDirectJob({
+                  jobNo: `JOB-${Date.now().toString().slice(-6)}`,
+                  companyId: activeUnitId || '',
+                  customerId: '',
+                  customerName: jp.customerName || 'Advance Planned Job',
+                  itemId: matchedBox?.id || '',
+                  itemName: matchedBox?.name || matchedBox?.Item_Name || jp.itemName,
+                  orderQty: parseInt(jp.orderQty || 1000),
+                  plannedUps: parseInt(jp.plannedUps || matchedBox?.ups || 1),
+                  deliveryDate: jp.deliveryDate || new Date().toISOString().split('T')[0],
+                  notes: jp.notes || 'Voice Created Job Card'
+                });
+                executedActionCount++;
+              }
+            }
+
+            // --- 11. ATTACH REEL TO STAND ---
+            else if (action.type === 'attach_reel' && action.reelQuery) {
+              const rQ = action.reelQuery.toLowerCase();
+              const matchedReel = inventory.find(r => 
+                (r.systemReelId || '').toLowerCase().includes(rQ) ||
+                (r.uniqueReelId || '').toLowerCase().includes(rQ) ||
+                String(r.reelNo || '').toLowerCase().includes(rQ) ||
+                String(r.supplierReelNo || '').toLowerCase().includes(rQ)
+              );
+              const ordQ = (action.targetOrderId || '').toLowerCase();
+              let targetOrder = orders.find(o => 
+                String(o.id).toLowerCase() === ordQ || 
+                String(o.orderNo || '').toLowerCase().includes(ordQ) ||
+                String(o.itemName || '').toLowerCase().includes(ordQ)
+              );
+              if (!targetOrder && orders.length > 0) targetOrder = orders.find(o => o.status === 'In Production') || orders[0];
+
+              if (matchedReel && targetOrder && onAttachReel) {
+                await onAttachReel(targetOrder.id, matchedReel, action.stand || 'Top');
+                executedActionCount++;
+              }
+            }
+
+            // --- 12. START PRODUCTION ---
+            else if (action.type === 'start_production' && action.targetOrderId) {
+              const ordQ = action.targetOrderId.toLowerCase();
+              const matched = orders.find(o => 
+                String(o.id).toLowerCase() === ordQ || 
+                String(o.orderNo || '').toLowerCase().includes(ordQ) ||
+                String(o.itemName || '').toLowerCase().includes(ordQ)
+              );
+              if (matched && onStartProduction) {
+                onStartProduction(matched);
+                executedActionCount++;
+              }
             }
           }
 
-          showToast(`✨ ${aiResult.displayCard?.title || 'Gemini AI Intelligence'}`, 'success', 9000, {
-            title: aiResult.displayCard?.title || 'Factory Intelligence',
-            desc: `${aiResult.displayCard?.metricValue ? aiResult.displayCard.metricValue + ' | ' : ''}${aiResult.displayCard?.details || ''}`
+          // Build structured details combining details, recommendations, and troubleshooting
+          let formattedDetails = aiResult.displayCard?.details || '';
+          if (Array.isArray(aiResult.displayCard?.recommendations) && aiResult.displayCard.recommendations.length > 0) {
+            formattedDetails += '\n\n💡 Recommendations:\n• ' + aiResult.displayCard.recommendations.join('\n• ');
+          }
+          if (aiResult.troubleshooting && aiResult.troubleshooting.issue) {
+            formattedDetails += `\n\n🛠️ Issue: ${aiResult.troubleshooting.issue}`;
+            if (Array.isArray(aiResult.troubleshooting.rootCauses) && aiResult.troubleshooting.rootCauses.length > 0) {
+              formattedDetails += '\n⚠️ Root Causes:\n• ' + aiResult.troubleshooting.rootCauses.join('\n• ');
+            }
+            if (Array.isArray(aiResult.troubleshooting.correctiveActions) && aiResult.troubleshooting.correctiveActions.length > 0) {
+              formattedDetails += '\n✅ Corrective Steps:\n• ' + aiResult.troubleshooting.correctiveActions.join('\n• ');
+            }
+          }
+
+          const toastTitle = executedActionCount > 1
+            ? `⚡ Gemini AI: ${executedActionCount} Actions Executed`
+            : (aiResult.displayCard?.title || 'Gemini AI Intelligence');
+
+          // Visual Feedback HUD
+          showToast(`✨ ${toastTitle}`, 'success', 10000, {
+            title: aiResult.displayCard?.title || 'AI Intelligence',
+            desc: `${aiResult.displayCard?.metricValue ? aiResult.displayCard.metricValue + ' | ' : ''}${formattedDetails}`
           });
           speakFeedback(aiResult.spokenResponse);
           return;
@@ -4336,6 +4875,12 @@ export default function App() {
         onAttachReel={handleAttachReelToJob}
         onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }}
         onOpenJobCard={(order) => setVoiceJobCardOrder(order)}
+        getColRef={getColRef}
+        getDocRef={getDocRef}
+        addDoc={addDoc}
+        updateDoc={updateDoc}
+        deleteDoc={deleteDoc}
+        addLog={addLog}
       />
       <main className={`apex-main ${activeTab === 'dashboard' ? 'dash-mode' : ''}`}>
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
@@ -5045,74 +5590,8 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
   );
 }
 
-// Flute Engineering Factors Table
-export const FLUTE_FACTORS = {
-  'A': 1.52,
-  'B': 1.35,
-  'C': 1.43,
-  'E': 1.27,
-  'BC': 1.39,
-  'AB': 1.44
-};
-
-export const getBoardCaliperMm = (plyNum, fluteType = 'B') => {
-  const ply = parseInt(plyNum, 10) || 3;
-  if (ply === 2) return 2.0;
-  if (ply === 3) {
-    if (fluteType === 'E') return 1.5;
-    if (fluteType === 'C') return 4.0;
-    if (fluteType === 'A') return 4.8;
-    return 3.0; // B-flute default
-  }
-  if (ply === 5) {
-    if (fluteType === 'BC') return 6.8;
-    if (fluteType === 'AB') return 7.5;
-    if (fluteType === 'E') return 3.0;
-    return 6.5; // 5-ply default
-  }
-  if (ply >= 7) return 10.5;
-  return 3.0;
-};
-
-// Helper to generate default layers when missing
-export const generateDefaultPaperLayers = (plyStr = '3', flute = 'B') => {
-  const ply = parseInt(plyStr, 10) || 3;
-  const fFactor = FLUTE_FACTORS[flute] || 1.35;
-  if (ply === 2) {
-    return [
-      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-      { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor }
-    ];
-  }
-  if (ply === 5) {
-    const f1 = flute.includes('BC') ? 1.35 : (flute.includes('AB') ? 1.52 : fFactor);
-    const f2 = flute.includes('BC') ? 1.43 : (flute.includes('AB') ? 1.35 : (fFactor === 1.35 ? 1.43 : fFactor));
-    return [
-      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-      { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f1 },
-      { name: '3. Middle Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-      { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f2 },
-      { name: '5. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-    ];
-  }
-  if (ply === 7) {
-    return [
-      { name: '1. Top Liner', type: 'Golden', gsm: '200', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-      { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.35 },
-      { name: '3. Middle Liner 1', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-      { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.43 },
-      { name: '5. Middle Liner 2', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-      { name: '6. Flute Medium 3', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.52 },
-      { name: '7. Bottom Liner', type: 'Kraft', gsm: '180', bf: '20', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-    ];
-  }
-  // 3-ply default
-  return [
-    { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-    { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor },
-    { name: '3. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-  ];
-};
+// Alias for backward compatibility
+export const generateDefaultPaperLayers = generateDefaultLayers;
 
 // --- CAD 2D FLAT BLANK & BOARD STRUCTURE VISUALIZERS ---
 export function CadBlankDiagram({ item, title = 'Interactive CAD 2D Flat Blank & Creasing Schematic' }) {
@@ -11997,244 +12476,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
     });
   };
 
-  const getBoardCaliperMm = (plyNum, fluteType = 'B') => {
-    if (plyNum === 2) return 2.0;
-    if (plyNum === 3) {
-      if (fluteType === 'E') return 1.5;
-      if (fluteType === 'C') return 4.0;
-      if (fluteType === 'A') return 4.8;
-      return 3.0; // B-flute default
-    }
-    if (plyNum === 5) {
-      if (fluteType === 'BC') return 6.8;
-      if (fluteType === 'AB') return 7.5;
-      if (fluteType === 'E') return 3.0;
-      return 6.5; // 5-ply default
-    }
-    if (plyNum >= 7) return 10.5;
-    return 3.0;
-  };
 
-  // Helper to calculate exact PPC Partition & Plate Set Matrix weights
-  const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm = 450, outerBoxWeight = 0) => {
-    const raw = String(boxDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
-    const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
-    const L = dims[0] || 350;
-    const W = dims[1] || 250;
-    const H = dims[2] || 200;
-
-    const cellRows = parseInt(ppcConfig.cellRows || 4);
-    const cellCols = parseInt(ppcConfig.cellCols || 3);
-    const totalCells = cellRows * cellCols;
-
-    // 1. Long / Common Partitions (Lengthwise along L)
-    const longCount = parseInt(ppcConfig.longCount !== undefined && ppcConfig.longCount !== '' ? ppcConfig.longCount : (cellCols - 1));
-    const longLengthMm = parseFloat(ppcConfig.longLengthMm) || Math.max(50, L - 10);
-    const longHeightMm = parseFloat(ppcConfig.longHeightMm) || Math.max(50, H - 10);
-    const longAreaSqM = (longLengthMm * longHeightMm) / 1000000;
-    const longPieceWeightGrams = Math.round(longAreaSqM * totalBoardGsm);
-    const longTotalWeightGrams = longCount * longPieceWeightGrams;
-
-    // 2. Cross / Small Partitions (Widthwise along W)
-    const crossCount = parseInt(ppcConfig.crossCount !== undefined && ppcConfig.crossCount !== '' ? ppcConfig.crossCount : (cellRows - 1));
-    const crossLengthMm = parseFloat(ppcConfig.crossLengthMm) || Math.max(50, W - 10);
-    const crossHeightMm = parseFloat(ppcConfig.crossHeightMm) || Math.max(50, H - 10);
-    const crossAreaSqM = (crossLengthMm * crossHeightMm) / 1000000;
-    const crossPieceWeightGrams = Math.round(crossAreaSqM * totalBoardGsm);
-    const crossTotalWeightGrams = crossCount * crossPieceWeightGrams;
-
-    // 3. Separator Pads / Divider Plates
-    const padCount = parseInt(ppcConfig.padCount !== undefined && ppcConfig.padCount !== '' ? ppcConfig.padCount : 2);
-    const padLengthMm = parseFloat(ppcConfig.padLengthMm) || Math.max(50, L - 5);
-    const padWidthMm = parseFloat(ppcConfig.padWidthMm) || Math.max(50, W - 5);
-    const padAreaSqM = (padLengthMm * padWidthMm) / 1000000;
-    const padPieceWeightGrams = Math.round(padAreaSqM * totalBoardGsm);
-    const padTotalWeightGrams = padCount * padPieceWeightGrams;
-
-    // 4. Outer Shipper Box (RSC) Weight
-    const includeOuterBox = ppcConfig.includeOuterBox !== false;
-    const outerWeight = includeOuterBox ? (parseFloat(outerBoxWeight) || 0) : 0;
-
-    // 5. Total Combined Set Weight (Grams)
-    const totalSetWeightGrams = Math.round(outerWeight + longTotalWeightGrams + crossTotalWeightGrams + padTotalWeightGrams);
-
-    return {
-      enabled: ppcConfig.enabled !== false,
-      config: ppcConfig.config || `${totalCells} Bottles (${cellRows}x${cellCols})`,
-      cellRows,
-      cellCols,
-      totalCells,
-      includeOuterBox,
-      longCount,
-      longLengthMm: Math.round(longLengthMm),
-      longHeightMm: Math.round(longHeightMm),
-      longPieceWeightGrams,
-      longTotalWeightGrams,
-      crossCount,
-      crossLengthMm: Math.round(crossLengthMm),
-      crossHeightMm: Math.round(crossHeightMm),
-      crossPieceWeightGrams,
-      crossTotalWeightGrams,
-      padCount,
-      padLengthMm: Math.round(padLengthMm),
-      padWidthMm: Math.round(padWidthMm),
-      padPieceWeightGrams,
-      padTotalWeightGrams,
-      outerBoxWeightGrams: Math.round(outerWeight),
-      totalSetWeightGrams
-    };
-  };
-
-  // Helper to auto-calculate CAD Blank Size, Creasing Scores, Area, Theoretical Weight & PPC Matrix
-  const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140, ppcConfig = null) => {
-    const raw = String(idDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
-    const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
-    const L = dims[0] || 0;
-    const W = dims[1] || 0;
-    const H = dims[2] || 0;
-
-    const ply = parseInt(plyStr, 10) || 3;
-    const boardCaliperMm = getBoardCaliperMm(ply, flute);
-    const odAllowance = 4; // 4mm difference between ID and OD size
-    const odL = L > 0 ? L + odAllowance : 0;
-    const odW = W > 0 ? W + odAllowance : 0;
-    const odH = H > 0 ? H + odAllowance : 0;
-    const odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : '';
-
-    let lapMm = 35;
-    if (jointType.includes('Gluing')) lapMm = 30;
-    else if (jointType.includes('Interlock') || jointType.includes('None')) lapMm = 0;
-
-    let deckleMm = 0;
-    let cutLengthMm = 0;
-    let creasingScores = '';
-
-    if (itemType === 'Box') {
-      deckleMm = Math.round(W + H + 20); // Top flap + Depth + Bottom flap + trim
-      cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-      const flap = Math.round(W / 2 + 3);
-      creasingScores = `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`;
-    } else if (itemType === 'PPC') {
-      deckleMm = Math.round(W + H + 15);
-      cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-      creasingScores = 'PPC Partition & Plate Set Profile';
-    } else if (itemType === 'Plate') {
-      deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
-      cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
-      creasingScores = 'Flat Separator Plate / Divider Pad';
-    } else if (itemType === 'Tray' || itemType === 'Lid') {
-      deckleMm = Math.round(W + (2 * H) + 10);
-      cutLengthMm = Math.round(L + (2 * H) + 10);
-      creasingScores = `Flap: ${H}mm | Base: ${W}mm | Flap: ${H}mm`;
-    } else if (itemType === 'Sheet') {
-      deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
-      cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
-      creasingScores = 'Plain Corrugated Sheet';
-    } else {
-      deckleMm = Math.round(W + H + 15);
-      cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-      creasingScores = 'Custom Die-Cut Profile';
-    }
-
-    const blankAreaSqM = (deckleMm > 0 && cutLengthMm > 0) ? (deckleMm * cutLengthMm) / 1000000 : 0;
-
-    // Total GSM Calculation with Layer-by-Layer Flute Factors, BS & Edge Crush Test (ECT)
-    let totalBoardGsm = 0;
-    let estimatedBs = 0;
-    let calculatedEct = 0; // Edge Crush Test in kN/m
-
-    if (layers && Array.isArray(layers) && layers.length > 0) {
-      // Always normalize takeUp for flute layers based on current flute type (ignores stale stored values)
-      const normalizedLayers = normalizeLayers(layers, flute);
-      normalizedLayers.forEach(lyr => {
-        const lyrGsm = parseFloat(lyr.gsm || 0);
-        const lyrBf = parseFloat(lyr.bf || 16);
-        const lyrFactor = parseFloat(lyr.takeUp);
-        totalBoardGsm += lyrGsm * lyrFactor;
-
-        // Paper RCT (Ring Crush Test) approximation in kN/m
-        const rct = lyrGsm * ((lyrBf * 0.00045) + 0.005);
-        calculatedEct += rct * lyrFactor;
-
-        // Board Bursting Strength contribution (primarily from flat liners)
-        if (!lyr.isFlute && lyrGsm > 0 && lyrBf > 0) {
-          estimatedBs += (lyrGsm * lyrBf) / 1000;
-        }
-      });
-      estimatedBs = (estimatedBs * 0.95).toFixed(1);
-      calculatedEct = calculatedEct * 0.95; // Combined board corrugation efficiency
-    } else {
-      const fluteFactor = FLUTE_FACTORS[flute] || 1.35;
-      const effectiveMultiplier = ply === 3 ? (1.0 + fluteFactor + 1.0) : (ply === 5 ? (1.0 + fluteFactor + 1.0 + fluteFactor + 1.0) : 4.5);
-      totalBoardGsm = defaultGsm * (effectiveMultiplier / ply);
-      estimatedBs = ((defaultGsm * 18 * (ply === 5 ? 3 : 2)) / 1000 * 0.95).toFixed(1);
-      const rct = defaultGsm * ((18 * 0.00045) + 0.005);
-      calculatedEct = rct * effectiveMultiplier * 0.95;
-    }
-
-    const outerBoxWeightGrams = blankAreaSqM > 0 ? Math.round(blankAreaSqM * totalBoardGsm) : 0;
-    
-    // Check if PPC Matrix is active
-    let calculatedPpc = null;
-    let theoreticalWeightGrams = outerBoxWeightGrams;
-
-    if (itemType === 'PPC' || ppcConfig?.enabled) {
-      calculatedPpc = calculatePpcMatrix(idDimensions, ppcConfig || { enabled: true }, totalBoardGsm, outerBoxWeightGrams);
-      theoreticalWeightGrams = calculatedPpc.totalSetWeightGrams;
-    }
-
-    return {
-      odStr,
-      deckleMm,
-      cutLengthMm,
-      blankAreaSqM: blankAreaSqM.toFixed(4),
-      creasingScores,
-      totalBoardGsm: Math.round(totalBoardGsm),
-      outerBoxWeightGrams,
-      theoreticalWeightGrams,
-      calculatedPpc,
-      estimatedBs: estimatedBs > 0 ? String(estimatedBs) : ''
-    };
-  };
-
-  const generateDefaultLayers = (plyStr = '3', flute = 'B') => {
-    const ply = parseInt(plyStr, 10) || 3;
-    const fFactor = FLUTE_FACTORS[flute] || 1.35;
-    if (ply === 2) {
-      return [
-        { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-        { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor }
-      ];
-    }
-    if (ply === 5) {
-      const f1 = flute.includes('BC') ? 1.35 : (flute.includes('AB') ? 1.52 : fFactor);
-      const f2 = flute.includes('BC') ? 1.43 : (flute.includes('AB') ? 1.35 : (fFactor === 1.35 ? 1.43 : fFactor));
-      return [
-        { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-        { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f1 },
-        { name: '3. Middle Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-        { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: f2 },
-        { name: '5. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-      ];
-    }
-    if (ply === 7) {
-      return [
-        { name: '1. Top Liner', type: 'Golden', gsm: '200', bf: '22', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-        { name: '2. Flute Medium 1', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.35 },
-        { name: '3. Middle Liner 1', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-        { name: '4. Flute Medium 2', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.43 },
-        { name: '5. Middle Liner 2', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 },
-        { name: '6. Flute Medium 3', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: 1.52 },
-        { name: '7. Bottom Liner', type: 'Kraft', gsm: '180', bf: '20', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-      ];
-    }
-    // 3-ply default
-    return [
-      { name: '1. Top Liner', type: 'Golden', gsm: '180', bf: '20', colour: 'Golden', isFlute: false, takeUp: 1.0 },
-      { name: '2. Fluting Medium', type: 'Kraft', gsm: '120', bf: '16', colour: 'Kraft', isFlute: true, takeUp: fFactor },
-      { name: '3. Bottom Liner', type: 'Kraft', gsm: '140', bf: '18', colour: 'Kraft', isFlute: false, takeUp: 1.0 }
-    ];
-  };
 
   const syncLayersForPly = (existingLayers = [], newPlyStr = '3', flute = 'B') => {
     const targetPly = parseInt(newPlyStr, 10) || 3;
@@ -12414,9 +12656,23 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
           const updated = [...itemsInput];
           const cur = updated[targetRowIndex] || { ...emptyItemRow };
 
+          // Extract size from parsed or transcript regex fallback
+          let newSize = parsed.size || '';
+          if (!newSize) {
+            const nums = transcript.match(/\b\d{2,4}\b/g);
+            if (nums && nums.length >= 2) {
+              newSize = nums.slice(0, 3).join('x');
+            } else {
+              const dimMatch = transcript.match(/(\d+)\s*(?:x|\*|by|into|cross|\s+)\s*(\d+)(?:\s*(?:x|\*|by|into|cross|\s+)\s*(\d+))?/i);
+              if (dimMatch) {
+                newSize = dimMatch[3] ? `${dimMatch[1]}x${dimMatch[2]}x${dimMatch[3]}` : `${dimMatch[1]}x${dimMatch[2]}`;
+              }
+            }
+          }
+          if (!newSize) newSize = cur.size || '';
+
           const newPly = String(parsed.ply || cur.ply || '3');
           const newFlute = parsed.fluteType || cur.fluteType || 'B';
-          const newSize = parsed.size || cur.size || '';
           const newName = parsed.name || cur.name || '';
           const newItemType = parsed.itemType || cur.itemType || 'Box';
 
@@ -12434,7 +12690,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
             : syncLayersForPly(cur.layers, newPly, newFlute);
 
           // Calculate CAD metrics
-          const cad = calculateCadBlank(newSize, newPly, newFlute, newItemType, cur.jointType, newLayers, parseFloat(newLayers[0]?.gsm || 140));
+          const cad = calculateCadBlank(newSize, newPly, newFlute, newItemType, cur.jointType, newLayers, parseFloat(newLayers[0]?.gsm || 140), cur.ppcMatrix);
 
           const updatedRow = {
             ...cur,
@@ -12450,14 +12706,15 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
             creasingScores: cad.creasingScores,
             weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
             targetBs: cad.estimatedBs || '',
-            targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : ''
+            targetBct: cad.estimatedBctKgf > 0 ? String(cad.estimatedBctKgf) : '',
+            ppcMatrix: cad.calculatedPpc || cur.ppcMatrix
           };
 
           updated[targetRowIndex] = updatedRow;
           setItemsInput(updated);
           setSelectedLayerConfigRow(targetRowIndex);
 
-          setAiDictationStatus(`✓ Auto-filled ${newName || 'Box'} with ${newPly}-Ply ${newFlute}-Flute recipe (${newLayers.map(l => `${l.gsm}G ${l.type}`).join(' / ')})`);
+          setAiDictationStatus(`✓ Auto-filled ${newName || 'Box'} (${newSize || 'Custom Size'}) with ${newPly}-Ply ${newFlute}-Flute recipe`);
 
           // Voice audio response
           if (parsed.summaryVoiceText && 'speechSynthesis' in window) {
