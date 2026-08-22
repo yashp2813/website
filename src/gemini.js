@@ -576,12 +576,16 @@ export async function askFactoryAI(userPrompt, factoryData = {}) {
     deliveryDate: o.deliveryDate
   }));
 
-  const availableItemDetails = items.slice(0, 40).map(i => ({
+  const availableItemDetails = items.slice(0, 100).map(i => ({
     id: i.id,
     name: i.name || i.Item_Name,
     itemType: i.itemType || i.Item_Type || 'Box',
+    category: i.category || i.boxCategory || i.boxCategoryName || '',
     size: i.size || i.Size_mm || '350x250x200',
     ply: i.ply || 3,
+    fluteType: i.fluteType || 'B',
+    paperGsm: i.paperGsm || '140',
+    paperBf: i.paperBf || '18',
     idealDeckleMm: parseFloat(i.deckleMm || i.deckle || 900),
     cutLengthMm: parseFloat(i.cutLengthMm || i.cutLength || 1450),
     ups: parseFloat(i.plannedUps || i.upsLength || 1),
@@ -724,6 +728,7 @@ ${contextJson}`;
               properties: {
                 targetItemName: { type: 'STRING' },
                 applyToAllMatching: { type: 'BOOLEAN', description: 'True when updating all items matching category/type' },
+                filterCategory: { type: 'STRING', description: 'Filter items by category name e.g. Liquor, Pharma, Auto, etc.' },
                 filterItemType: { type: 'STRING', enum: ['Box', 'PPC', 'Plate', 'Tray', 'Sheet', 'all'] },
                 filterPly: { type: 'STRING', enum: ['3', '5', '7', '2', 'all'] },
                 name: { type: 'STRING' },

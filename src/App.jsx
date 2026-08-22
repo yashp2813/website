@@ -566,20 +566,56 @@ export function GlobalVoiceAssistant({
               let targetItems = [];
               if (isBulk) {
                 const fType = (ip.filterItemType || ip.itemType || '').toLowerCase();
+                const fCategory = (ip.filterCategory || '').toLowerCase();
                 const fPly = String(ip.filterPly || ip.ply || '');
-                const fQuery = (ip.targetItemName || action.targetItemName || '').toLowerCase().replace(/\ball\b/gi, '').trim();
+                const rawTargetName = (ip.targetItemName || action.targetItemName || '').toLowerCase();
+                
+                const isPpcQuery = fType === 'ppc' || rawTargetName.includes('ppc') || rawTargetName.includes('partition');
+                const isPlateQuery = fType === 'plate' || rawTargetName.includes('plate') || rawTargetName.includes('separator') || rawTargetName.includes('pad') || rawTargetName.includes('divider');
+                const isTrayQuery = fType === 'tray' || rawTargetName.includes('tray') || rawTargetName.includes('lid');
+                const isSheetQuery = fType === 'sheet' || rawTargetName.includes('sheet');
+                const isBoxQuery = fType === 'box' || (rawTargetName.includes('box') && !isPpcQuery && !isPlateQuery && !isTrayQuery);
 
                 targetItems = items.filter(i => {
                   const iType = (i.itemType || i.Item_Type || 'Box').toLowerCase();
+                  const iCat = (i.category || i.boxCategory || i.boxCategoryName || '').toLowerCase();
                   const iPly = String(i.ply || i.Ply || '3');
                   const iName = (i.name || i.Item_Name || '').toLowerCase();
 
-                  let match = true;
-                  if (fType && fType !== 'all' && iType !== fType) match = false;
-                  if (fPly && fPly !== 'all' && iPly !== fPly) match = false;
-                  if (fQuery && fQuery !== 'all' && !iName.includes(fQuery)) match = false;
-                  return match;
+                  if (fCategory && !iCat.includes(fCategory) && !iName.includes(fCategory)) {
+                    return false;
+                  }
+
+                  if (fPly && fPly !== 'all' && iPly !== fPly && !rawTargetName.includes(`${iPly} ply`) && !rawTargetName.includes(`${iPly}-ply`)) {
+                    return false;
+                  }
+
+                  if (isPpcQuery) {
+                    return iType === 'ppc' || iName.includes('ppc') || iName.includes('partition') || iCat.includes('ppc');
+                  }
+                  if (isPlateQuery) {
+                    return iType === 'plate' || iName.includes('plate') || iName.includes('separator') || iName.includes('pad') || iName.includes('divider');
+                  }
+                  if (isTrayQuery) {
+                    return iType === 'tray' || iType === 'lid' || iName.includes('tray') || iName.includes('lid');
+                  }
+                  if (isSheetQuery) {
+                    return iType === 'sheet' || iName.includes('sheet');
+                  }
+                  if (isBoxQuery) {
+                    return iType === 'box' || (!iName.includes('partition') && !iName.includes('plate') && !iName.includes('tray') && !iName.includes('sheet'));
+                  }
+
+                  if (fType && fType !== 'all') {
+                    return iType === fType || iName.includes(fType) || iCat.includes(fType);
+                  }
+
+                  return true;
                 });
+
+                if (targetItems.length === 0 && (rawTargetName.includes('all items') || rawTargetName.includes('all boxes') || fType === 'all')) {
+                  targetItems = [...items];
+                }
               } else {
                 const targetQuery = (ip.targetItemName || ip.name || action.targetItemName || '').toLowerCase();
                 const matched = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes(targetQuery)) || items[0];
