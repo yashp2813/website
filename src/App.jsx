@@ -155,16 +155,7 @@ export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm 
   const crossPieceWeightGrams = Math.round(crossAreaSqM * totalBoardGsm);
   const crossTotalWeightGrams = crossCount * crossPieceWeightGrams;
 
-  const padCount = parseInt(ppcConfig.padCount !== undefined && ppcConfig.padCount !== '' ? ppcConfig.padCount : 2);
-  const padLengthMm = parseFloat(ppcConfig.padLengthMm) || Math.max(50, L - 5);
-  const padWidthMm = parseFloat(ppcConfig.padWidthMm) || Math.max(50, W - 5);
-  const padAreaSqM = (padLengthMm * padWidthMm) / 1000000;
-  const padPieceWeightGrams = Math.round(padAreaSqM * totalBoardGsm);
-  const padTotalWeightGrams = padCount * padPieceWeightGrams;
-
-  const includeOuterBox = ppcConfig.includeOuterBox !== false;
-  const outerWeight = includeOuterBox ? (parseFloat(outerBoxWeight) || 0) : 0;
-  const totalSetWeightGrams = Math.round(outerWeight + longTotalWeightGrams + crossTotalWeightGrams + padTotalWeightGrams);
+  const totalPpcWeightGrams = Math.round(longTotalWeightGrams + crossTotalWeightGrams);
 
   return {
     enabled: ppcConfig.enabled !== false,
@@ -172,7 +163,6 @@ export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm 
     cellRows,
     cellCols,
     totalCells,
-    includeOuterBox,
     longCount,
     longLengthMm: Math.round(longLengthMm),
     longHeightMm: Math.round(longHeightMm),
@@ -183,13 +173,8 @@ export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm 
     crossHeightMm: Math.round(crossHeightMm),
     crossPieceWeightGrams,
     crossTotalWeightGrams,
-    padCount,
-    padLengthMm: Math.round(padLengthMm),
-    padWidthMm: Math.round(padWidthMm),
-    padPieceWeightGrams,
-    padTotalWeightGrams,
-    outerBoxWeightGrams: Math.round(outerWeight),
-    totalSetWeightGrams
+    totalPpcWeightGrams,
+    totalSetWeightGrams: totalPpcWeightGrams
   };
 };
 
@@ -2980,40 +2965,50 @@ const getDispatchSchedule = (o) => {
   return [];
 };
 
-export const getSetComponents = (item) => {
+export const getSetComponents = (item, allItems = []) => {
   if (!item) return [];
 
-  // 1. Explicit set components array
+  // 1. Explicit set components array (Set composed of Box, PPC, Plate/Pad)
   if (item.setComponents) {
     let comps = [];
     if (Array.isArray(item.setComponents)) comps = item.setComponents;
     else if (typeof item.setComponents === 'string') comps = safeJsonParse(item.setComponents, []);
-    if (comps.length > 0) return comps;
+
+    if (comps.length > 0) {
+      return comps.map((c, idx) => {
+        const fullItem = (allItems || []).find(i => (c.itemId && i.id === c.itemId) || (c.name && (i.name === c.name || i.Item_Name === c.name)));
+        const cat = c.category || fullItem?.itemType || fullItem?.Item_Type || (idx === 0 ? 'Box' : idx === 1 ? 'PPC' : 'Plate/Pad');
+        const catEmoji = cat === 'Box' ? '📦' : (cat === 'PPC' ? '🧩' : '📄');
+        return {
+          key: c.key || `comp_${cat.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${idx}`,
+          category: cat,
+          categoryEmoji: catEmoji,
+          name: fullItem?.name || fullItem?.Item_Name || c.name || `${cat} Component`,
+          itemId: c.itemId || fullItem?.id || null,
+          ratio: parseInt(c.ratio || c.qtyPerSet || 1),
+          size: fullItem?.size || fullItem?.Size_mm || c.size || '-',
+          ply: fullItem?.ply || fullItem?.Ply || c.ply || '3',
+          flute: fullItem?.fluteType || c.flute || 'B',
+          weight: fullItem?.weight || fullItem?.Weight_g || c.weight || 0,
+          desc: c.desc || `${c.ratio || 1} pcs per set`
+        };
+      });
+    }
   }
 
-  // 2. PPC Partition Matrix attached to the item or PPC item type
+  // 2. Standalone PPC Partition Matrix (ONLY contains PPC partition strips, without plate/pad)
   const ppc = item.ppcMatrix;
-  const isPpc = (item.itemType || item.Item_Type) === 'PPC' || (ppc && ppc.enabled) || (item.name && (item.name.toLowerCase().includes('ppc') || item.name.toLowerCase().includes('partition')));
+  const isPpc = (item.itemType || item.Item_Type) === 'PPC' || (ppc && ppc.enabled);
 
   if (isPpc && ppc) {
     const list = [];
-    // Outer Box (if enabled or included)
-    if (ppc.includeOuterBox !== false) {
-      list.push({
-        key: 'outer_box',
-        name: 'Outer Master Carton',
-        ratio: 1,
-        ply: item.ply || item.Ply || '3',
-        flute: item.fluteType || 'B',
-        size: item.size || item.Size_mm || 'Standard',
-        desc: 'Outer corrugated shipping carton'
-      });
-    }
     // Long Partitions
     const longCount = parseInt(ppc.longCount || 0);
     if (longCount > 0) {
       list.push({
         key: 'long_partition',
+        category: 'PPC',
+        categoryEmoji: '🧩',
         name: `Long Partitions (${longCount} pcs/set)`,
         ratio: longCount,
         ply: '3',
@@ -3027,25 +3022,14 @@ export const getSetComponents = (item) => {
     if (crossCount > 0) {
       list.push({
         key: 'cross_partition',
+        category: 'PPC',
+        categoryEmoji: '🧩',
         name: `Cross Partitions (${crossCount} pcs/set)`,
         ratio: crossCount,
         ply: '3',
         flute: 'B',
         size: ppc.crossLengthMm && ppc.crossHeightMm ? `${ppc.crossLengthMm} × ${ppc.crossHeightMm} mm` : 'PPC Cross',
         desc: `${crossCount} cross divider strips per set`
-      });
-    }
-    // Top/Bottom Pads
-    const padCount = parseInt(ppc.padCount || 0);
-    if (padCount > 0) {
-      list.push({
-        key: 'pad_plate',
-        name: `Top/Bottom Pads (${padCount} pcs/set)`,
-        ratio: padCount,
-        ply: '3',
-        flute: 'B',
-        size: ppc.padLengthMm && ppc.padWidthMm ? `${ppc.padLengthMm} × ${ppc.padWidthMm} mm` : 'PPC Pad',
-        desc: `${padCount} separator pads/plates per set`
       });
     }
     if (list.length > 0) return list;
@@ -10471,7 +10455,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   const activeOrders = filteredOrders.filter(o => {
     if (o.isParentSetOrder || o.status === 'Completed') return false;
     const itm = items.find(i => i.id === o.itemId || i.name === o.itemName || i.Item_Name === o.itemName);
-    const comps = getSetComponents(itm);
+    const comps = getSetComponents(itm, items);
     if (comps && comps.length > 0) {
       return comps.some(comp => {
         const compTotalReq = parseInt(o.orderQty || 0) * parseInt(comp.ratio || 1);
@@ -10593,7 +10577,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   const openCreateJobModal = (order) => {
     setCreateJobModalOrder(order);
     const matchedItem = items.find(i => i.id === order.itemId || i.name === order.itemName || i.Item_Name === order.itemName);
-    const comps = getSetComponents(matchedItem);
+    const comps = getSetComponents(matchedItem, items);
 
     if (comps && comps.length > 0) {
       const firstComp = comps[0];
@@ -11111,7 +11095,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                 const plannedForOrder = getOrderPlannedQty(o.id);
                 const pending = Math.max(0, parseInt(o.orderQty || 0) - parseInt(o.dispatchedQty || 0) - plannedForOrder);
                 const itm = items.find(i => i.id === o.itemId || i.name === o.itemName || i.Item_Name === o.itemName);
-                const comps = getSetComponents(itm);
+                const comps = getSetComponents(itm, items);
                 const isSet = comps && comps.length > 0;
 
                 return (
@@ -11154,7 +11138,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
       {/* SIMPLIFIED MODAL (WITH ON-DEMAND SET COMPONENT SELECTOR) */}
       {createJobModalOrder && (() => {
         const modalItem = items.find(i => i.id === createJobModalOrder.itemId || i.name === createJobModalOrder.itemName || i.Item_Name === createJobModalOrder.itemName);
-        const modalComponents = getSetComponents(modalItem);
+        const modalComponents = getSetComponents(modalItem, items);
         const isSetItem = modalComponents && modalComponents.length > 0;
 
         return (
@@ -13005,6 +12989,185 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   const [aiDictationStatus, setAiDictationStatus] = useState('');
   const aiRecognitionRef = useRef(null);
 
+  // Dedicated Set / Kit Builder State (Box, PPC, Plate/Pad)
+  const [showSetBuilderModal, setShowSetBuilderModal] = useState(false);
+  const [editingSetItem, setEditingSetItem] = useState(null);
+  const [setBuilderForm, setSetBuilderForm] = useState({
+    name: '',
+    companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
+    boxItemId: '',
+    boxQty: 1,
+    ppcItemId: '',
+    ppcQty: 1,
+    padItemId: '',
+    padQty: 2
+  });
+
+  // Inline Quick-Create Item State for Set Builder
+  const [quickCreateCategory, setQuickCreateCategory] = useState(null); // 'Box' | 'PPC' | 'Plate'
+  const [quickCreateForm, setQuickCreateForm] = useState({
+    name: '',
+    size: '',
+    ply: '3',
+    fluteType: 'B',
+    paperGsm: '140',
+    paperBf: '18',
+    paperColour: 'Kraft',
+    longCount: 2,
+    crossCount: 3
+  });
+
+  const handleSaveSet = async (e) => {
+    e.preventDefault();
+    if (!setBuilderForm.name.trim()) {
+      alert("Set Name is required!");
+      return;
+    }
+
+    const boxItem = visibleItems.find(i => i.id === setBuilderForm.boxItemId);
+    const ppcItem = visibleItems.find(i => i.id === setBuilderForm.ppcItemId);
+    const padItem = visibleItems.find(i => i.id === setBuilderForm.padItemId);
+
+    const components = [];
+    if (boxItem) {
+      components.push({
+        key: 'box',
+        category: 'Box',
+        itemId: boxItem.id,
+        name: boxItem.name || boxItem.Item_Name,
+        ratio: parseInt(setBuilderForm.boxQty || 1),
+        size: boxItem.size || boxItem.Size_mm || '-',
+        weight: parseFloat(boxItem.weight || boxItem.Weight_g || 0),
+        ply: boxItem.ply || boxItem.Ply || '3',
+        flute: boxItem.fluteType || 'B'
+      });
+    }
+    if (ppcItem) {
+      components.push({
+        key: 'ppc',
+        category: 'PPC',
+        itemId: ppcItem.id,
+        name: ppcItem.name || ppcItem.Item_Name,
+        ratio: parseInt(setBuilderForm.ppcQty || 1),
+        size: ppcItem.size || ppcItem.Size_mm || '-',
+        weight: parseFloat(ppcItem.weight || ppcItem.Weight_g || 0),
+        ply: ppcItem.ply || ppcItem.Ply || '3',
+        flute: ppcItem.fluteType || 'B'
+      });
+    }
+    if (padItem) {
+      components.push({
+        key: 'pad',
+        category: 'Plate/Pad',
+        itemId: padItem.id,
+        name: padItem.name || padItem.Item_Name,
+        ratio: parseInt(setBuilderForm.padQty || 2),
+        size: padItem.size || padItem.Size_mm || '-',
+        weight: parseFloat(padItem.weight || padItem.Weight_g || 0),
+        ply: padItem.ply || padItem.Ply || '3',
+        flute: padItem.fluteType || 'B'
+      });
+    }
+
+    if (components.length === 0) {
+      alert("Please select or quick-create at least one component (Box, PPC, or Plate/Pad) for this Set!");
+      return;
+    }
+
+    const totalWeight = components.reduce((sum, c) => sum + (c.weight * c.ratio), 0);
+
+    const setPayload = {
+      name: setBuilderForm.name.trim(),
+      itemType: 'Set',
+      companyId: setBuilderForm.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
+      weight: String(Math.round(totalWeight)),
+      size: boxItem?.size || boxItem?.Size_mm || 'Set Kit',
+      ply: boxItem?.ply || boxItem?.Ply || '3',
+      fluteType: boxItem?.fluteType || 'B',
+      setComponents: components
+    };
+
+    if (editingSetItem) {
+      await updateDoc(getDocRef('items', editingSetItem.id), setPayload);
+      if (addLog) addLog(`Updated Set SKU: ${setPayload.name}`);
+    } else {
+      await addDoc(getColRef('items'), setPayload);
+      if (addLog) addLog(`Created new Set SKU: ${setPayload.name} (${components.length} components)`);
+    }
+
+    setShowSetBuilderModal(false);
+    setEditingSetItem(null);
+    setSetBuilderForm({
+      name: '',
+      companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
+      boxItemId: '',
+      boxQty: 1,
+      ppcItemId: '',
+      ppcQty: 1,
+      padItemId: '',
+      padQty: 2
+    });
+  };
+
+  const handleQuickCreateItem = async (e) => {
+    e.preventDefault();
+    if (!quickCreateForm.name.trim()) return;
+
+    const layers = generateDefaultLayers(quickCreateForm.ply, quickCreateForm.fluteType);
+    let ppcConfig = null;
+    if (quickCreateCategory === 'PPC') {
+      ppcConfig = {
+        enabled: true,
+        longCount: parseInt(quickCreateForm.longCount || 2),
+        crossCount: parseInt(quickCreateForm.crossCount || 3)
+      };
+    }
+
+    const cad = calculateCadBlank(
+      quickCreateForm.size,
+      quickCreateForm.ply,
+      quickCreateForm.fluteType,
+      quickCreateCategory === 'Plate' ? 'Plate' : (quickCreateCategory === 'PPC' ? 'PPC' : 'Box'),
+      'Stitching (35mm)',
+      layers,
+      parseFloat(quickCreateForm.paperGsm || 140),
+      ppcConfig
+    );
+
+    const newItem = {
+      name: quickCreateForm.name.trim(),
+      companyId: setBuilderForm.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
+      itemType: quickCreateCategory === 'Plate' ? 'Plate' : (quickCreateCategory === 'PPC' ? 'PPC' : 'Box'),
+      size: quickCreateForm.size.trim(),
+      od: cad.odStr,
+      ply: quickCreateForm.ply,
+      fluteType: quickCreateForm.fluteType,
+      deckleMm: cad.deckleMm > 0 ? String(cad.deckleMm) : '',
+      cutLengthMm: cad.cutLengthMm > 0 ? String(cad.cutLengthMm) : '',
+      creasingScores: cad.creasingScores,
+      weight: cad.theoreticalWeightGrams > 0 ? String(cad.theoreticalWeightGrams) : '',
+      paperGsm: quickCreateForm.paperGsm,
+      paperBf: quickCreateForm.paperBf,
+      paperColour: quickCreateForm.paperColour,
+      layers: layers,
+      ppcMatrix: cad.calculatedPpc || ppcConfig
+    };
+
+    const docRef = await addDoc(getColRef('items'), newItem);
+    if (addLog) addLog(`Quick created new ${quickCreateCategory}: ${newItem.name}`);
+
+    // Auto select in set builder
+    if (quickCreateCategory === 'Box') {
+      setSetBuilderForm(prev => ({ ...prev, boxItemId: docRef.id }));
+    } else if (quickCreateCategory === 'PPC') {
+      setSetBuilderForm(prev => ({ ...prev, ppcItemId: docRef.id }));
+    } else if (quickCreateCategory === 'Plate') {
+      setSetBuilderForm(prev => ({ ...prev, padItemId: docRef.id }));
+    }
+
+    setQuickCreateCategory(null);
+  };
+
   const handleConfirmBatchUpdate = async () => {
     if (!pendingBatchConfirm || !pendingBatchConfirm.targetItems || !updateDoc || !getDocRef) return;
     const { targetItems, parsed, isBulk } = pendingBatchConfirm;
@@ -13443,6 +13606,27 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   };
 
   const handleEdit = (item) => {
+    if (item.itemType === 'Set' || (item.setComponents && item.setComponents.length > 0)) {
+      setEditingSetItem(item);
+      const comps = getSetComponents(item, visibleItems);
+      const boxComp = comps.find(c => c.category === 'Box');
+      const ppcComp = comps.find(c => c.category === 'PPC');
+      const padComp = comps.find(c => c.category === 'Plate/Pad' || c.category === 'Plate' || c.category === 'Pad');
+
+      setSetBuilderForm({
+        name: item.name || item.Item_Name || '',
+        companyId: item.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
+        boxItemId: boxComp?.itemId || '',
+        boxQty: boxComp?.ratio || 1,
+        ppcItemId: ppcComp?.itemId || '',
+        ppcQty: ppcComp?.ratio || 1,
+        padItemId: padComp?.itemId || '',
+        padQty: padComp?.ratio || 2
+      });
+      setShowSetBuilderModal(true);
+      return;
+    }
+
     setEditingId(item.id);
     const layers = item.layers && Array.isArray(item.layers) && item.layers.length > 0
       ? item.layers
@@ -13672,6 +13856,368 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
         </div>
       )}
 
+      {/* --- DEDICATED SET / KIT BUILDER MODAL (3 CATEGORIES: BOX, PPC, PLATE/PAD) --- */}
+      {showSetBuilderModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100000, padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 16, maxWidth: 760, width: '100%', maxHeight: '92vh', overflowY: 'auto', padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.3)', border: '2px solid #7c3aed' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1.5px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }}>
+              <div>
+                <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>🧩</span> {editingSetItem ? 'Edit Set / Kit SKU' : 'Build New Set / Kit SKU'}
+                </h3>
+                <p style={{ fontSize: 12, color: '#64748b', margin: '3px 0 0 0' }}>
+                  Combine individual Box, PPC, and Plate/Pad items from your database into a bundled Set.
+                </p>
+              </div>
+              <button onClick={() => setShowSetBuilderModal(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#64748b' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSaveSet}>
+              {/* Set Name & Plant */}
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12, marginBottom: 16, background: '#f8fafc', padding: 14, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                    Set / Kit SKU Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 180ml PPC Complete Liquor Kit"
+                    className="apex-input font-bold"
+                    value={setBuilderForm.name}
+                    onChange={e => setSetBuilderForm({ ...setBuilderForm, name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                    Plant / Unit
+                  </label>
+                  <select
+                    className="apex-select"
+                    value={setBuilderForm.companyId}
+                    onChange={e => setSetBuilderForm({ ...setBuilderForm, companyId: e.target.value })}
+                  >
+                    <option value="">-- All Units --</option>
+                    {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* 3 Categories Section */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
+                
+                {/* 1. BOX CATEGORY */}
+                <div style={{ background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 12, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: '#1e40af', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>📦</span> 1. Outer Box / Master Carton
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickCreateCategory('Box');
+                        setQuickCreateForm({ name: '', size: '350x250x200', ply: '3', fluteType: 'B', paperGsm: '140', paperBf: '18', paperColour: 'Kraft' });
+                      }}
+                      className="apex-btn"
+                      style={{ fontSize: 11, padding: '3px 10px', background: '#2563eb', color: '#fff', fontWeight: 800, border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                    >
+                      ➕ Create New Box
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 10 }}>
+                    <div>
+                      <select
+                        className="apex-select font-bold"
+                        value={setBuilderForm.boxItemId}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, boxItemId: e.target.value })}
+                      >
+                        <option value="">-- Select Existing Box Item (or Create New) --</option>
+                        {visibleItems.filter(i => (i.itemType || i.Item_Type || 'Box') === 'Box').map(i => (
+                          <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.size || i.Size_mm || '-'}) — {i.weight || i.Weight_g || 0}g</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Qty / Set"
+                        title="Quantity per Set"
+                        className="apex-input text-center font-bold"
+                        value={setBuilderForm.boxQty}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, boxQty: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  {(() => {
+                    const selBox = visibleItems.find(i => i.id === setBuilderForm.boxItemId);
+                    if (!selBox) return null;
+                    return (
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#1e3a8a', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <span><strong>Size:</strong> {selBox.size || selBox.Size_mm || '-'} mm</span>
+                        <span><strong>Ply:</strong> {selBox.ply || selBox.Ply || '3'}-Ply ({selBox.fluteType || 'B'})</span>
+                        <span><strong>Unit Weight:</strong> {selBox.weight || selBox.Weight_g || 0}g</span>
+                        <span><strong>Subtotal:</strong> {((parseFloat(selBox.weight || 0)) * parseInt(setBuilderForm.boxQty || 1))}g</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* 2. PPC CATEGORY */}
+                <div style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: '#92400e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>🧩</span> 2. PPC Partition Matrix (Partitions Only)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickCreateCategory('PPC');
+                        setQuickCreateForm({ name: '', size: '350x250x200', ply: '3', fluteType: 'B', paperGsm: '140', paperBf: '18', paperColour: 'Kraft', longCount: 2, crossCount: 3 });
+                      }}
+                      className="apex-btn"
+                      style={{ fontSize: 11, padding: '3px 10px', background: '#d97706', color: '#fff', fontWeight: 800, border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                    >
+                      ➕ Create New PPC
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 10 }}>
+                    <div>
+                      <select
+                        className="apex-select font-bold"
+                        value={setBuilderForm.ppcItemId}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, ppcItemId: e.target.value })}
+                      >
+                        <option value="">-- Select Existing PPC Partition Item (or Create New) --</option>
+                        {visibleItems.filter(i => (i.itemType || i.Item_Type) === 'PPC').map(i => (
+                          <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.size || i.Size_mm || '-'}) — {i.weight || i.Weight_g || 0}g</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Qty / Set"
+                        title="Quantity per Set"
+                        className="apex-input text-center font-bold"
+                        value={setBuilderForm.ppcQty}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, ppcQty: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  {(() => {
+                    const selPpc = visibleItems.find(i => i.id === setBuilderForm.ppcItemId);
+                    if (!selPpc) return null;
+                    return (
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#78350f', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <span><strong>Size:</strong> {selPpc.size || selPpc.Size_mm || '-'} mm</span>
+                        <span><strong>Unit Weight:</strong> {selPpc.weight || selPpc.Weight_g || 0}g</span>
+                        <span><strong>Subtotal:</strong> {((parseFloat(selPpc.weight || 0)) * parseInt(setBuilderForm.ppcQty || 1))}g</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* 3. PLATE / PAD CATEGORY */}
+                <div style={{ background: '#f5f3ff', border: '1.5px solid #ddd6fe', borderRadius: 12, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>📄</span> 3. Plate / Top &amp; Bottom Divider Pad
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickCreateCategory('Plate');
+                        setQuickCreateForm({ name: '', size: '340x240', ply: '3', fluteType: 'B', paperGsm: '140', paperBf: '18', paperColour: 'Kraft' });
+                      }}
+                      className="apex-btn"
+                      style={{ fontSize: 11, padding: '3px 10px', background: '#7c3aed', color: '#fff', fontWeight: 800, border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                    >
+                      ➕ Create New Plate/Pad
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 10 }}>
+                    <div>
+                      <select
+                        className="apex-select font-bold"
+                        value={setBuilderForm.padItemId}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, padItemId: e.target.value })}
+                      >
+                        <option value="">-- Select Existing Plate / Pad Item (or Create New) --</option>
+                        {visibleItems.filter(i => (i.itemType || i.Item_Type) === 'Plate' || (i.itemType || i.Item_Type) === 'Sheet' || (i.itemType || i.Item_Type) === 'Plate / Pad').map(i => (
+                          <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.size || i.Size_mm || '-'}) — {i.weight || i.Weight_g || 0}g</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Qty / Set"
+                        title="Quantity per Set"
+                        className="apex-input text-center font-bold"
+                        value={setBuilderForm.padQty}
+                        onChange={e => setSetBuilderForm({ ...setBuilderForm, padQty: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  {(() => {
+                    const selPad = visibleItems.find(i => i.id === setBuilderForm.padItemId);
+                    if (!selPad) return null;
+                    return (
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#4c1d95', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <span><strong>Size:</strong> {selPad.size || selPad.Size_mm || '-'} mm</span>
+                        <span><strong>Unit Weight:</strong> {selPad.weight || selPad.Weight_g || 0}g</span>
+                        <span><strong>Subtotal ({setBuilderForm.padQty || 2} pcs):</strong> {((parseFloat(selPad.weight || 0)) * parseInt(setBuilderForm.padQty || 2))}g</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+              </div>
+
+              {/* Set Weight & Parts Live Calculation Summary */}
+              {(() => {
+                const bItem = visibleItems.find(i => i.id === setBuilderForm.boxItemId);
+                const pItem = visibleItems.find(i => i.id === setBuilderForm.ppcItemId);
+                const dItem = visibleItems.find(i => i.id === setBuilderForm.padItemId);
+
+                const bWt = (parseFloat(bItem?.weight || 0)) * parseInt(setBuilderForm.boxQty || 0);
+                const pWt = (parseFloat(pItem?.weight || 0)) * parseInt(setBuilderForm.ppcQty || 0);
+                const dWt = (parseFloat(dItem?.weight || 0)) * parseInt(setBuilderForm.padQty || 0);
+                const totalSetWt = Math.round(bWt + pWt + dWt);
+
+                return (
+                  <div style={{ background: '#0f172a', color: '#fff', borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>
+                        Combined Theoretical Set Weight
+                      </span>
+                      <strong style={{ fontSize: 20, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+                        {totalSetWt > 0 ? `${totalSetWt} grams / set` : '0 g'}
+                      </strong>
+                    </div>
+                    <div style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', textAlign: 'right', color: '#cbd5e1' }}>
+                      {bItem && <span>📦 Box: {bWt}g · </span>}
+                      {pItem && <span>🧩 PPC: {pWt}g · </span>}
+                      {dItem && <span>📄 Pad: {dWt}g</span>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSetBuilderModal(false)}
+                  className="apex-btn apex-btn-secondary"
+                  style={{ padding: '8px 18px', fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="apex-btn apex-btn-primary"
+                  style={{ padding: '8px 24px', fontSize: 13, background: '#7c3aed', color: '#fff', fontWeight: 800 }}
+                >
+                  ✓ Save Set SKU
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- QUICK CREATE ITEM MODAL FOR SET BUILDER --- */}
+      {quickCreateCategory && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110000, padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, maxWidth: 500, width: '100%', padding: 22, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)', border: '2px solid #38bdf8' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1.5px solid #e2e8f0', paddingBottom: 10, marginBottom: 14 }}>
+              <h4 style={{ fontSize: 16, fontWeight: 900, color: '#0f172a', margin: 0 }}>
+                ➕ Quick Create {quickCreateCategory} Item
+              </h4>
+              <button onClick={() => setQuickCreateCategory(null)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleQuickCreateItem} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                  Item Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={`e.g. 180ml ${quickCreateCategory}`}
+                  className="apex-input font-bold"
+                  value={quickCreateForm.name}
+                  onChange={e => setQuickCreateForm({ ...quickCreateForm, name: e.target.value })}
+                  autoFocus
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                    {quickCreateCategory === 'Plate' ? 'Size (L x W mm) *' : 'Inner Size (LxWxH mm) *'}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={quickCreateCategory === 'Plate' ? '340x240' : '350x250x200'}
+                    className="apex-input font-mono font-bold"
+                    value={quickCreateForm.size}
+                    onChange={e => setQuickCreateForm({ ...quickCreateForm, size: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                    Ply &amp; Flute
+                  </label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <select className="apex-select font-bold" value={quickCreateForm.ply} onChange={e => setQuickCreateForm({ ...quickCreateForm, ply: e.target.value })}>
+                      <option value="3">3-Ply</option><option value="5">5-Ply</option><option value="7">7-Ply</option>
+                    </select>
+                    <select className="apex-select font-bold" value={quickCreateForm.fluteType} onChange={e => setQuickCreateForm({ ...quickCreateForm, fluteType: e.target.value })}>
+                      <option value="B">B</option><option value="C">C</option><option value="E">E</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {quickCreateCategory === 'PPC' && (
+                <div style={{ background: '#fffbeb', padding: 10, borderRadius: 8, border: '1px solid #fde68a', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 10.5, fontWeight: 700, color: '#92400e', display: 'block', marginBottom: 2 }}>Long Partitions</label>
+                    <input type="number" min="1" className="apex-input font-bold text-center" value={quickCreateForm.longCount} onChange={e => setQuickCreateForm({ ...quickCreateForm, longCount: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10.5, fontWeight: 700, color: '#92400e', display: 'block', marginBottom: 2 }}>Cross Partitions</label>
+                    <input type="number" min="1" className="apex-input font-bold text-center" value={quickCreateForm.crossCount} onChange={e => setQuickCreateForm({ ...quickCreateForm, crossCount: e.target.value })} />
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Paper GSM</label>
+                  <input type="number" className="apex-input font-mono" value={quickCreateForm.paperGsm} onChange={e => setQuickCreateForm({ ...quickCreateForm, paperGsm: e.target.value })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#1e293b', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Paper BF</label>
+                  <input type="number" className="apex-input font-mono" value={quickCreateForm.paperBf} onChange={e => setQuickCreateForm({ ...quickCreateForm, paperBf: e.target.value })} />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+                <button type="button" onClick={() => setQuickCreateCategory(null)} className="apex-btn apex-btn-secondary" style={{ padding: '6px 14px', fontSize: 12 }}>Cancel</button>
+                <button type="submit" className="apex-btn apex-btn-primary" style={{ padding: '6px 18px', fontSize: 12, fontWeight: 800, background: '#2563eb' }}>✓ Create &amp; Link to Set</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* CAD & LAYER BOM VISUALIZER MODAL */}
       {activeBomModalItem && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
@@ -13818,7 +14364,28 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
             className="apex-btn apex-btn-primary"
             style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#2563eb' }}
           >
-            {showBatchForm ? '✕ Close Entry Form' : '➕ Add Box Specs (CAD & BOM Recipe Mode)'}
+            {showBatchForm ? '✕ Close Entry Form' : '➕ Add Box Specs (CAD & BOM Mode)'}
+          </button>
+
+          <button
+            onClick={() => {
+              setEditingSetItem(null);
+              setSetBuilderForm({
+                name: '',
+                companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
+                boxItemId: '',
+                boxQty: 1,
+                ppcItemId: '',
+                ppcQty: 1,
+                padItemId: '',
+                padQty: 2
+              });
+              setShowSetBuilderModal(true);
+            }}
+            className="apex-btn"
+            style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#7c3aed', color: '#fff', display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: 'none', cursor: 'pointer' }}
+          >
+            🧩 + Build Set / Kit (Box + PPC + Pad)
           </button>
 
           <button
@@ -14555,13 +15122,21 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                   <td><span style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>{comp}</span></td>
                   <td><strong style={{ color: '#0f172a' }}>{name}</strong></td>
                   <td>
-                    {item.itemType === 'PPC' || item.ppcMatrix?.enabled ? (
+                    {item.itemType === 'Set' || (item.setComponents && item.setComponents.length > 0) ? (
+                      <span style={{ fontSize: 10.5, background: '#ede9fe', color: '#6d28d9', border: '1px solid #ddd6fe', padding: '2px 7px', borderRadius: 4, fontWeight: 800 }}>
+                        🧩 Set ({(item.setComponents || []).length} Parts)
+                      </span>
+                    ) : item.itemType === 'PPC' || item.ppcMatrix?.enabled ? (
                       <span style={{ fontSize: 10.5, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '2px 6px', borderRadius: 4, fontWeight: 800 }}>
                         🧩 PPC ({item.ppcMatrix?.totalCells || 12} Cells)
                       </span>
+                    ) : item.itemType === 'Plate' || item.itemType === 'Sheet' || item.itemType === 'Plate / Pad' ? (
+                      <span style={{ fontSize: 10.5, background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', padding: '2px 6px', borderRadius: 4, fontWeight: 800 }}>
+                        📄 Plate / Pad
+                      </span>
                     ) : (
-                      <span style={{ fontSize: 11, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>
-                        {item.itemType || 'Box'}
+                      <span style={{ fontSize: 11, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>
+                        📦 {item.itemType || 'Box'}
                       </span>
                     )}
                   </td>
