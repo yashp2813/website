@@ -2577,16 +2577,67 @@ function formatSystemReelId(r, allInventory = []) {
   return `RL-${String(cleanNum).padStart(5, '0')}`;
 }
 
-
 function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [] }) {
   const [printMode, setPrintMode] = useState('a4_grid'); // 'a4_grid' | 'single'
   const [copiesPerItem, setCopiesPerItem] = useState(1); // Default 1 sticker per reel
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
 
-  // Fine-tuning calibration for specific printer paper feed (NovaJet 12L standard: Top 16.5mm, Left 5.0mm)
-  const [topMarginMm, setTopMarginMm] = useState(16.5);
-  const [leftMarginMm, setLeftMarginMm] = useState(5.0);
+  // Load saved calibration or use NovaJet 12L standard defaults (100x44mm with 2mm gaps: Top 11.5mm, Left 4.0mm, RowGap 2.0mm, ColGap 2.0mm)
+  const [topMarginMm, setTopMarginMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_top_margin');
+    return saved !== null ? parseFloat(saved) : 11.5;
+  });
+  const [leftMarginMm, setLeftMarginMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_left_margin');
+    return saved !== null ? parseFloat(saved) : 4.0;
+  });
+  const [rowGapMm, setRowGapMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_row_gap');
+    return saved !== null ? parseFloat(saved) : 2.0;
+  });
+  const [colGapMm, setColGapMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_col_gap');
+    return saved !== null ? parseFloat(saved) : 2.0;
+  });
+  const [labelWidthMm, setLabelWidthMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_label_width');
+    return saved !== null ? parseFloat(saved) : 100.0;
+  });
+  const [labelHeightMm, setLabelHeightMm] = useState(() => {
+    const saved = localStorage.getItem('novajet_label_height');
+    return saved !== null ? parseFloat(saved) : 44.0;
+  });
+
+  const saveSetting = (key, val, setter) => {
+    setter(val);
+    try { localStorage.setItem(key, String(val)); } catch(e) {}
+  };
+
+  const applyPreset = (preset) => {
+    if (preset === 'novajet_gapped') {
+      saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
+      saveSetting('novajet_left_margin', 4.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 2.0, setRowGapMm);
+      saveSetting('novajet_col_gap', 2.0, setColGapMm);
+      saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
+      saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
+    } else if (preset === 'novajet_nogap') {
+      saveSetting('novajet_top_margin', 16.5, setTopMarginMm);
+      saveSetting('novajet_left_margin', 5.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 0.0, setRowGapMm);
+      saveSetting('novajet_col_gap', 0.0, setColGapMm);
+      saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
+      saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
+    } else if (preset === 'avery_12') {
+      saveSetting('novajet_top_margin', 15.0, setTopMarginMm);
+      saveSetting('novajet_left_margin', 4.5, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 2.5, setRowGapMm);
+      saveSetting('novajet_col_gap', 2.5, setColGapMm);
+      saveSetting('novajet_label_width', 99.1, setLabelWidthMm);
+      saveSetting('novajet_label_height', 42.3, setLabelHeightMm);
+    }
+  };
 
   // Handle single item or array of items
   const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
@@ -2648,7 +2699,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       '11011011000','11011000110','11000110110','10100011000','10001011000',
       '10001000110','10110001000','10001101000','10001100010','11010001000',
       '11000101000','11000100010','10110111000','10110001110','10001101110',
-      '10111011000','10111000110','10001110110','11101110110','11010001110',
+      '10111011000','10111000110','10001101110','11101110110','11010001110',
       '11000101110','11011101000','11011100010','11011101110','11101011000',
       '11101000110','11100010110','11101101000','11101100010','11100011010',
       '11101111010','11001000010','11110001010','10100110000','10100001100',
@@ -2739,14 +2790,14 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
           </div>`;
       }).join('');
 
-      return `<div class="sheet-page" style="padding-top: ${topMarginMm}mm; padding-bottom: 16.5mm; padding-left: ${leftMarginMm}mm; padding-right: ${leftMarginMm}mm;">${cellsHtml}</div>`;
+      return `<div class="sheet-page">${cellsHtml}</div>`;
     }).join('');
 
     const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>NovaJet 12L Barcode Stickers (100x44mm)</title>
+<title>NovaJet 12L Barcode Stickers</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4 portrait; margin: 0mm !important; }
@@ -2760,18 +2811,20 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     page-break-after: always;
     break-after: page;
     display: grid;
-    grid-template-columns: 100mm 100mm;
-    grid-template-rows: 44mm 44mm 44mm 44mm 44mm 44mm;
-    column-gap: 0mm;
-    row-gap: 0mm;
+    grid-template-columns: ${labelWidthMm}mm ${labelWidthMm}mm;
+    grid-template-rows: repeat(6, ${labelHeightMm}mm);
+    column-gap: ${colGapMm}mm;
+    row-gap: ${rowGapMm}mm;
+    padding-top: ${topMarginMm}mm;
+    padding-left: ${leftMarginMm}mm;
     overflow: hidden;
     background: #fff;
   }
   .cell {
-    width: 100mm;
-    height: 44mm;
-    min-height: 44mm;
-    max-height: 44mm;
+    width: ${labelWidthMm}mm;
+    height: ${labelHeightMm}mm;
+    min-height: ${labelHeightMm}mm;
+    max-height: ${labelHeightMm}mm;
     box-sizing: border-box;
     padding: 2.5mm 4.5mm 2mm 4.5mm;
     display: flex;
@@ -2795,7 +2848,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   .reel-sup { font-size: 7.5pt; font-weight: 700; color: #334155; text-align: right; max-width: 52%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
   .cell-specs { font-size: 8pt; font-weight: 800; color: #0f172a; margin-top: 0.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cell-barcode { display: flex; justify-content: center; align-items: center; flex: 1; margin: 0.5mm 0; }
-  .cell-barcode svg { max-width: 90mm; height: 22mm; }
+  .cell-barcode svg { max-width: ${Math.max(50, labelWidthMm - 10)}mm; height: 22mm; }
   .cell-text { font-family: 'Courier New', monospace; font-size: 7.5pt; font-weight: 800; color: #000; letter-spacing: 0.15em; text-align: center; }
 </style>
 </head>
@@ -2809,10 +2862,10 @@ ${pagesHtml}
 
   const handlePrintTestPattern = () => {
     const testCells = Array.from({ length: 12 }, (_, i) => `
-      <div style="width: 100mm; height: 44mm; box-sizing: border-box; border: 1px dashed #64748b; padding: 4mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center;">
-        <div style="font-size: 9pt; font-weight: 800; color: #0f172a;">NovaJet 12L • Slot #${i + 1} (100mm × 44mm)</div>
-        <div style="font-size: 14pt; color: #94a3b8;">+</div>
-        <div style="font-size: 7.5pt; font-weight: 700; color: #64748b;">Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1}</div>
+      <div style="width: ${labelWidthMm}mm; height: ${labelHeightMm}mm; box-sizing: border-box; border: 1.5px dashed #475569; padding: 3mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center; background: #fafafa;">
+        <div style="font-size: 8.5pt; font-weight: 800; color: #0f172a;">Slot #${i + 1} (${labelWidthMm}×${labelHeightMm}mm)</div>
+        <div style="font-size: 14pt; color: #64748b; line-height: 1;">+</div>
+        <div style="font-size: 7pt; font-weight: 700; color: #475569;">Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1} • Gaps: R ${rowGapMm}mm, C ${colGapMm}mm</div>
       </div>
     `).join('');
 
@@ -2820,23 +2873,22 @@ ${pagesHtml}
 <html>
 <head>
 <meta charset="UTF-8">
-<title>NovaJet 12L Alignment Test Sheet</title>
+<title>NovaJet 12L Alignment Test Pattern</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4 portrait; margin: 0mm !important; }
-  body { background: #fff; font-family: Arial, sans-serif; margin: 0; padding: 0; }
+  body { background: #fff; font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif; margin: 0; padding: 0; }
   .sheet-page {
     width: 210mm;
     height: 297mm;
     box-sizing: border-box;
     padding-top: ${topMarginMm}mm;
-    padding-bottom: 16.5mm;
     padding-left: ${leftMarginMm}mm;
-    padding-right: ${leftMarginMm}mm;
     display: grid;
-    grid-template-columns: 100mm 100mm;
-    grid-template-rows: 44mm 44mm 44mm 44mm 44mm 44mm;
-    gap: 0;
+    grid-template-columns: ${labelWidthMm}mm ${labelWidthMm}mm;
+    grid-template-rows: repeat(6, ${labelHeightMm}mm);
+    column-gap: ${colGapMm}mm;
+    row-gap: ${rowGapMm}mm;
   }
 </style>
 </head>
@@ -2922,11 +2974,11 @@ ${pagesHtml}
                 <h3 className="font-extrabold text-stone-900 text-base flex items-center gap-2">
                   NovaJet 12L Barcode Print Center
                   <span className="bg-purple-100 text-purple-800 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full">
-                    NovaJet 12L (100mm × 44mm • 2×6 Grid)
+                    {labelWidthMm}mm × {labelHeightMm}mm • 2×6 Grid
                   </span>
                 </h3>
                 <p className="text-xs text-stone-500 font-medium">
-                  Configured for TechNova NovaJet MPL 12L self-adhesive sheets with zero-margin pagination.
+                  Fully calibrated for inter-label gaps (Vertical Row Gap &amp; Horizontal Col Gap) + Die-cut offsets.
                 </p>
               </div>
             </div>
@@ -2968,78 +3020,149 @@ ${pagesHtml}
             </div>
           </div>
 
-          {/* Secondary Controls Bar: Margin Calibration & Offsets */}
+          {/* Secondary Controls Bar: Margin & Gap Calibration */}
           {printMode === 'a4_grid' && (
-            <div className="flex items-center justify-between flex-wrap gap-2.5 pt-2 border-t border-stone-200 text-xs">
-              <div className="flex items-center gap-3 flex-wrap">
-                {/* Copies per reel */}
-                <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-300 px-2.5 py-1 rounded-lg font-bold text-stone-800">
-                  <label>Copies/Reel:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="12"
-                    disabled={fillSingleSheet && baseItems.length === 1}
-                    className="w-12 text-center border rounded bg-white py-0.5 font-bold"
-                    value={copiesPerItem}
-                    onChange={e => setCopiesPerItem(Math.max(1, parseInt(e.target.value) || 1))}
-                  />
+            <div className="space-y-2 pt-2 border-t border-stone-200 text-xs">
+              
+              {/* Row 1: Copies, Offset, Sheet fill, and Preset selector */}
+              <div className="flex items-center justify-between flex-wrap gap-2.5">
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Copies per reel */}
+                  <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-300 px-2.5 py-1 rounded-lg font-bold text-stone-800">
+                    <label>Copies/Reel:</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="12"
+                      disabled={fillSingleSheet && baseItems.length === 1}
+                      className="w-12 text-center border rounded bg-white py-0.5 font-bold"
+                      value={copiesPerItem}
+                      onChange={e => setCopiesPerItem(Math.max(1, parseInt(e.target.value) || 1))}
+                    />
+                  </div>
+
+                  {/* Start Slot Offset */}
+                  <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg font-bold text-blue-900" title="Start printing from a specific sticker slot if some stickers were already used">
+                    <label>Start at Slot #:</label>
+                    <select
+                      className="border rounded bg-white py-0.5 px-1 font-bold text-blue-950"
+                      value={startOffset}
+                      onChange={e => setStartOffset(parseInt(e.target.value) || 0)}
+                    >
+                      {Array.from({ length: 12 }, (_, i) => (
+                        <option key={i} value={i}>Slot {i + 1} {i === 0 ? '(Top-Left)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Fill single sheet toggle */}
+                  {baseItems.length === 1 && (
+                    <label className="flex items-center gap-1.5 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={fillSingleSheet}
+                        onChange={e => setFillSingleSheet(e.target.checked)}
+                        className="accent-amber-600 rounded"
+                      />
+                      Fill Sheet (12 pcs)
+                    </label>
+                  )}
                 </div>
 
-                {/* Start Slot Offset */}
-                <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg font-bold text-blue-900" title="Start printing from a specific sticker slot if some stickers were already used">
-                  <label>Start at Slot #:</label>
+                {/* Preset selector */}
+                <div className="flex items-center gap-1.5 bg-purple-50 border border-purple-200 px-3 py-1 rounded-lg">
+                  <label className="font-bold text-purple-900">Sheet Preset:</label>
                   <select
-                    className="border rounded bg-white py-0.5 px-1 font-bold text-blue-950"
-                    value={startOffset}
-                    onChange={e => setStartOffset(parseInt(e.target.value) || 0)}
+                    className="border rounded bg-white py-0.5 px-2 font-bold text-purple-950 text-xs"
+                    onChange={e => applyPreset(e.target.value)}
+                    defaultValue="novajet_gapped"
                   >
-                    {Array.from({ length: 12 }, (_, i) => (
-                      <option key={i} value={i}>Slot {i + 1} {i === 0 ? '(Top-Left)' : ''}</option>
-                    ))}
+                    <option value="novajet_gapped">NovaJet 12L (2mm Gaps • Standard)</option>
+                    <option value="novajet_nogap">NovaJet 12L (0mm Gaps • Edge-to-Edge)</option>
+                    <option value="avery_12">Avery / Desmat (2.5mm Gaps • 99.1×42.3)</option>
                   </select>
                 </div>
-
-                {/* Fill single sheet toggle */}
-                {baseItems.length === 1 && (
-                  <label className="flex items-center gap-1.5 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={fillSingleSheet}
-                      onChange={e => setFillSingleSheet(e.target.checked)}
-                      className="accent-amber-600 rounded"
-                    />
-                    Fill Sheet (12 pcs)
-                  </label>
-                )}
               </div>
 
-              {/* Precise Margin Calibration Steppers */}
-              <div className="flex items-center gap-2 bg-stone-100 border border-stone-300 px-3 py-1 rounded-lg text-stone-700 font-semibold">
-                <span className="text-[11px] font-bold uppercase text-stone-500">Fine-Tune Alignment:</span>
+              {/* Row 2: Precise Gap & Margin Calibration Steppers (Persistent in localStorage) */}
+              <div className="flex items-center justify-between flex-wrap gap-2 bg-stone-100 border border-stone-300 p-2 rounded-lg text-stone-700 font-semibold">
                 <div className="flex items-center gap-1">
-                  <label className="text-[11px]">Top:</label>
+                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Margins:</span>
+                  <label className="text-[11px] font-bold">Top:</label>
                   <input
                     type="number"
                     step="0.5"
-                    min="10"
-                    max="25"
+                    min="0"
+                    max="30"
                     className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
                     value={topMarginMm}
-                    onChange={e => setTopMarginMm(parseFloat(e.target.value) || 16.5)}
+                    onChange={e => saveSetting('novajet_top_margin', parseFloat(e.target.value) || 0, setTopMarginMm)}
+                  />
+                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+
+                  <label className="text-[11px] font-bold">Side:</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="20"
+                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    value={leftMarginMm}
+                    onChange={e => saveSetting('novajet_left_margin', parseFloat(e.target.value) || 0, setLeftMarginMm)}
                   />
                   <span className="text-[10px] text-stone-500">mm</span>
                 </div>
-                <div className="flex items-center gap-1 ml-2">
-                  <label className="text-[11px]">Side:</label>
+
+                <div className="flex items-center gap-1 border-l border-stone-300 pl-3">
+                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Inter-Label Gaps:</span>
+                  <label className="text-[11px] font-bold text-blue-700">Row Gap (V):</label>
                   <input
                     type="number"
                     step="0.5"
-                    min="1"
-                    max="15"
+                    min="0"
+                    max="10"
+                    className="w-14 text-center border border-blue-300 rounded bg-white py-0.5 font-bold text-xs text-blue-900"
+                    value={rowGapMm}
+                    onChange={e => saveSetting('novajet_row_gap', parseFloat(e.target.value) || 0, setRowGapMm)}
+                  />
+                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+
+                  <label className="text-[11px] font-bold text-blue-700">Col Gap (H):</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="10"
+                    className="w-14 text-center border border-blue-300 rounded bg-white py-0.5 font-bold text-xs text-blue-900"
+                    value={colGapMm}
+                    onChange={e => saveSetting('novajet_col_gap', parseFloat(e.target.value) || 0, setColGapMm)}
+                  />
+                  <span className="text-[10px] text-stone-500">mm</span>
+                </div>
+
+                <div className="flex items-center gap-1 border-l border-stone-300 pl-3">
+                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Label Size:</span>
+                  <label className="text-[11px] font-bold">W:</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="50"
+                    max="120"
                     className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
-                    value={leftMarginMm}
-                    onChange={e => setLeftMarginMm(parseFloat(e.target.value) || 5.0)}
+                    value={labelWidthMm}
+                    onChange={e => saveSetting('novajet_label_width', parseFloat(e.target.value) || 100, setLabelWidthMm)}
+                  />
+                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+
+                  <label className="text-[11px] font-bold">H:</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="20"
+                    max="80"
+                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    value={labelHeightMm}
+                    onChange={e => saveSetting('novajet_label_height', parseFloat(e.target.value) || 44, setLabelHeightMm)}
                   />
                   <span className="text-[10px] text-stone-500">mm</span>
                 </div>
@@ -3052,7 +3175,7 @@ ${pagesHtml}
             <div className="flex items-center gap-2">
               <span className="text-base">💡</span>
               <span>
-                <strong>Printer Dialog Setup:</strong> In the browser print dialog, set <strong>Scale: 100% (Actual Size)</strong>, <strong>Margins: None (0mm)</strong>, and turn <strong>OFF Headers &amp; Footers</strong> for exact sticker fit.
+                <strong>Printer Dialog Setup:</strong> Set <strong>Scale: 100% (Actual Size)</strong>, <strong>Margins: None (0mm)</strong>, and turn <strong>OFF Headers &amp; Footers</strong> for exact die-cut sticker fit.
               </span>
             </div>
           </div>
@@ -3061,15 +3184,15 @@ ${pagesHtml}
         {/* PRINT CONTAINER */}
         <div className="p-6 print:p-0">
           
-          {/* MODE 1: A4 SHEET GRID LAYOUT (Strict 2 Columns x 6 Rows = 12 Labels, 100mm x 44mm) */}
+          {/* MODE 1: A4 SHEET GRID LAYOUT */}
           {printMode === 'a4_grid' ? (
             <div>
               <div className="text-xs text-stone-500 mb-4 font-medium print:hidden flex justify-between items-center bg-stone-100 p-2.5 rounded-lg border border-stone-200">
                 <span className="font-semibold text-stone-700">
                   📋 Sheet Layout: <strong>{effectiveItems.length} label(s)</strong> placed starting at <strong>Slot #{startOffset + 1}</strong> • Total Pages: <strong>{Math.ceil(totalSlots.length / 12)} A4 Sheet(s)</strong>
                 </span>
-                <span className="text-stone-500 text-[11px]">
-                  NovaJet 12L Die-Cut: 100mm × 44mm • Top Margin {topMarginMm}mm • Side Margin {leftMarginMm}mm
+                <span className="text-stone-600 text-[11px] font-mono">
+                  Label: {labelWidthMm}×{labelHeightMm}mm • Gaps: V {rowGapMm}mm, H {colGapMm}mm • Margins: Top {topMarginMm}mm, Side {leftMarginMm}mm
                 </span>
               </div>
 
@@ -3078,10 +3201,11 @@ ${pagesHtml}
                 className="a4-sticker-print-area"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '100mm 100mm',
-                  gridAutoRows: '44mm',
-                  gap: '0mm',
-                  width: '200mm',
+                  gridTemplateColumns: `${labelWidthMm}mm ${labelWidthMm}mm`,
+                  gridAutoRows: `${labelHeightMm}mm`,
+                  columnGap: `${colGapMm}mm`,
+                  rowGap: `${rowGapMm}mm`,
+                  width: `${(2 * labelWidthMm) + colGapMm}mm`,
                   margin: '0 auto',
                   boxSizing: 'border-box',
                   justifyContent: 'start',
@@ -3095,8 +3219,8 @@ ${pagesHtml}
                         key={`blank-${idx}`}
                         className="a4-sticker-cell a4-sticker-cell-blank rounded-lg p-2 text-center border border-dashed border-stone-200 flex items-center justify-center"
                         style={{
-                          width: '100mm',
-                          height: '44mm',
+                          width: `${labelWidthMm}mm`,
+                          height: `${labelHeightMm}mm`,
                           boxSizing: 'border-box',
                           background: '#fafafa'
                         }}
@@ -3122,10 +3246,10 @@ ${pagesHtml}
                   return (
                     <div
                       key={`item-${idx}`}
-                      className="a4-sticker-cell bg-white p-2.5 text-center border border-dashed border-stone-300 print:border-none flex flex-col justify-between"
+                      className="a4-sticker-cell bg-white p-2 text-center border border-dashed border-stone-300 print:border-none flex flex-col justify-between"
                       style={{
-                        width: '100mm',
-                        height: '44mm',
+                        width: `${labelWidthMm}mm`,
+                        height: `${labelHeightMm}mm`,
                         boxSizing: 'border-box',
                         pageBreakInside: 'avoid'
                       }}
