@@ -2742,13 +2742,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       return `<div class="sheet-page" style="padding-top: ${topMarginMm}mm; padding-bottom: 16.5mm; padding-left: ${leftMarginMm}mm; padding-right: ${leftMarginMm}mm;">${cellsHtml}</div>`;
     }).join('');
 
-    // Open popup window and trigger print
-    const printWin = window.open('', '_blank', 'width=900,height=700');
-    if (!printWin) {
-      alert('Popup blocked! Please allow popups for this site and try again.');
-      return;
-    }
-    printWin.document.write(`<!DOCTYPE html>
+    const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -2756,7 +2750,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4 portrait; margin: 0mm !important; }
-  body { background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 0; padding: 0; }
   .sheet-page {
     width: 210mm;
     height: 297mm;
@@ -2807,22 +2801,13 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 </head>
 <body>
 ${pagesHtml}
-<script>
-  window.onload = function() {
-    setTimeout(function() { window.print(); window.close(); }, 350);
-  };
-</script>
 </body>
-</html>`);
-    printWin.document.close();
+</html>`;
+
+    printDocumentHtml(fullHtml);
   };
 
   const handlePrintTestPattern = () => {
-    const printWin = window.open('', '_blank', 'width=900,height=700');
-    if (!printWin) {
-      alert('Popup blocked! Please allow popups for this site.');
-      return;
-    }
     const testCells = Array.from({ length: 12 }, (_, i) => `
       <div style="width: 100mm; height: 44mm; box-sizing: border-box; border: 1px dashed #64748b; padding: 4mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center;">
         <div style="font-size: 9pt; font-weight: 800; color: #0f172a;">NovaJet 12L • Slot #${i + 1} (100mm × 44mm)</div>
@@ -2831,7 +2816,7 @@ ${pagesHtml}
       </div>
     `).join('');
 
-    printWin.document.write(`<!DOCTYPE html>
+    const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -2839,7 +2824,7 @@ ${pagesHtml}
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4 portrait; margin: 0mm !important; }
-  body { background: #fff; font-family: Arial, sans-serif; }
+  body { background: #fff; font-family: Arial, sans-serif; margin: 0; padding: 0; }
   .sheet-page {
     width: 210mm;
     height: 297mm;
@@ -2857,20 +2842,56 @@ ${pagesHtml}
 </head>
 <body>
 <div class="sheet-page">${testCells}</div>
-<script>
-  window.onload = function() {
-    setTimeout(function() { window.print(); window.close(); }, 350);
-  };
-</script>
 </body>
-</html>`);
-    printWin.document.close();
+</html>`;
+
+    printDocumentHtml(fullHtml);
+  };
+
+  const printDocumentHtml = (htmlContent) => {
+    // Safe in-page iframe printing — avoids Safari top-level window.close() GPU blackout bug
+    const existing = document.getElementById('barcode-print-frame');
+    if (existing) {
+      try { document.body.removeChild(existing); } catch(e) {}
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'barcode-print-frame';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '10px';
+    iframe.style.height = '10px';
+    iframe.style.border = 'none';
+    iframe.style.opacity = '0.01';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
+
+    try {
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+        } catch (err) {
+          console.error('Print iframe error, fallback:', err);
+          window.print();
+        }
+      }, 300);
+    } catch (e) {
+      console.error('Error creating print frame:', e);
+      window.print();
+    }
   };
 
   if (!isOpen || !data || baseItems.length === 0) return null;
 
   return (
-    <div className="barcode-print-modal-overlay fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:static print:inset-auto">
+    <div className="barcode-print-modal-overlay fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:static print:inset-auto">
       <div className="barcode-print-modal-card bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[94vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none print:overflow-visible">
         
         {/* Modal Header & Precision Controls */}
@@ -3847,7 +3868,7 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
   if (!isOpen) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 12 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 12 }}>
       <div style={{ maxWidth: 560, width: '100%', padding: 20, background: '#0f172a', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16, maxHeight: '95vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}>
 
         {/* Header */}
