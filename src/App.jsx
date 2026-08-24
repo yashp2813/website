@@ -2849,7 +2849,7 @@ ${pagesHtml}
   };
 
   const printDocumentHtml = (htmlContent) => {
-    // Safe in-page iframe printing — avoids Safari top-level window.close() GPU blackout bug
+    // Safe offscreen iframe printing with full A4 rendering dimensions (prevents Safari GPU blackout)
     const existing = document.getElementById('barcode-print-frame');
     if (existing) {
       try { document.body.removeChild(existing); } catch(e) {}
@@ -2858,13 +2858,12 @@ ${pagesHtml}
     const iframe = document.createElement('iframe');
     iframe.id = 'barcode-print-frame';
     iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '10px';
-    iframe.style.height = '10px';
+    iframe.style.left = '-9999px';
+    iframe.style.top = '-9999px';
+    iframe.style.width = '210mm';
+    iframe.style.height = '297mm';
     iframe.style.border = 'none';
-    iframe.style.opacity = '0.01';
-    iframe.style.pointerEvents = 'none';
+    iframe.style.zIndex = '-9999';
     document.body.appendChild(iframe);
 
     try {
@@ -2872,6 +2871,26 @@ ${pagesHtml}
       doc.open();
       doc.write(htmlContent);
       doc.close();
+
+      const cleanupAndRepaint = () => {
+        try {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        } catch(e) {}
+        // Force WebKit / Safari compositing layer refresh
+        window.requestAnimationFrame(() => {
+          document.body.style.display = 'none';
+          document.body.offsetHeight; // trigger reflow
+          document.body.style.display = '';
+          window.dispatchEvent(new Event('resize'));
+        });
+      };
+
+      try {
+        iframe.contentWindow.addEventListener('afterprint', cleanupAndRepaint, { once: true });
+        window.addEventListener('afterprint', cleanupAndRepaint, { once: true });
+      } catch(e) {}
 
       setTimeout(() => {
         try {
@@ -2881,7 +2900,7 @@ ${pagesHtml}
           console.error('Print iframe error, fallback:', err);
           window.print();
         }
-      }, 300);
+      }, 350);
     } catch (e) {
       console.error('Error creating print frame:', e);
       window.print();
@@ -4771,6 +4790,20 @@ export default function App() {
     };
     window.addEventListener('apex-mic-status-changed', handleStatus);
     return () => window.removeEventListener('apex-mic-status-changed', handleStatus);
+  }, []);
+
+  // Global Safari / WebKit print recovery: ensures screen compositing context repaints when print dialog closes
+  useEffect(() => {
+    const handleAfterPrint = () => {
+      window.requestAnimationFrame(() => {
+        document.body.style.display = 'none';
+        document.body.offsetHeight; // trigger reflow
+        document.body.style.display = '';
+        window.dispatchEvent(new Event('resize'));
+      });
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => window.removeEventListener('afterprint', handleAfterPrint);
   }, []);
 
   const handleAttachReelToJob = async (orderId, reel, stand) => {
@@ -10815,7 +10848,7 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   };
 
   return (
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
       <div className="bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[92vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
         
         {/* Top Header Bar */}
