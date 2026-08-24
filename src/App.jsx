@@ -2583,30 +2583,30 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
 
-  // Load saved calibration or use NovaJet 12L standard defaults (100x44mm with 2mm gaps: Top 11.5mm, Left 4.0mm, RowGap 2.0mm, ColGap 2.0mm)
+  // Photo-calibrated NovaJet 12L parameters: Top 13.0mm, Left 7.0mm, RowGap 3.5mm, ColGap 5.0mm, Width 95.5mm, Height 42.5mm
   const [topMarginMm, setTopMarginMm] = useState(() => {
     const saved = localStorage.getItem('novajet_top_margin');
-    return saved !== null ? parseFloat(saved) : 11.5;
+    return saved !== null ? parseFloat(saved) : 13.0;
   });
   const [leftMarginMm, setLeftMarginMm] = useState(() => {
     const saved = localStorage.getItem('novajet_left_margin');
-    return saved !== null ? parseFloat(saved) : 4.0;
+    return saved !== null ? parseFloat(saved) : 7.0;
   });
   const [rowGapMm, setRowGapMm] = useState(() => {
     const saved = localStorage.getItem('novajet_row_gap');
-    return saved !== null ? parseFloat(saved) : 2.0;
+    return saved !== null ? parseFloat(saved) : 3.5;
   });
   const [colGapMm, setColGapMm] = useState(() => {
     const saved = localStorage.getItem('novajet_col_gap');
-    return saved !== null ? parseFloat(saved) : 2.0;
+    return saved !== null ? parseFloat(saved) : 5.0;
   });
   const [labelWidthMm, setLabelWidthMm] = useState(() => {
     const saved = localStorage.getItem('novajet_label_width');
-    return saved !== null ? parseFloat(saved) : 100.0;
+    return saved !== null ? parseFloat(saved) : 95.5;
   });
   const [labelHeightMm, setLabelHeightMm] = useState(() => {
     const saved = localStorage.getItem('novajet_label_height');
-    return saved !== null ? parseFloat(saved) : 44.0;
+    return saved !== null ? parseFloat(saved) : 42.5;
   });
 
   const saveSetting = (key, val, setter) => {
@@ -2615,7 +2615,14 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   };
 
   const applyPreset = (preset) => {
-    if (preset === 'novajet_gapped') {
+    if (preset === 'novajet_measured') {
+      saveSetting('novajet_top_margin', 13.0, setTopMarginMm);
+      saveSetting('novajet_left_margin', 7.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 3.5, setRowGapMm);
+      saveSetting('novajet_col_gap', 5.0, setColGapMm);
+      saveSetting('novajet_label_width', 95.5, setLabelWidthMm);
+      saveSetting('novajet_label_height', 42.5, setLabelHeightMm);
+    } else if (preset === 'novajet_gapped') {
       saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
       saveSetting('novajet_left_margin', 4.0, setLeftMarginMm);
       saveSetting('novajet_row_gap', 2.0, setRowGapMm);
@@ -2638,6 +2645,12 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       saveSetting('novajet_label_height', 42.3, setLabelHeightMm);
     }
   };
+
+  // Quick nudges
+  const nudgeTop = (delta) => saveSetting('novajet_top_margin', Math.max(0, parseFloat((topMarginMm + delta).toFixed(1))), setTopMarginMm);
+  const nudgeLeft = (delta) => saveSetting('novajet_left_margin', Math.max(0, parseFloat((leftMarginMm + delta).toFixed(1))), setLeftMarginMm);
+  const nudgeRowGap = (delta) => saveSetting('novajet_row_gap', Math.max(0, parseFloat((rowGapMm + delta).toFixed(1))), setRowGapMm);
+  const nudgeColGap = (delta) => saveSetting('novajet_col_gap', Math.max(0, parseFloat((colGapMm + delta).toFixed(1))), setColGapMm);
 
   // Handle single item or array of items
   const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
@@ -2674,7 +2687,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   }
 
   // Generate barcode SVG for a given value using Code128 algorithm
-  const generateBarcodeSVG = (value, barWidth = 1.35, barHeight = 36) => {
+  const generateBarcodeSVG = (value, barWidth = 1.3, barHeight = 32) => {
     const CODE128B = {
       ' ':0,  '!':1,  '"':2,  '#':3,  '$':4,  '%':5,  '&':6,  "'":7,
       '(':8,  ')':9,  '*':10, '+':11, ',':12, '-':13, '.':14, '/':15,
@@ -2776,7 +2789,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
         const gsm = item.gsm || '-';
         const bf = item.bf || '-';
         const weightKg = item.balanceQty !== undefined ? item.balanceQty : (item.receivedQty || item.weight || '-');
-        const barcodeSvg = generateBarcodeSVG(sysId, 1.35, 34);
+        const barcodeSvg = generateBarcodeSVG(sysId, 1.25, 26);
 
         return `
           <div class="cell">
@@ -2826,10 +2839,12 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     min-height: ${labelHeightMm}mm;
     max-height: ${labelHeightMm}mm;
     box-sizing: border-box;
-    padding: 2.5mm 4.5mm 2mm 4.5mm;
+    padding: 3mm 4.5mm;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: center;
+    align-items: stretch;
+    gap: 0.8mm;
     overflow: hidden;
     page-break-inside: avoid;
     break-inside: avoid;
@@ -2842,14 +2857,14 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     justify-content: space-between;
     align-items: center;
     border-bottom: 0.5pt solid #cbd5e1;
-    padding-bottom: 0.8mm;
+    padding-bottom: 0.4mm;
   }
-  .reel-id { font-size: 11pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
-  .reel-sup { font-size: 7.5pt; font-weight: 700; color: #334155; text-align: right; max-width: 52%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
-  .cell-specs { font-size: 8pt; font-weight: 800; color: #0f172a; margin-top: 0.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cell-barcode { display: flex; justify-content: center; align-items: center; flex: 1; margin: 0.5mm 0; }
-  .cell-barcode svg { max-width: ${Math.max(50, labelWidthMm - 10)}mm; height: 22mm; }
-  .cell-text { font-family: 'Courier New', monospace; font-size: 7.5pt; font-weight: 800; color: #000; letter-spacing: 0.15em; text-align: center; }
+  .reel-id { font-size: 10.5pt; font-weight: 900; color: #000; letter-spacing: 0.02em; line-height: 1; }
+  .reel-sup { font-size: 7pt; font-weight: 700; color: #334155; text-align: right; max-width: 52%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; line-height: 1; }
+  .cell-specs { font-size: 7.5pt; font-weight: 800; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; line-height: 1.1; }
+  .cell-barcode { display: flex; justify-content: center; align-items: center; margin: 0.5mm 0; }
+  .cell-barcode svg { max-width: ${Math.max(45, labelWidthMm - 16)}mm; height: 16mm; }
+  .cell-text { font-family: 'Courier New', monospace; font-size: 7pt; font-weight: 800; color: #000; letter-spacing: 0.15em; text-align: center; line-height: 1; }
 </style>
 </head>
 <body>
@@ -2862,10 +2877,10 @@ ${pagesHtml}
 
   const handlePrintTestPattern = () => {
     const testCells = Array.from({ length: 12 }, (_, i) => `
-      <div style="width: ${labelWidthMm}mm; height: ${labelHeightMm}mm; box-sizing: border-box; border: 1.5px dashed #475569; padding: 3mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center; background: #fafafa;">
-        <div style="font-size: 8.5pt; font-weight: 800; color: #0f172a;">Slot #${i + 1} (${labelWidthMm}×${labelHeightMm}mm)</div>
-        <div style="font-size: 14pt; color: #64748b; line-height: 1;">+</div>
-        <div style="font-size: 7pt; font-weight: 700; color: #475569;">Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1} • Gaps: R ${rowGapMm}mm, C ${colGapMm}mm</div>
+      <div style="width: ${labelWidthMm}mm; height: ${labelHeightMm}mm; box-sizing: border-box; border: 1.5px dashed #475569; padding: 2.5mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center; background: #fafafa;">
+        <div style="font-size: 8pt; font-weight: 800; color: #0f172a;">Slot #${i + 1} (${labelWidthMm}×${labelHeightMm}mm)</div>
+        <div style="font-size: 13pt; color: #64748b; line-height: 1;">+</div>
+        <div style="font-size: 6.5pt; font-weight: 700; color: #475569;">Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1} • Gaps: R ${rowGapMm}mm, C ${colGapMm}mm</div>
       </div>
     `).join('');
 
@@ -2978,7 +2993,7 @@ ${pagesHtml}
                   </span>
                 </h3>
                 <p className="text-xs text-stone-500 font-medium">
-                  Fully calibrated for inter-label gaps (Vertical Row Gap &amp; Horizontal Col Gap) + Die-cut offsets.
+                  Calibrated for your physical sheet: Top {topMarginMm}mm, Side {leftMarginMm}mm, Row Gap {rowGapMm}mm, Col Gap {colGapMm}mm.
                 </p>
               </div>
             </div>
@@ -3024,7 +3039,7 @@ ${pagesHtml}
           {printMode === 'a4_grid' && (
             <div className="space-y-2 pt-2 border-t border-stone-200 text-xs">
               
-              {/* Row 1: Copies, Offset, Sheet fill, and Preset selector */}
+              {/* Row 1: Copies, Offset, Sheet fill, Preset selector, Quick Nudges */}
               <div className="flex items-center justify-between flex-wrap gap-2.5">
                 <div className="flex items-center gap-3 flex-wrap">
                   {/* Copies per reel */}
@@ -3075,10 +3090,11 @@ ${pagesHtml}
                   <select
                     className="border rounded bg-white py-0.5 px-2 font-bold text-purple-950 text-xs"
                     onChange={e => applyPreset(e.target.value)}
-                    defaultValue="novajet_gapped"
+                    defaultValue="novajet_measured"
                   >
-                    <option value="novajet_gapped">NovaJet 12L (2mm Gaps • Standard)</option>
-                    <option value="novajet_nogap">NovaJet 12L (0mm Gaps • Edge-to-Edge)</option>
+                    <option value="novajet_measured">🎯 Photo Calibrated (13mm Top, 3.5mm Row Gap, 5mm Col Gap)</option>
+                    <option value="novajet_gapped">NovaJet 12L (2mm Gaps Standard)</option>
+                    <option value="novajet_nogap">NovaJet 12L (0mm Gaps Flush)</option>
                     <option value="avery_12">Avery / Desmat (2.5mm Gaps • 99.1×42.3)</option>
                   </select>
                 </div>
@@ -3098,7 +3114,9 @@ ${pagesHtml}
                     value={topMarginMm}
                     onChange={e => saveSetting('novajet_top_margin', parseFloat(e.target.value) || 0, setTopMarginMm)}
                   />
-                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+                  <span className="text-[10px] text-stone-500 mr-1">mm</span>
+                  <button type="button" onClick={() => nudgeTop(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift down +0.5mm">⬇️</button>
+                  <button type="button" onClick={() => nudgeTop(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50 mr-2" title="Shift up -0.5mm">⬆️</button>
 
                   <label className="text-[11px] font-bold">Side:</label>
                   <input
@@ -3110,11 +3128,13 @@ ${pagesHtml}
                     value={leftMarginMm}
                     onChange={e => saveSetting('novajet_left_margin', parseFloat(e.target.value) || 0, setLeftMarginMm)}
                   />
-                  <span className="text-[10px] text-stone-500">mm</span>
+                  <span className="text-[10px] text-stone-500 mr-1">mm</span>
+                  <button type="button" onClick={() => nudgeLeft(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift right +0.5mm">➡️</button>
+                  <button type="button" onClick={() => nudgeLeft(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift left -0.5mm">⬅️</button>
                 </div>
 
                 <div className="flex items-center gap-1 border-l border-stone-300 pl-3">
-                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Inter-Label Gaps:</span>
+                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Gaps:</span>
                   <label className="text-[11px] font-bold text-blue-700">Row Gap (V):</label>
                   <input
                     type="number"
@@ -3125,7 +3145,9 @@ ${pagesHtml}
                     value={rowGapMm}
                     onChange={e => saveSetting('novajet_row_gap', parseFloat(e.target.value) || 0, setRowGapMm)}
                   />
-                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+                  <span className="text-[10px] text-stone-500 mr-1">mm</span>
+                  <button type="button" onClick={() => nudgeRowGap(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Expand row gap +0.5mm">➕</button>
+                  <button type="button" onClick={() => nudgeRowGap(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50 mr-2" title="Contract row gap -0.5mm">➖</button>
 
                   <label className="text-[11px] font-bold text-blue-700">Col Gap (H):</label>
                   <input
@@ -3137,22 +3159,24 @@ ${pagesHtml}
                     value={colGapMm}
                     onChange={e => saveSetting('novajet_col_gap', parseFloat(e.target.value) || 0, setColGapMm)}
                   />
-                  <span className="text-[10px] text-stone-500">mm</span>
+                  <span className="text-[10px] text-stone-500 mr-1">mm</span>
+                  <button type="button" onClick={() => nudgeColGap(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Expand col gap +0.5mm">➕</button>
+                  <button type="button" onClick={() => nudgeColGap(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Contract col gap -0.5mm">➖</button>
                 </div>
 
                 <div className="flex items-center gap-1 border-l border-stone-300 pl-3">
-                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Label Size:</span>
+                  <span className="text-[10px] font-extrabold uppercase text-stone-500 mr-1">Size:</span>
                   <label className="text-[11px] font-bold">W:</label>
                   <input
                     type="number"
                     step="0.5"
                     min="50"
                     max="120"
-                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    className="w-13 text-center border rounded bg-white py-0.5 font-bold text-xs"
                     value={labelWidthMm}
-                    onChange={e => saveSetting('novajet_label_width', parseFloat(e.target.value) || 100, setLabelWidthMm)}
+                    onChange={e => saveSetting('novajet_label_width', parseFloat(e.target.value) || 95.5, setLabelWidthMm)}
                   />
-                  <span className="text-[10px] text-stone-500 mr-2">mm</span>
+                  <span className="text-[10px] text-stone-500 mr-1.5">mm</span>
 
                   <label className="text-[11px] font-bold">H:</label>
                   <input
@@ -3160,9 +3184,9 @@ ${pagesHtml}
                     step="0.5"
                     min="20"
                     max="80"
-                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    className="w-13 text-center border rounded bg-white py-0.5 font-bold text-xs"
                     value={labelHeightMm}
-                    onChange={e => saveSetting('novajet_label_height', parseFloat(e.target.value) || 44, setLabelHeightMm)}
+                    onChange={e => saveSetting('novajet_label_height', parseFloat(e.target.value) || 42.5, setLabelHeightMm)}
                   />
                   <span className="text-[10px] text-stone-500">mm</span>
                 </div>
@@ -3246,26 +3270,27 @@ ${pagesHtml}
                   return (
                     <div
                       key={`item-${idx}`}
-                      className="a4-sticker-cell bg-white p-2 text-center border border-dashed border-stone-300 print:border-none flex flex-col justify-between"
+                      className="a4-sticker-cell bg-white p-2 text-center border border-dashed border-stone-300 print:border-none flex flex-col justify-center"
                       style={{
                         width: `${labelWidthMm}mm`,
                         height: `${labelHeightMm}mm`,
                         boxSizing: 'border-box',
-                        pageBreakInside: 'avoid'
+                        pageBreakInside: 'avoid',
+                        gap: '2px'
                       }}
                     >
                       {/* Top Header */}
-                      <div className="flex justify-between items-center border-b border-stone-200 pb-1">
-                        <span className="font-black text-black text-sm" style={{ fontSize: '12px', fontWeight: 900 }}>
+                      <div className="flex justify-between items-center border-b border-stone-200 pb-0.5">
+                        <span className="font-black text-black text-sm" style={{ fontSize: '11.5px', fontWeight: 900 }}>
                           ID: {systemReelId}
                         </span>
-                        <span className="text-[10px] font-bold text-stone-700 uppercase truncate max-w-[130px]">
+                        <span className="text-[9.5px] font-bold text-stone-700 uppercase truncate max-w-[125px]">
                           {supplierReelNo !== systemReelId ? `Sup: ${supplierReelNo}` : supplier} ({colour})
                         </span>
                       </div>
 
                       {/* Spec Summary Line */}
-                      <p className="text-[11px] font-extrabold text-black my-0.5" style={{ fontSize: '11px', fontWeight: 800 }}>
+                      <p className="text-[10.5px] font-extrabold text-black my-0.5" style={{ fontSize: '10.5px', fontWeight: 800 }}>
                         {sizeCm} cm | {gsm} GSM | {bf} BF | {weightKg} kg
                       </p>
 
@@ -3274,8 +3299,8 @@ ${pagesHtml}
                         {typeof Barcode !== 'undefined' ? (
                           <Barcode
                             value={reelNo}
-                            width={1.35}
-                            height={34}
+                            width={1.25}
+                            height={26}
                             displayValue={false}
                             margin={0}
                           />
@@ -3285,7 +3310,7 @@ ${pagesHtml}
                       </div>
 
                       {/* Reel No Below Barcode */}
-                      <p className="font-mono text-xs font-bold text-black tracking-wider" style={{ fontSize: '10.5px', fontWeight: 800 }}>
+                      <p className="font-mono text-xs font-bold text-black tracking-wider" style={{ fontSize: '10px', fontWeight: 800 }}>
                         {reelNo}
                       </p>
                     </div>
