@@ -2584,6 +2584,10 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
 
+  // Fine-tuning calibration for specific printer paper feed (NovaJet 12L standard: Top 16.5mm, Left 5.0mm)
+  const [topMarginMm, setTopMarginMm] = useState(16.5);
+  const [leftMarginMm, setLeftMarginMm] = useState(5.0);
+
   // Handle single item or array of items
   const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
 
@@ -2618,74 +2622,73 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     }
   }
 
-  const handlePrint = () => {
-    // Generate barcode SVG for a given value using Code128 algorithm
-    const generateBarcodeSVG = (value, barWidth = 1.4, barHeight = 40) => {
-      // Code128B encoding table
-      const CODE128B = {
-        ' ':0,  '!':1,  '"':2,  '#':3,  '$':4,  '%':5,  '&':6,  "'":7,
-        '(':8,  ')':9,  '*':10, '+':11, ',':12, '-':13, '.':14, '/':15,
-        '0':16, '1':17, '2':18, '3':19, '4':20, '5':21, '6':22, '7':23,
-        '8':24, '9':25, ':':26, ';':27, '<':28, '=':29, '>':30, '?':31,
-        '@':32, 'A':33, 'B':34, 'C':35, 'D':36, 'E':37, 'F':38, 'G':39,
-        'H':40, 'I':41, 'J':42, 'K':43, 'L':44, 'M':45, 'N':46, 'O':47,
-        'P':48, 'Q':49, 'R':50, 'S':51, 'T':52, 'U':53, 'V':54, 'W':55,
-        'X':56, 'Y':57, 'Z':58, '[':59, '\\':60, ']':61, '^':62, '_':63,
-        '`':64, 'a':65, 'b':66, 'c':67, 'd':68, 'e':69, 'f':70, 'g':71,
-        'h':72, 'i':73, 'j':74, 'k':75, 'l':76, 'm':77, 'n':78, 'o':79,
-        'p':80, 'q':81, 'r':82, 's':83, 't':84, 'u':85, 'v':86, 'w':87,
-        'x':88, 'y':89, 'z':90, '{':91, '|':92, '}':93, '~':94
-      };
-      const PATTERNS = [
-        '11011001100','11001101100','11001100110','10010011000','10010001100',
-        '10001001100','10011001000','10011000100','10001100100','11001001000',
-        '11001000100','11000100100','10110011100','10011011100','10011001110',
-        '10111001100','10011101100','10011100110','11001110010','11001011100',
-        '11001001110','11011100100','11001110100','11101101110','11101001100',
-        '11100101100','11100100110','11101100100','11100110100','11100110010',
-        '11011011000','11011000110','11000110110','10100011000','10001011000',
-        '10001000110','10110001000','10001101000','10001100010','11010001000',
-        '11000101000','11000100010','10110111000','10110001110','10001101110',
-        '10111011000','10111000110','10001110110','11101110110','11010001110',
-        '11000101110','11011101000','11011100010','11011101110','11101011000',
-        '11101000110','11100010110','11101101000','11101100010','11100011010',
-        '11101111010','11001000010','11110001010','10100110000','10100001100',
-        '10010110000','10010000110','10000101100','10000100110','10110010000',
-        '10110000100','10011010000','10011000010','10000110100','10000110010',
-        '11000010010','11001010000','11110111010','11000010100','10001111010',
-        '10100111100','10010111100','10010011110','10111100100','10011110100',
-        '10011110010','11110100100','11110010100','11110010010','11011011110',
-        '11011110110','11110110110','10101111000','10100011110','10001011110',
-        '10111101000','10111100010','11110101000','11110100010','10111011110',
-        '10111101110','11101011110','11110101110','11010000100','11010010000',
-        '11010011100','1100011101011'
-      ];
-      const START_B = 104;
-      const STOP = 106;
-      const codes = [START_B];
-      let checksum = START_B;
-      for (let i = 0; i < value.length; i++) {
-        const c = CODE128B[value[i]];
-        if (c === undefined) continue;
-        codes.push(c);
-        checksum += c * (i + 1);
-      }
-      codes.push(checksum % 103);
-      codes.push(STOP);
-      let barsStr = '';
-      codes.forEach(c => { barsStr += PATTERNS[c] || ''; });
-      let x = 0;
-      let rects = '';
-      for (let i = 0; i < barsStr.length; i++) {
-        if (barsStr[i] === '1') {
-          rects += `<rect x="${x * barWidth}" y="0" width="${barWidth}" height="${barHeight}" fill="black"/>`;
-        }
-        x++;
-      }
-      const totalWidth = barsStr.length * barWidth;
-      return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${barHeight}" viewBox="0 0 ${totalWidth} ${barHeight}">${rects}</svg>`;
+  // Generate barcode SVG for a given value using Code128 algorithm
+  const generateBarcodeSVG = (value, barWidth = 1.35, barHeight = 36) => {
+    const CODE128B = {
+      ' ':0,  '!':1,  '"':2,  '#':3,  '$':4,  '%':5,  '&':6,  "'":7,
+      '(':8,  ')':9,  '*':10, '+':11, ',':12, '-':13, '.':14, '/':15,
+      '0':16, '1':17, '2':18, '3':19, '4':20, '5':21, '6':22, '7':23,
+      '8':24, '9':25, ':':26, ';':27, '<':28, '=':29, '>':30, '?':31,
+      '@':32, 'A':33, 'B':34, 'C':35, 'D':36, 'E':37, 'F':38, 'G':39,
+      'H':40, 'I':41, 'J':42, 'K':43, 'L':44, 'M':45, 'N':46, 'O':47,
+      'P':48, 'Q':49, 'R':50, 'S':51, 'T':52, 'U':53, 'V':54, 'W':55,
+      'X':56, 'Y':57, 'Z':58, '[':59, '\\':60, ']':61, '^':62, '_':63,
+      '`':64, 'a':65, 'b':66, 'c':67, 'd':68, 'e':69, 'f':70, 'g':71,
+      'h':72, 'i':73, 'j':74, 'k':75, 'l':76, 'm':77, 'n':78, 'o':79,
+      'p':80, 'q':81, 'r':82, 's':83, 't':84, 'u':85, 'v':86, 'w':87,
+      'x':88, 'y':89, 'z':90, '{':91, '|':92, '}':93, '~':94
     };
+    const PATTERNS = [
+      '11011001100','11001101100','11001100110','10010011000','10010001100',
+      '10001001100','10011001000','10011000100','10001100100','11001001000',
+      '11001000100','11000100100','10110011100','10011011100','10011001110',
+      '10111001100','10011101100','10011100110','11001110010','11001011100',
+      '11001001110','11011100100','11001110100','11101101110','11101001100',
+      '11100101100','11100100110','11101100100','11100110100','11100110010',
+      '11011011000','11011000110','11000110110','10100011000','10001011000',
+      '10001000110','10110001000','10001101000','10001100010','11010001000',
+      '11000101000','11000100010','10110111000','10110001110','10001101110',
+      '10111011000','10111000110','10001110110','11101110110','11010001110',
+      '11000101110','11011101000','11011100010','11011101110','11101011000',
+      '11101000110','11100010110','11101101000','11101100010','11100011010',
+      '11101111010','11001000010','11110001010','10100110000','10100001100',
+      '10010110000','10010000110','10000101100','10000100110','10110010000',
+      '10110000100','10011010000','10011000010','10000110100','10000110010',
+      '11000010010','11001010000','11110111010','11000010100','10001111010',
+      '10100111100','10010111100','10010011110','10111100100','10011110100',
+      '10011110010','11110100100','11110010100','11110010010','11011011110',
+      '11011110110','11110110110','10101111000','10100011110','10001011110',
+      '10111101000','10111100010','11110101000','11110100010','10111011110',
+      '10111101110','11101011110','11110101110','11010000100','11010010000',
+      '11010011100','1100011101011'
+    ];
+    const START_B = 104;
+    const STOP = 106;
+    const codes = [START_B];
+    let checksum = START_B;
+    for (let i = 0; i < value.length; i++) {
+      const c = CODE128B[value[i]];
+      if (c === undefined) continue;
+      codes.push(c);
+      checksum += c * (i + 1);
+    }
+    codes.push(checksum % 103);
+    codes.push(STOP);
+    let barsStr = '';
+    codes.forEach(c => { barsStr += PATTERNS[c] || ''; });
+    let x = 0;
+    let rects = '';
+    for (let i = 0; i < barsStr.length; i++) {
+      if (barsStr[i] === '1') {
+        rects += `<rect x="${x * barWidth}" y="0" width="${barWidth}" height="${barHeight}" fill="black"/>`;
+      }
+      x++;
+    }
+    const totalWidth = barsStr.length * barWidth;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${barHeight}" viewBox="0 0 ${totalWidth} ${barHeight}">${rects}</svg>`;
+  };
 
+  const handlePrint = () => {
     // Build the full sticker slot list (12 slots per page)
     const slots = [];
     for (let i = 0; i < startOffset; i++) slots.push(null);
@@ -2693,43 +2696,53 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     const rem = slots.length % 12;
     if (rem !== 0) for (let p = 0; p < (12 - rem); p++) slots.push(null);
 
-    // Generate HTML for each sticker cell (100mm x 44mm)
-    const cellsHtml = slots.map(item => {
-      if (!item) {
-        return `<div class="cell cell-blank"></div>`;
-      }
-      const sysId = item.systemReelId || (() => {
-        const inventoryRef = allInventory.length > 0 ? allInventory : baseItems;
-        const sorted = [...inventoryRef].sort((a, b) => {
-          const tA = new Date(a.date || a.createdAt || 0).getTime();
-          const tB = new Date(b.date || b.createdAt || 0).getTime();
-          if (tA !== tB) return tA - tB;
-          return String(a.id || '').localeCompare(String(b.id || ''));
-        });
-        const idx = sorted.findIndex(x => x.id === item.id || x.reelNo === item.reelNo);
-        return idx !== -1 ? `RL-${String(idx + 1).padStart(5, '0')}` : 'RL-00001';
-      })();
-      const supNo = String(item.supplierReelNo || item.reelNo || '-').trim();
-      const colour = item.colour || item.color || 'Kraft';
-      const millName = item.millName || 'Mill';
-      const sizeCm = item.size || '-';
-      const gsm = item.gsm || '-';
-      const bf = item.bf || '-';
-      const weightKg = item.balanceQty !== undefined ? item.balanceQty : (item.receivedQty || item.weight || '-');
-      const barcodeSvg = generateBarcodeSVG(sysId, 1.35, 38);
-      return `
-        <div class="cell">
-          <div class="cell-header">
-            <span class="reel-id">${sysId}</span>
-            <span class="reel-sup">Sup: ${supNo} (${colour})</span>
-          </div>
-          <div class="cell-specs">${sizeCm}cm &bull; ${gsm} GSM &bull; ${bf} BF &bull; ${weightKg} kg &bull; ${millName}</div>
-          <div class="cell-barcode">${barcodeSvg}</div>
-          <div class="cell-text">${sysId}</div>
-        </div>`;
+    // Split slots into 12-item chunks for strict multi-page A4 alignment
+    const pages = [];
+    for (let i = 0; i < slots.length; i += 12) {
+      pages.push(slots.slice(i, i + 12));
+    }
+
+    const pagesHtml = pages.map((pageSlots, pageIdx) => {
+      const cellsHtml = pageSlots.map(item => {
+        if (!item) {
+          return `<div class="cell cell-blank"></div>`;
+        }
+        const sysId = item.systemReelId || (() => {
+          const inventoryRef = allInventory.length > 0 ? allInventory : baseItems;
+          const sorted = [...inventoryRef].sort((a, b) => {
+            const tA = new Date(a.date || a.createdAt || 0).getTime();
+            const tB = new Date(b.date || b.createdAt || 0).getTime();
+            if (tA !== tB) return tA - tB;
+            return String(a.id || '').localeCompare(String(b.id || ''));
+          });
+          const idx = sorted.findIndex(x => x.id === item.id || x.reelNo === item.reelNo);
+          return idx !== -1 ? `RL-${String(idx + 1).padStart(5, '0')}` : 'RL-00001';
+        })();
+        const supNo = String(item.supplierReelNo || item.reelNo || '-').trim();
+        const colour = item.colour || item.color || 'Kraft';
+        const millName = item.millName || 'Mill';
+        const sizeCm = item.size || '-';
+        const gsm = item.gsm || '-';
+        const bf = item.bf || '-';
+        const weightKg = item.balanceQty !== undefined ? item.balanceQty : (item.receivedQty || item.weight || '-');
+        const barcodeSvg = generateBarcodeSVG(sysId, 1.35, 34);
+
+        return `
+          <div class="cell">
+            <div class="cell-header">
+              <span class="reel-id">${sysId}</span>
+              <span class="reel-sup">Sup: ${supNo} (${colour})</span>
+            </div>
+            <div class="cell-specs">${sizeCm}cm &bull; ${gsm} GSM &bull; ${bf} BF &bull; ${weightKg} kg &bull; ${millName}</div>
+            <div class="cell-barcode">${barcodeSvg}</div>
+            <div class="cell-text">${sysId}</div>
+          </div>`;
+      }).join('');
+
+      return `<div class="sheet-page" style="padding-top: ${topMarginMm}mm; padding-bottom: 16.5mm; padding-left: ${leftMarginMm}mm; padding-right: ${leftMarginMm}mm;">${cellsHtml}</div>`;
     }).join('');
 
-    // Open a clean popup window and print
+    // Open popup window and trigger print
     const printWin = window.open('', '_blank', 'width=900,height=700');
     if (!printWin) {
       alert('Popup blocked! Please allow popups for this site and try again.');
@@ -2739,51 +2752,114 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Reel Barcode Stickers (100x44mm)</title>
+<title>NovaJet 12L Barcode Stickers (100x44mm)</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  @page { size: A4 portrait; margin: 16mm 5mm; }
-  body { background: #fff; font-family: Arial, sans-serif; }
-  .grid {
+  @page { size: A4 portrait; margin: 0mm !important; }
+  body { background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .sheet-page {
+    width: 210mm;
+    height: 297mm;
+    min-height: 297mm;
+    max-height: 297mm;
+    box-sizing: border-box;
+    page-break-after: always;
+    break-after: page;
     display: grid;
     grid-template-columns: 100mm 100mm;
-    grid-auto-rows: 44mm;
-    gap: 0;
-    width: 200mm;
-    margin: 0 auto;
+    grid-template-rows: 44mm 44mm 44mm 44mm 44mm 44mm;
+    column-gap: 0mm;
+    row-gap: 0mm;
+    overflow: hidden;
+    background: #fff;
   }
   .cell {
     width: 100mm;
     height: 44mm;
-    padding: 3mm 4.5mm 2.5mm 4.5mm;
+    min-height: 44mm;
+    max-height: 44mm;
+    box-sizing: border-box;
+    padding: 2.5mm 4.5mm 2mm 4.5mm;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     overflow: hidden;
     page-break-inside: avoid;
     break-inside: avoid;
+    background: #fff;
+    border: none;
   }
   .cell-blank { visibility: hidden; }
   .cell-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 0.5pt solid #bbb;
-    padding-bottom: 1mm;
+    border-bottom: 0.5pt solid #cbd5e1;
+    padding-bottom: 0.8mm;
   }
-  .reel-id { font-size: 11.5pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
-  .reel-sup { font-size: 8pt; font-weight: 700; color: #333; text-align: right; max-width: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
-  .cell-specs { font-size: 8pt; font-weight: 700; color: #000; margin-top: 0.5mm; }
-  .cell-barcode { display: flex; justify-content: center; flex: 1; align-items: center; }
-  .cell-barcode svg { max-width: 100%; }
+  .reel-id { font-size: 11pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
+  .reel-sup { font-size: 7.5pt; font-weight: 700; color: #334155; text-align: right; max-width: 52%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
+  .cell-specs { font-size: 8pt; font-weight: 800; color: #0f172a; margin-top: 0.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell-barcode { display: flex; justify-content: center; align-items: center; flex: 1; margin: 0.5mm 0; }
+  .cell-barcode svg { max-width: 90mm; height: 22mm; }
   .cell-text { font-family: 'Courier New', monospace; font-size: 7.5pt; font-weight: 800; color: #000; letter-spacing: 0.15em; text-align: center; }
 </style>
 </head>
 <body>
-<div class="grid">${cellsHtml}</div>
+${pagesHtml}
 <script>
   window.onload = function() {
-    setTimeout(function() { window.print(); window.close(); }, 400);
+    setTimeout(function() { window.print(); window.close(); }, 350);
+  };
+</script>
+</body>
+</html>`);
+    printWin.document.close();
+  };
+
+  const handlePrintTestPattern = () => {
+    const printWin = window.open('', '_blank', 'width=900,height=700');
+    if (!printWin) {
+      alert('Popup blocked! Please allow popups for this site.');
+      return;
+    }
+    const testCells = Array.from({ length: 12 }, (_, i) => `
+      <div style="width: 100mm; height: 44mm; box-sizing: border-box; border: 1px dashed #64748b; padding: 4mm; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center;">
+        <div style="font-size: 9pt; font-weight: 800; color: #0f172a;">NovaJet 12L • Slot #${i + 1} (100mm × 44mm)</div>
+        <div style="font-size: 14pt; color: #94a3b8;">+</div>
+        <div style="font-size: 7.5pt; font-weight: 700; color: #64748b;">Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1}</div>
+      </div>
+    `).join('');
+
+    printWin.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NovaJet 12L Alignment Test Sheet</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  @page { size: A4 portrait; margin: 0mm !important; }
+  body { background: #fff; font-family: Arial, sans-serif; }
+  .sheet-page {
+    width: 210mm;
+    height: 297mm;
+    box-sizing: border-box;
+    padding-top: ${topMarginMm}mm;
+    padding-bottom: 16.5mm;
+    padding-left: ${leftMarginMm}mm;
+    padding-right: ${leftMarginMm}mm;
+    display: grid;
+    grid-template-columns: 100mm 100mm;
+    grid-template-rows: 44mm 44mm 44mm 44mm 44mm 44mm;
+    gap: 0;
+  }
+</style>
+</head>
+<body>
+<div class="sheet-page">${testCells}</div>
+<script>
+  window.onload = function() {
+    setTimeout(function() { window.print(); window.close(); }, 350);
   };
 </script>
 </body>
@@ -2798,92 +2874,147 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       <div className="barcode-print-modal-card bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[94vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none print:overflow-visible">
         
         {/* Modal Header & Precision Controls */}
-        <div className="barcode-print-modal-header flex justify-between items-center px-6 py-4 border-b border-stone-200 bg-stone-50 print:hidden sticky top-0 z-10 flex-wrap gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">🖨️</span>
-            <div>
-              <h3 className="font-extrabold text-stone-900 text-base flex items-center gap-2">
-                A4 Sticker Sheet Barcode Print Center
-                <span className="bg-blue-100 text-blue-800 text-[11px] font-bold px-2 py-0.5 rounded-full">
-                  {baseItems.length} {baseItems.length === 1 ? 'Reel Selected' : 'Reels Selected'}
-                </span>
-              </h3>
-              <p className="text-xs text-stone-500 font-medium">
-                Standard 12-up Die-Cut Sheet (100mm × 44mm • 2 Cols × 6 Rows) • Strict Top-Left Grid Alignment
-              </p>
+        <div className="barcode-print-modal-header px-6 py-4 border-b border-stone-200 bg-stone-50 print:hidden sticky top-0 z-10 flex flex-col gap-3">
+          <div className="flex justify-between items-center flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🖨️</span>
+              <div>
+                <h3 className="font-extrabold text-stone-900 text-base flex items-center gap-2">
+                  NovaJet 12L Barcode Print Center
+                  <span className="bg-purple-100 text-purple-800 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full">
+                    NovaJet 12L (100mm × 44mm • 2×6 Grid)
+                  </span>
+                </h3>
+                <p className="text-xs text-stone-500 font-medium">
+                  Configured for TechNova NovaJet MPL 12L self-adhesive sheets with zero-margin pagination.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {/* Mode Selector */}
+              <div className="flex bg-stone-200 p-1 rounded-lg text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => setPrintMode('a4_grid')}
+                  className={`px-3 py-1.5 rounded-md transition ${printMode === 'a4_grid' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-700 hover:text-stone-900'}`}
+                >
+                  📄 NovaJet 12L Grid
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintMode('single')}
+                  className={`px-3 py-1.5 rounded-md transition ${printMode === 'single' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-700 hover:text-stone-900'}`}
+                >
+                  📦 Large Card / Thermal
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePrintTestPattern}
+                className="px-3 py-2 bg-stone-100 hover:bg-stone-200 border border-stone-300 text-stone-800 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                title="Print outline test sheet on regular plain A4 paper to test against your NovaJet sheet before using stickers"
+              >
+                🎯 Print Alignment Test Sheet
+              </button>
+
+              <button onClick={handlePrint} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-extrabold transition flex items-center gap-1.5 shadow-sm">
+                🖨️ Print Labels
+              </button>
+              <button onClick={onClose} className="px-3 py-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-lg text-xs font-bold transition">
+                ✕ Close
+              </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Mode Selector */}
-            <div className="flex bg-stone-200 p-1 rounded-lg text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setPrintMode('a4_grid')}
-                className={`px-3 py-1.5 rounded-md transition ${printMode === 'a4_grid' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-700 hover:text-stone-900'}`}
-              >
-                📄 A4 Sheet Grid (12-Up)
-              </button>
-              <button
-                type="button"
-                onClick={() => setPrintMode('single')}
-                className={`px-3 py-1.5 rounded-md transition ${printMode === 'single' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-700 hover:text-stone-900'}`}
-              >
-                📦 Standard Card / Thermal
-              </button>
+          {/* Secondary Controls Bar: Margin Calibration & Offsets */}
+          {printMode === 'a4_grid' && (
+            <div className="flex items-center justify-between flex-wrap gap-2.5 pt-2 border-t border-stone-200 text-xs">
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Copies per reel */}
+                <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-300 px-2.5 py-1 rounded-lg font-bold text-stone-800">
+                  <label>Copies/Reel:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="12"
+                    disabled={fillSingleSheet && baseItems.length === 1}
+                    className="w-12 text-center border rounded bg-white py-0.5 font-bold"
+                    value={copiesPerItem}
+                    onChange={e => setCopiesPerItem(Math.max(1, parseInt(e.target.value) || 1))}
+                  />
+                </div>
+
+                {/* Start Slot Offset */}
+                <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg font-bold text-blue-900" title="Start printing from a specific sticker slot if some stickers were already used">
+                  <label>Start at Slot #:</label>
+                  <select
+                    className="border rounded bg-white py-0.5 px-1 font-bold text-blue-950"
+                    value={startOffset}
+                    onChange={e => setStartOffset(parseInt(e.target.value) || 0)}
+                  >
+                    {Array.from({ length: 12 }, (_, i) => (
+                      <option key={i} value={i}>Slot {i + 1} {i === 0 ? '(Top-Left)' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Fill single sheet toggle */}
+                {baseItems.length === 1 && (
+                  <label className="flex items-center gap-1.5 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={fillSingleSheet}
+                      onChange={e => setFillSingleSheet(e.target.checked)}
+                      className="accent-amber-600 rounded"
+                    />
+                    Fill Sheet (12 pcs)
+                  </label>
+                )}
+              </div>
+
+              {/* Precise Margin Calibration Steppers */}
+              <div className="flex items-center gap-2 bg-stone-100 border border-stone-300 px-3 py-1 rounded-lg text-stone-700 font-semibold">
+                <span className="text-[11px] font-bold uppercase text-stone-500">Fine-Tune Alignment:</span>
+                <div className="flex items-center gap-1">
+                  <label className="text-[11px]">Top:</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="10"
+                    max="25"
+                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    value={topMarginMm}
+                    onChange={e => setTopMarginMm(parseFloat(e.target.value) || 16.5)}
+                  />
+                  <span className="text-[10px] text-stone-500">mm</span>
+                </div>
+                <div className="flex items-center gap-1 ml-2">
+                  <label className="text-[11px]">Side:</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="15"
+                    className="w-14 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    value={leftMarginMm}
+                    onChange={e => setLeftMarginMm(parseFloat(e.target.value) || 5.0)}
+                  />
+                  <span className="text-[10px] text-stone-500">mm</span>
+                </div>
+              </div>
             </div>
+          )}
 
-            {/* Copies per reel */}
-            {printMode === 'a4_grid' && (
-              <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-300 px-2.5 py-1 rounded-lg text-xs font-bold text-stone-800">
-                <label>Copies/Reel:</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="12"
-                  disabled={fillSingleSheet && baseItems.length === 1}
-                  className="w-12 text-center border rounded bg-white py-0.5 font-bold"
-                  value={copiesPerItem}
-                  onChange={e => setCopiesPerItem(Math.max(1, parseInt(e.target.value) || 1))}
-                />
-              </div>
-            )}
-
-            {/* Start Slot Offset (for reusing partially peeled A4 sheets) */}
-            {printMode === 'a4_grid' && (
-              <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg text-xs font-bold text-blue-900" title="Start printing from a specific sticker slot if some stickers were already used">
-                <label>Start at Slot #:</label>
-                <select
-                  className="border rounded bg-white py-0.5 px-1 font-bold text-blue-950"
-                  value={startOffset}
-                  onChange={e => setStartOffset(parseInt(e.target.value) || 0)}
-                >
-                  {Array.from({ length: 12 }, (_, i) => (
-                    <option key={i} value={i}>Slot {i + 1} {i === 0 ? '(Top-Left)' : ''}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Fill single sheet toggle if only 1 reel is selected */}
-            {baseItems.length === 1 && printMode === 'a4_grid' && (
-              <label className="flex items-center gap-1.5 text-xs font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={fillSingleSheet}
-                  onChange={e => setFillSingleSheet(e.target.checked)}
-                  className="accent-amber-600 rounded"
-                />
-                Fill Sheet (12 pcs)
-              </label>
-            )}
-
-            <button onClick={handlePrint} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-extrabold transition flex items-center gap-1.5 shadow-sm">
-              🖨️ Print Labels
-            </button>
-            <button onClick={onClose} className="px-3 py-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-lg text-xs font-bold transition">
-              ✕ Close
-            </button>
+          {/* Printer Setup Checklist Notice */}
+          <div className="bg-amber-50 border border-amber-300 rounded-lg p-2 flex items-center justify-between gap-3 text-xs text-amber-900">
+            <div className="flex items-center gap-2">
+              <span className="text-base">💡</span>
+              <span>
+                <strong>Printer Dialog Setup:</strong> In the browser print dialog, set <strong>Scale: 100% (Actual Size)</strong>, <strong>Margins: None (0mm)</strong>, and turn <strong>OFF Headers &amp; Footers</strong> for exact sticker fit.
+              </span>
+            </div>
           </div>
         </div>
 
@@ -2898,7 +3029,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                   📋 Sheet Layout: <strong>{effectiveItems.length} label(s)</strong> placed starting at <strong>Slot #{startOffset + 1}</strong> • Total Pages: <strong>{Math.ceil(totalSlots.length / 12)} A4 Sheet(s)</strong>
                 </span>
                 <span className="text-stone-500 text-[11px]">
-                  Labels strictly align to the physical 12-up die-cut grid (100mm × 44mm) from top-left.
+                  NovaJet 12L Die-Cut: 100mm × 44mm • Top Margin {topMarginMm}mm • Side Margin {leftMarginMm}mm
                 </span>
               </div>
 
@@ -2907,9 +3038,11 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                 className="a4-sticker-print-area"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 1fr)',
-                  gap: '3mm 4mm',
-                  width: '100%',
+                  gridTemplateColumns: '100mm 100mm',
+                  gridAutoRows: '44mm',
+                  gap: '0mm',
+                  width: '200mm',
+                  margin: '0 auto',
                   boxSizing: 'border-box',
                   justifyContent: 'start',
                   alignContent: 'start'
@@ -2922,8 +3055,8 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                         key={`blank-${idx}`}
                         className="a4-sticker-cell a4-sticker-cell-blank rounded-lg p-2 text-center border border-dashed border-stone-200 flex items-center justify-center"
                         style={{
-                          minHeight: '144px',
-                          maxHeight: '150px',
+                          width: '100mm',
+                          height: '44mm',
                           boxSizing: 'border-box',
                           background: '#fafafa'
                         }}
@@ -2949,26 +3082,26 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                   return (
                     <div
                       key={`item-${idx}`}
-                      className="a4-sticker-cell bg-white rounded-lg p-2.5 text-center border border-dashed border-stone-400 print:rounded-none flex flex-col justify-between"
+                      className="a4-sticker-cell bg-white p-2.5 text-center border border-dashed border-stone-300 print:border-none flex flex-col justify-between"
                       style={{
-                        minHeight: '144px',
-                        maxHeight: '150px',
-                        pageBreakInside: 'avoid',
-                        boxSizing: 'border-box'
+                        width: '100mm',
+                        height: '44mm',
+                        boxSizing: 'border-box',
+                        pageBreakInside: 'avoid'
                       }}
                     >
                       {/* Top Header */}
                       <div className="flex justify-between items-center border-b border-stone-200 pb-1">
-                        <span className="font-black text-black text-sm" style={{ fontSize: '12.5px', fontWeight: 900 }}>
+                        <span className="font-black text-black text-sm" style={{ fontSize: '12px', fontWeight: 900 }}>
                           ID: {systemReelId}
                         </span>
-                        <span className="text-[10.5px] font-bold text-stone-700 uppercase truncate max-w-[140px]">
+                        <span className="text-[10px] font-bold text-stone-700 uppercase truncate max-w-[130px]">
                           {supplierReelNo !== systemReelId ? `Sup: ${supplierReelNo}` : supplier} ({colour})
                         </span>
                       </div>
 
                       {/* Spec Summary Line */}
-                      <p className="text-[11.5px] font-extrabold text-black my-1" style={{ fontSize: '11.5px', fontWeight: 800 }}>
+                      <p className="text-[11px] font-extrabold text-black my-0.5" style={{ fontSize: '11px', fontWeight: 800 }}>
                         {sizeCm} cm | {gsm} GSM | {bf} BF | {weightKg} kg
                       </p>
 
@@ -2977,8 +3110,8 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                         {typeof Barcode !== 'undefined' ? (
                           <Barcode
                             value={reelNo}
-                            width={1.4}
-                            height={36}
+                            width={1.35}
+                            height={34}
                             displayValue={false}
                             margin={0}
                           />
@@ -2988,7 +3121,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                       </div>
 
                       {/* Reel No Below Barcode */}
-                      <p className="font-mono text-xs font-bold text-black tracking-wider" style={{ fontSize: '11px', fontWeight: 800 }}>
+                      <p className="font-mono text-xs font-bold text-black tracking-wider" style={{ fontSize: '10.5px', fontWeight: 800 }}>
                         {reelNo}
                       </p>
                     </div>
