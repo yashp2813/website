@@ -3454,13 +3454,20 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
 
 // --- ENHANCED BARCODE / QR SCANNER MODAL WITH LIVE CAMERA & USB GUN INPUT ---
 function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], plannedJobs = [], production = [], wipStages = [], companies = [], onSelectReel, onSelectOrder, advanceWipStage, addLog, onAttachReel, prefilledJobId = '' }) {
-  const [scanTab, setScanTab] = useState('camera'); // 'camera' | 'usb'
+  const [scanTab, setScanTab] = useState('usb'); // Default to USB / Fast search to prevent accidental camera launch
   const [scanInput, setScanInput] = useState('');
   const [searchResult, setSearchResult] = useState(null);
   const [issueKg, setIssueKg] = useState('');
   const [issueReason, setIssueReason] = useState('');
   const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
   const [printModalData, setPrintModalData] = useState(null);
+
+  // Camera states
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
 
   // Attach to Job inline state
   const [mountJobId, setMountJobId] = useState('');
@@ -3472,76 +3479,115 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
   const html5QrcodeScannerRef = useRef(null);
   const lastScannedRef = useRef(''); // debounce duplicate scans
 
+  const stopCamera = async () => {
+    if (html5QrcodeScannerRef.current) {
+      try {
+        if (html5QrcodeScannerRef.current.isScanning) {
+          await html5QrcodeScannerRef.current.stop();
+        }
+        html5QrcodeScannerRef.current.clear();
+      } catch (e) {}
+      html5QrcodeScannerRef.current = null;
+    }
+    const el = document.getElementById('html5-qr-video-reader');
+    if (el) {
+      const v = el.querySelector('video');
+      if (v && v.srcObject) {
+        try {
+          const tracks = v.srcObject.getTracks();
+          tracks.forEach(t => t.stop());
+        } catch(e) {}
+      }
+      el.innerHTML = '';
+    }
+    setIsCameraActive(false);
+    setCameraLoading(false);
+  };
+
+  const startCameraScanner = async (preferredCameraId = '') => {
+    setCameraError(null);
+    setCameraLoading(true);
+    const scannerId = 'html5-qr-video-reader';
+
+    try {
+      await stopCamera();
+
+      // Enumerate cameras first without forcing exact hardware lock
+      let cameras = [];
+      try {
+        cameras = await Html5Qrcode.getCameras();
+        setAvailableCameras(cameras || []);
+      } catch (e) {
+        console.warn('Could not enumerate cameras:', e);
+      }
+
+      const targetCameraId = preferredCameraId || selectedCameraId || (cameras.length > 0 ? (cameras.find(c => c.label.toLowerCase().includes('back') || c.label.toLowerCase().includes('rear'))?.id || cameras[0].id) : null);
+      if (targetCameraId) setSelectedCameraId(targetCameraId);
+
+      const scanner = new Html5Qrcode(scannerId);
+      html5QrcodeScannerRef.current = scanner;
+
+      const config = {
+        fps: 15, // Smooth 15fps without causing GPU / display mode switches
+        qrbox: (w, h) => ({
+          width: Math.min(260, Math.floor(w * 0.85)),
+          height: Math.min(130, Math.floor(h * 0.55))
+        }),
+        formatsToSupport: [
+          0,  // QR_CODE
+          4,  // CODE_128
+          5,  // CODE_39
+          8,  // EAN_13
+          10, // UPC_A
+          11, // UPC_E
+          13, // DATA_MATRIX
+          14, // ITF
+        ],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      };
+
+      const onSuccess = (decodedText) => {
+        if (decodedText === lastScannedRef.current) return;
+        lastScannedRef.current = decodedText;
+        playBeepSound();
+        processScannedCode(decodedText);
+      };
+
+      if (targetCameraId) {
+        await scanner.start(targetCameraId, config, onSuccess, () => {});
+      } else {
+        await scanner.start({ facingMode: 'environment' }, config, onSuccess, () => {});
+      }
+
+      setIsCameraActive(true);
+      setCameraLoading(false);
+    } catch (err) {
+      console.error('Camera start error:', err);
+      setCameraError(err?.message || 'Camera could not be started. Please check browser permissions or use USB Scanner tab.');
+      setIsCameraActive(false);
+      setCameraLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       setScanInput('');
       setSearchResult(null);
       setMountJobId('');
+      setCameraError(null);
       if (scanTab === 'usb') {
-        setTimeout(() => inputRef.current?.focus(), 100);
+        setTimeout(() => inputRef.current?.focus(), 80);
       }
+    } else {
+      stopCamera();
     }
   }, [isOpen, scanTab]);
 
   useEffect(() => {
-    if (!isOpen || scanTab !== 'camera') return;
-
-    let active = true;
-    const scannerId = 'html5-qr-video-reader';
-
-    // High-performance config: 25fps, wide 16:9 ratio, barcode-optimised qrbox
-    const config = {
-      fps: 25,
-      qrbox: { width: 280, height: 120 },
-      aspectRatio: 1.777,
-      formatsToSupport: [
-        0,  // QR_CODE
-        4,  // CODE_128
-        5,  // CODE_39
-        8,  // EAN_13
-        10, // UPC_A
-        11, // UPC_E
-        13, // DATA_MATRIX
-        14, // ITF
-      ],
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-    };
-
-    const onSuccess = (decodedText) => {
-      if (!active) return;
-      if (decodedText === lastScannedRef.current) return; // skip duplicate in same session
-      lastScannedRef.current = decodedText;
-      playBeepSound();
-      processScannedCode(decodedText);
-    };
-
-    const startScanner = () => {
-      const el = document.getElementById(scannerId);
-      if (!el) return;
-      try {
-        const scanner = new Html5Qrcode(scannerId);
-        html5QrcodeScannerRef.current = scanner;
-        scanner.start({ facingMode: { exact: 'environment' } }, config, onSuccess, () => {})
-          .catch(() => {
-            scanner.start({ facingMode: 'environment' }, config, onSuccess, () => {})
-              .catch(e => console.log('Camera error:', e));
-          });
-      } catch (e) {
-        console.log('Scanner init error:', e);
-      }
-    };
-
-    startScanner();
-
     return () => {
-      active = false;
-      lastScannedRef.current = '';
-      if (html5QrcodeScannerRef.current) {
-        html5QrcodeScannerRef.current.stop().catch(() => {});
-        html5QrcodeScannerRef.current = null;
-      }
+      stopCamera();
     };
-  }, [isOpen, scanTab]);
+  }, []);
 
   const processScannedCode = (rawCode) => {
     let query = String(rawCode || '').trim();
@@ -3668,32 +3714,108 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
   if (!isOpen) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 12 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 12 }}>
       <div style={{ maxWidth: 560, width: '100%', padding: 20, background: '#0f172a', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16, maxHeight: '95vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <h3 style={{ fontSize: 17, fontWeight: 800, color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-            <ScanLine style={{ width: 20, height: 20 }} /> Barcode & QR Scanner
+            <ScanLine style={{ width: 20, height: 20 }} /> Barcode &amp; QR Scanner
           </h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>✕</button>
+          <button onClick={() => { stopCamera(); onClose(); }} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>✕</button>
         </div>
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 14, background: '#1e293b', padding: 4, borderRadius: 8 }}>
-          {[['camera','📷 Live Camera'],['usb','⌨️ USB / Manual']].map(([t,label]) => (
-            <button key={t} onClick={() => { setScanTab(t); setSearchResult(null); setScanInput(''); lastScannedRef.current = ''; }}
+          {[['usb','⌨️ USB Gun / Quick Find'],['camera','📷 Live Camera Scanner']].map(([t,label]) => (
+            <button key={t} onClick={() => { setScanTab(t); setSearchResult(null); setScanInput(''); lastScannedRef.current = ''; if (t !== 'camera') stopCamera(); }}
               style={{ flex: 1, padding: '7px 10px', borderRadius: 6, border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer', background: scanTab === t ? '#2563eb' : 'transparent', color: '#fff', transition: '0.15s' }}>
               {label}
             </button>
           ))}
         </div>
 
-        {/* Camera */}
+        {/* Camera Tab */}
         {scanTab === 'camera' && (
           <div style={{ marginBottom: 16, textAlign: 'center' }}>
-            <div id="html5-qr-video-reader" style={{ width: '100%', minHeight: 220, background: '#000', borderRadius: 10, overflow: 'hidden', border: '2px dashed #38bdf8' }} />
-            <p style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>Hold barcode steady — scanning at 25fps. Scanner stays live between scans.</p>
+            {/* Camera Switcher & Controls */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+              {availableCameras.length > 1 && (
+                <select
+                  value={selectedCameraId}
+                  onChange={e => { setSelectedCameraId(e.target.value); startCameraScanner(e.target.value); }}
+                  style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600, maxWidth: 220 }}
+                >
+                  {availableCameras.map(cam => (
+                    <option key={cam.id} value={cam.id}>{cam.label || `Camera ${cam.id.slice(0, 5)}`}</option>
+                  ))}
+                </select>
+              )}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                {!isCameraActive ? (
+                  <button
+                    type="button"
+                    onClick={() => startCameraScanner()}
+                    disabled={cameraLoading}
+                    className="apex-btn apex-btn-sm"
+                    style={{ background: '#2563eb', color: '#fff', fontWeight: 800, fontSize: 11, padding: '5px 12px' }}
+                  >
+                    {cameraLoading ? '⏳ Starting Camera...' : '▶️ Start Camera'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="apex-btn apex-btn-sm"
+                    style={{ background: '#ef4444', color: '#fff', fontWeight: 800, fontSize: 11, padding: '5px 12px' }}
+                  >
+                    ⏹️ Stop Camera
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Strict Camera Box */}
+            <div style={{ position: 'relative', width: '100%', height: 230, maxHeight: 230, background: '#000', borderRadius: 10, overflow: 'hidden', border: isCameraActive ? '2px solid #22c55e' : '2px dashed #38bdf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div id="html5-qr-video-reader" style={{ width: '100%', height: '100%', display: isCameraActive ? 'block' : 'none' }} />
+              
+              {!isCameraActive && !cameraLoading && !cameraError && (
+                <div style={{ padding: 20, textAlign: 'center' }}>
+                  <p style={{ fontSize: 32, margin: '0 0 8px 0' }}>📷</p>
+                  <p style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc', margin: '0 0 10px 0' }}>Camera is idle</p>
+                  <button
+                    type="button"
+                    onClick={() => startCameraScanner()}
+                    className="apex-btn apex-btn-sm"
+                    style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '6px 16px' }}
+                  >
+                    Click to Activate Camera
+                  </button>
+                </div>
+              )}
+
+              {cameraLoading && (
+                <div style={{ textAlign: 'center', padding: 20 }}>
+                  <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite' }}>⏳</div>
+                  <p style={{ fontSize: 12, color: '#94a3b8' }}>Initializing camera hardware safely...</p>
+                </div>
+              )}
+
+              {cameraError && (
+                <div style={{ textAlign: 'center', padding: 16, background: 'rgba(239, 68, 68, 0.15)', borderRadius: 8, border: '1px solid rgba(239, 68, 68, 0.4)', margin: 10 }}>
+                  <p style={{ fontSize: 12, color: '#fca5a5', fontWeight: 700, marginBottom: 8 }}>⚠️ {cameraError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setScanTab('usb')}
+                    className="apex-btn apex-btn-sm"
+                    style={{ background: '#f59e0b', color: '#000', fontWeight: 800, padding: '4px 12px', fontSize: 11 }}
+                  >
+                    Use USB Gun / Search Instead
+                  </button>
+                </div>
+              )}
+            </div>
+            <p style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>Position barcode inside viewfinder. If using a USB laser gun, switch to USB tab for instantaneous scanning.</p>
           </div>
         )}
 
@@ -3702,10 +3824,11 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
           <form onSubmit={handleManualSubmit} style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               <input ref={inputRef} type="text" style={{ ...inp, flex: 1, fontFamily: 'monospace', fontSize: 14 }}
-                placeholder="Scan or type Reel No / RL-XXXXX / Job ID…"
+                placeholder="Scan with USB Gun or type RL-00001 / Reel No / Job ID…"
                 value={scanInput} onChange={e => setScanInput(e.target.value)} />
               <button type="submit" style={{ background: '#f59e0b', color: '#000', border: 'none', borderRadius: 6, padding: '0 18px', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>Find</button>
             </div>
+            <p style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>💡 USB Laser scanners auto-trigger on scan. You can also type any Reel No, Supplier No, or Job No.</p>
           </form>
         )}
 
@@ -3758,11 +3881,25 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
                         <button
                           key={val}
                           type="button"
-                          onClick={() => setMountLayer(val)}
-                          style={{ padding: '8px 2px', borderRadius: 8, border: `2px solid ${mountLayer === val ? '#38bdf8' : '#334155'}`, background: mountLayer === val ? 'rgba(56,189,248,0.2)' : '#0f172a', color: mountLayer === val ? '#38bdf8' : '#cbd5e1', fontWeight: 800, fontSize: 11, cursor: 'pointer', transition: '0.15s', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
+                          disabled={isMounting}
+                          onClick={() => { setMountLayer(val); handleAttachToJob(); }}
+                          className="apex-btn"
+                          style={{
+                            padding: '8px 4px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: 3,
+                            background: mountLayer === val ? '#2563eb' : '#0f172a',
+                            border: `1.5px solid ${mountLayer === val ? '#60a5fa' : '#334155'}`,
+                            color: '#fff',
+                            borderRadius: 8,
+                            fontSize: 10,
+                            fontWeight: 800
+                          }}
                         >
-                          <span style={{ fontSize: 18 }}>{emoji}</span>
-                          <span style={{ textAlign: 'center', lineHeight: 1.1 }}>{label}</span>
+                          <span style={{ fontSize: 15 }}>{emoji}</span>
+                          <span>{label}</span>
                         </button>
                       ))}
                     </div>

@@ -224,3 +224,32 @@ p { margin: 0; }
     background: transparent !important;
   }
 }
+
+/* Barcode Camera Scanner strict containment to prevent browser resolution flicker & black screens */
+#html5-qr-video-reader {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 240px !important;
+  max-height: 240px !important;
+  overflow: hidden !important;
+  position: relative !important;
+  border-radius: 10px !important;
+  background: #000000 !important;
+}
+
+#html5-qr-video-reader video {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 240px !important;
+  object-fit: cover !important;
+  border-radius: 10px !important;
+  display: block !important;
+}
+
+#html5-qr-video-reader canvas {
+  max-height: 240px !important;
+}
+
+#html5-qr-video-reader__scan_region {
+  min-height: auto !important;
+}
