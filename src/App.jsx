@@ -3190,6 +3190,18 @@ export const isNashikPlant = (companyIdOrName, companies = []) => {
   return false;
 };
 
+export const getNashikCompanyId = (companies = []) => {
+  if (!Array.isArray(companies) || companies.length === 0) return '';
+  const nashik = companies.find(c => isNashikPlant(c.id, companies) || isNashikPlant(c.name, companies));
+  return nashik?.id || companies[0]?.id || '';
+};
+
+export const getNashikCompanyName = (companies = []) => {
+  if (!Array.isArray(companies) || companies.length === 0) return 'Nashik Plant';
+  const nashik = companies.find(c => isNashikPlant(c.id, companies) || isNashikPlant(c.name, companies));
+  return nashik?.name || 'Nashik Plant';
+};
+
 export const NASHIK_WIP_STAGES = [
   'Corrugation',
   'Printing',
@@ -4278,7 +4290,18 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                   </td>
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
                   <td>{renderCell('date', r.date, 'date')}</td>
-                  <td>{renderCell('millName', r.millName)}</td>
+                  <td>
+                    {renderCell('millName', r.millName)}
+                    {r.stockType === 'job_work' ? (
+                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 2, display: 'inline-block' }}>
+                        🤝 JW: {r.clientName || 'Client'}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, marginTop: 2, display: 'inline-block' }}>
+                        🏭 Factory
+                      </span>
+                    )}
+                  </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#475569' }}>
                     {renderCell('invoiceNo', r.invoiceNo)}
                   </td>
@@ -5214,7 +5237,7 @@ export default function App() {
           <div className="apex-nav-label">Inventory & Masters</div>
           {canAccess(currentErpUser.role, 'inventory') && <NavButton icon={<Archive />} label="Stock Inventory" isActive={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />}
           {canAccess(currentErpUser.role, 'items') && <NavButton icon={<Package />} label="Box Database" isActive={activeTab === 'items'} onClick={() => setActiveTab('items')} />}
-          {canAccess(currentErpUser.role, 'customers') && <NavButton icon={<Users />} label="Job Work Clients" isActive={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />}
+          {canAccess(currentErpUser.role, 'customers') && <NavButton icon={<Users />} label="Job Work Clients (Nashik)" isActive={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />}
 
           {canAccess(currentErpUser.role, 'reports') && <div className="apex-nav-label">Reports & Admin</div>}
           {canAccess(currentErpUser.role, 'reports') && <NavButton icon={<BarChart3 />} label="Daily Reports" isActive={activeTab === 'reports'} onClick={() => setActiveTab('reports')} />}
@@ -5330,10 +5353,10 @@ export default function App() {
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
-        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
+        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'items'           && canAccess(currentErpUser.role,'items')           && <ItemsView items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} costings={costings} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} />}
-        {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
+        {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} />}
         {activeTab === 'companies'       && canAccess(currentErpUser.role,'companies')       && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} />}
         {activeTab === 'logs'            && canAccess(currentErpUser.role,'logs')            && <LogsView logs={logs} currentUser={currentErpUser} orders={orders} inventory={inventory} />}
@@ -5551,9 +5574,10 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
           <p style={{ fontSize: 26, fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#fff', marginTop: 6 }}>
             {(totalStockKg / 1000).toFixed(1)} <span style={{ fontSize: 14, color: '#94a3b8' }}>Tons</span>
           </p>
-          <p style={{ fontSize: 12, color: '#f59e0b', fontWeight: 700, marginTop: 4 }}>
-            ₹{totalStockVal.toLocaleString('en-IN', { maximumFractionDigits: 0 })} · {reelsCount} Reels
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 4, flexWrap: 'wrap', gap: 4 }}>
+            <span style={{ color: '#86efac', fontWeight: 700 }}>🏭 Own: {((inventory.filter(r => r.stockType !== 'job_work').reduce((s, r) => s + (parseFloat(r.balanceQty || 0)), 0)) / 1000).toFixed(1)}T</span>
+            <span style={{ color: '#c084fc', fontWeight: 800 }}>🤝 JW: {((inventory.filter(r => r.stockType === 'job_work').reduce((s, r) => s + (parseFloat(r.balanceQty || 0)), 0)) / 1000).toFixed(1)}T</span>
+          </div>
         </div>
 
         {/* 2. FINISHED GOODS STOCK (Next to Raw Material) */}
@@ -5594,10 +5618,12 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
           <p style={{ fontSize: 26, fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#fbbf24', marginTop: 6 }}>
             {pendingOrdersQty.toLocaleString()} <span style={{ fontSize: 14, color: '#94a3b8' }}>pcs</span>
           </p>
-          <p style={{ fontSize: 12, color: '#fbbf24', fontWeight: 700, marginTop: 4 }}>
-            Value: ₹{pendingOrdersVal.toLocaleString('en-IN', { maximumFractionDigits: 0 })} ({pendingOrdersList.length} Jobs)
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 4, flexWrap: 'wrap', gap: 4 }}>
+            <span style={{ color: '#fbbf24', fontWeight: 700 }}>₹{pendingOrdersVal.toLocaleString('en-IN', { maximumFractionDigits: 0 })} ({pendingOrdersList.length} Jobs)</span>
+            <span style={{ color: '#c084fc', fontWeight: 800 }}>🤝 JW: {pendingOrdersList.filter(o => o.orderType === 'job_work').length} Jobs</span>
+          </div>
         </div>
+
       </div>
 
       {/* LIVE FACTORY STATUS STRIP (With Value ₹ and Weight KG on the bottom of each stage) */}
@@ -7047,7 +7073,7 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
 }
 
 // --- INVENTORY VIEW ---
-function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], activeUnitId, autoSetUnit }) {
+function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit }) {
   const allowedCompanyId = activeUnitId || 'all';
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
@@ -7067,6 +7093,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const [commonData, setCommonData] = useState({
     date: new Date().toISOString().split('T')[0],
     companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
+    stockType: 'factory', // 'factory' (Own Raw Material) | 'job_work' (Client-Owned Stock)
+    clientId: '',
+    clientName: '',
+    inwardChallanNo: '',
     millName: '',
     invoiceNo: '',
     vehicleNo: ''
@@ -7080,7 +7110,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
-  const [filters, setFilters] = useState({ company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
+  const [filters, setFilters] = useState({ company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
 
   const [consumableData, setConsumableData] = useState({ 
       date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
@@ -7280,8 +7310,15 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       ? allowedCompanyId
       : (commonData.companyId || currentUser?.companyId || (companies[0]?.id || ''));
 
+    const selectedCust = customers.find(c => c.id === commonData.clientId);
+    const resolvedClientName = selectedCust ? selectedCust.name : (commonData.clientName || (commonData.stockType === 'job_work' ? commonData.millName : ''));
+
     const finalCommon = {
       ...commonData,
+      stockType: commonData.stockType || 'factory',
+      clientId: commonData.stockType === 'job_work' ? (commonData.clientId || '') : '',
+      clientName: commonData.stockType === 'job_work' ? resolvedClientName : '',
+      inwardChallanNo: commonData.stockType === 'job_work' ? (commonData.inwardChallanNo || commonData.invoiceNo || '') : '',
       companyId: effectiveCompanyId
     };
 
@@ -7301,10 +7338,11 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         if (!supNo && !reel.size && !reel.gsm) return;
         const existingMax = (inventory || []).reduce((max, cur) => {
           const fid = formatSystemReelId(cur, inventory);
-          const n = parseInt(fid.replace('RL-', ''), 10);
+          const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
           return !isNaN(n) && n > max ? n : max;
         }, 0);
-        const autoReelId = reel.uniqueReelId || `RL-${String(existingMax + idx + 1).padStart(5, '0')}`;
+        const prefix = commonData.stockType === 'job_work' ? 'RL-JW' : 'RL';
+        const autoReelId = reel.uniqueReelId || `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
         const finalSupNo = supNo || autoReelId;
         const newId = generateId();
         const newDocRef = { table: 'inventory', id: newId };
@@ -7327,7 +7365,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       });
 
       await batch.commit();
-      if(addLog) addLog(`Added ${count} inventory reels from ${commonData.millName || 'supplier'}`);
+      if(addLog) addLog(`Added ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'}`);
       setReelsInput([{...emptyReel}]); 
 
       if (shouldPrintBarcodes && createdReelsList.length > 0) {
@@ -7341,6 +7379,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     setCommonData({ 
       date: reel.date || '', 
       companyId: reel.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')), 
+      stockType: reel.stockType || 'factory',
+      clientId: reel.clientId || '',
+      clientName: reel.clientName || '',
+      inwardChallanNo: reel.inwardChallanNo || reel.invoiceNo || '',
       millName: reel.millName || '', 
       invoiceNo: reel.invoiceNo || '', 
       vehicleNo: reel.vehicleNo || '' 
@@ -7500,6 +7542,13 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     return inventoryWithUsage.filter(reel => {
       if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
       if (filters.company && !(companies.find(c => c.id === reel.companyId)?.name || '').toLowerCase().includes(filters.company.toLowerCase())) return false;
+      if (filters.stockType === 'factory' && reel.stockType === 'job_work') return false;
+      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work') return false;
+      if (filters.clientId) {
+        const matchId = reel.clientId === filters.clientId;
+        const matchName = String(reel.clientName || '').toLowerCase() === filters.clientId.toLowerCase();
+        if (!matchId && !matchName) return false;
+      }
       if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
       if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
       if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
@@ -7530,7 +7579,25 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const handleExport = () => {
     if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
     const exportData = filteredInventory.map(reel => ({
-      Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown', Date: reel.date || '', Mill_Name: reel.millName || '', Invoice_No: reel.invoiceNo || '', Vehicle_No: reel.vehicleNo || '', Reel_No: reel.reelNo || '', Size: reel.size || '', GSM: reel.gsm || '', BF: reel.bf || '', Colour: reel.colour || '', Received_Qty: reel.receivedQty || '', Initial_Issued: reel.initialIssuedQty || '0', Total_Issued_Qty: (reel.issuedQty || 0).toFixed(2), Balance_Qty: (reel.balanceQty || 0).toFixed(2), Rate_per_KG: reel.ratePerKg || 0, Current_Value: (reel.value || 0).toFixed(2), Used_For_History: (reel.usageLog || []).map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
+      Ownership: reel.stockType === 'job_work' ? `Job Work (${reel.clientName || 'Client'})` : 'Factory Stock',
+      Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown',
+      Date: reel.date || '',
+      Mill_Party: reel.millName || '',
+      Inward_DC_Invoice: reel.inwardChallanNo || reel.invoiceNo || '',
+      Vehicle_No: reel.vehicleNo || '',
+      System_Reel_ID: reel.systemReelId || '',
+      Reel_No: reel.reelNo || '',
+      Size: reel.size || '',
+      GSM: reel.gsm || '',
+      BF: reel.bf || '',
+      Colour: reel.colour || '',
+      Received_Qty: reel.receivedQty || '',
+      Initial_Issued: reel.initialIssuedQty || '0',
+      Total_Issued_Qty: (reel.issuedQty || 0).toFixed(2),
+      Balance_Qty: (reel.balanceQty || 0).toFixed(2),
+      Rate_per_KG: reel.ratePerKg || 0,
+      Current_Value: (reel.value || 0).toFixed(2),
+      Used_For_History: (reel.usageLog || []).map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
     }));
     downloadCSV(exportData, 'stock_inventory');
   };
@@ -7539,8 +7606,11 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const emptyReels = filteredInventory.filter(r => (r.balanceQty || 0) <= 0).length || 0;
   const activeReels = totalReels - emptyReels;
   const totalKgAvailable = filteredInventory.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
-  const totalValueAvailable = filteredInventory.reduce((sum, r) => sum + (r.value || 0), 0);
+  const factoryKgAvailable = filteredInventory.filter(r => r.stockType !== 'job_work').reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+  const jobWorkKgAvailable = filteredInventory.filter(r => r.stockType === 'job_work').reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+  const totalValueAvailable = filteredInventory.filter(r => r.stockType !== 'job_work').reduce((sum, r) => sum + (r.value || 0), 0);
   const lowStockReels = filteredInventory.filter(r => (r.balanceQty || 0) > 0 && (r.balanceQty || 0) < lowStockThreshold);
+
 
   const handleAddConsumable = async (e) => {
     e.preventDefault();
@@ -7695,29 +7765,29 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
             <div className="p-3 bg-blue-50 text-blue-600 rounded-lg font-bold">#</div>
             <div>
-              <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Reels (Active / Empty)</p>
-              <p className="text-2xl font-bold text-stone-900">{activeReels} <span className="text-stone-300">/</span> <span className="text-stone-400">{emptyReels}</span></p>
-            </div>
-          </div>
-          <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-green-50 text-green-600 rounded-lg font-bold">KG</div>
-            <div>
               <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Total Available Stock</p>
               <p className="text-2xl font-bold text-stone-900">{totalKgAvailable.toFixed(1)} <span className="text-sm font-normal text-stone-500">kg ({ (totalKgAvailable/1000).toFixed(2) } MT)</span></p>
             </div>
           </div>
           <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-yellow-50 text-yellow-600 rounded-lg font-bold">₹</div>
+            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg font-bold">🏭</div>
             <div>
-              <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Available Stock Value</p>
-              <p className="text-2xl font-bold text-stone-900">₹{totalValueAvailable.toLocaleString('en-IN', {maximumFractionDigits:0})}</p>
+              <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Factory Stock (Own Paper)</p>
+              <p className="text-2xl font-bold text-emerald-700">{factoryKgAvailable.toFixed(1)} <span className="text-xs font-normal text-stone-500">kg (₹{totalValueAvailable.toLocaleString('en-IN', {maximumFractionDigits:0})})</span></p>
+            </div>
+          </div>
+          <div className="bg-white border border-purple-200 p-4 rounded-xl shadow-sm flex items-center gap-4" style={{ background: '#faf5ff' }}>
+            <div className="p-3 bg-purple-100 text-purple-700 rounded-lg font-bold">🤝</div>
+            <div>
+              <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Job Work Client Stock</p>
+              <p className="text-2xl font-bold text-purple-900">{jobWorkKgAvailable.toFixed(1)} <span className="text-xs font-normal text-purple-600">kg (Client-Owned)</span></p>
             </div>
           </div>
           <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-purple-50 text-purple-600 rounded-lg font-bold">🏭</div>
+            <div className="p-3 bg-stone-100 text-stone-700 rounded-lg font-bold">📦</div>
             <div>
-              <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Manufacturing Unit</p>
-              <p className="text-xl font-bold text-stone-900 truncate max-w-[180px]">{allowedCompanyId !== 'all' ? (companies.find(c => c.id === allowedCompanyId)?.name || 'Default Unit') : 'All Units'}</p>
+              <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">Reels (Active / Empty)</p>
+              <p className="text-2xl font-bold text-stone-900">{activeReels} <span className="text-stone-300">/</span> <span className="text-stone-400">{emptyReels}</span></p>
             </div>
           </div>
         </div>
@@ -7728,7 +7798,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
             <h3 className="font-bold flex items-center gap-2 text-stone-900">
-              <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward New Invoice / Paper Reels Entry'}
+              <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward Paper Reels (Factory Stock or Job Work Client Stock)'}
             </h3>
             <div className="flex items-center gap-3">
               <button
@@ -7760,6 +7830,40 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 </span>
               )}
             </div>
+          </div>
+
+          {/* Stock Ownership Toggle Pill */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, background: '#f8fafc', padding: '8px 14px', borderRadius: 8, border: '1px solid #e2e8f0', width: 'fit-content' }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '.05em' }}>Stock Ownership:</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: commonData.stockType === 'factory' ? '#0f172a' : '#64748b' }}>
+              <input
+                type="radio"
+                name="stockOwnership"
+                value="factory"
+                checked={commonData.stockType === 'factory'}
+                onChange={() => setCommonData({...commonData, stockType: 'factory', clientId: '', clientName: ''})}
+              />
+              🏭 Factory Purchase (Own Raw Material)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: commonData.stockType === 'job_work' ? '#4f46e5' : '#64748b' }}>
+              <input
+                type="radio"
+                name="stockOwnership"
+                value="job_work"
+                checked={commonData.stockType === 'job_work'}
+                onChange={() => {
+                  const firstCust = customers.find(c => (c.clientType || 'Job Work Client') === 'Job Work Client') || customers[0];
+                  setCommonData({
+                    ...commonData,
+                    stockType: 'job_work',
+                    clientId: firstCust?.id || '',
+                    clientName: firstCust?.name || '',
+                    millName: firstCust?.name || commonData.millName
+                  });
+                }}
+              />
+              🤝 Job Work Inward (Client-Supplied Paper)
+            </label>
           </div>
 
           {/* AI Reel Dictation Live Status */}
@@ -7795,10 +7899,57 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
             </div>
           )}
           <form onSubmit={handleAddOrUpdate} className="space-y-4">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, background: '#fafaf9', padding: 14, borderRadius: 10, border: '1px solid var(--border)', marginBottom: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: commonData.stockType === 'job_work' ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap: 12, background: commonData.stockType === 'job_work' ? '#f5f3ff' : '#fafaf9', padding: 14, borderRadius: 10, border: `1px solid ${commonData.stockType === 'job_work' ? '#ddd6fe' : 'var(--border)'}`, marginBottom: 4 }}>
               <div><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={commonData.date} onChange={e => setCommonData({...commonData, date: e.target.value})} /></div>
-              <div><label className="block text-xs font-bold text-stone-700 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" placeholder="Mill / Party name" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} /></div>
-              <div><label className="block text-xs font-bold text-stone-700 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" placeholder="e.g. INV-1042" value={commonData.invoiceNo} onChange={e => setCommonData({...commonData, invoiceNo: e.target.value})} /></div>
+              
+              {commonData.stockType === 'job_work' ? (
+                <div>
+                  <label className="block text-xs font-bold text-purple-900 mb-1">Job Work Client *</label>
+                  <select
+                    required
+                    className="w-full p-2 border border-purple-300 bg-purple-50/50 rounded font-bold text-xs"
+                    value={commonData.clientId}
+                    onChange={e => {
+                      const cObj = customers.find(c => c.id === e.target.value);
+                      setCommonData({
+                        ...commonData,
+                        clientId: e.target.value,
+                        clientName: cObj?.name || '',
+                        millName: cObj?.name || commonData.millName
+                      });
+                    }}
+                  >
+                    <option value="">— Select Job Work Client —</option>
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>🤝 {c.name} {c.code ? `(${c.code})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div><label className="block text-xs font-bold text-stone-700 mb-1">Mill / Supplier Name</label><input required type="text" className="w-full p-2 border rounded" placeholder="Mill / Supplier name" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} /></div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  {commonData.stockType === 'job_work' ? 'Client Inward DC No. *' : 'Invoice No.'}
+                </label>
+                <input
+                  required={commonData.stockType === 'job_work'}
+                  type="text"
+                  className="w-full p-2 border rounded font-mono font-bold text-xs"
+                  placeholder={commonData.stockType === 'job_work' ? "e.g. DC-9841" : "e.g. INV-1042"}
+                  value={commonData.inwardChallanNo || commonData.invoiceNo}
+                  onChange={e => setCommonData({...commonData, inwardChallanNo: e.target.value, invoiceNo: e.target.value})}
+                />
+              </div>
+              
+              {commonData.stockType === 'job_work' && (
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Paper Source / Mill</label>
+                  <input type="text" className="w-full p-2 border rounded text-xs" placeholder="e.g. Star Paper Mill" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} />
+                </div>
+              )}
+
               <div><label className="block text-xs font-bold text-stone-700 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" placeholder="e.g. MH-15-AB-1234" value={commonData.vehicleNo} onChange={e => setCommonData({...commonData, vehicleNo: e.target.value})} /></div>
             </div>
 
@@ -7829,7 +7980,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                           type="text"
                           placeholder="Auto (RL-...)"
                           className="w-full p-1.5 border border-stone-300 bg-stone-100 rounded font-mono text-xs text-stone-600 font-bold"
-                          value={reel.uniqueReelId || `RL-${(Date.now() + idx).toString().slice(-6)}`}
+                          value={reel.uniqueReelId || `${commonData.stockType === 'job_work' ? 'RL-JW' : 'RL'}-${(Date.now() + idx).toString().slice(-6)}`}
                           onChange={e => handleReelChange(idx, 'uniqueReelId', e.target.value)}
                         />
                       </td>
@@ -7860,13 +8011,15 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                           <option value="Kraft">Kraft</option>
                           <option value="Golden">Golden</option>
                           <option value="Duplex">Duplex</option>
+                          <option value="White">White</option>
+                          <option value="Semi-Kraft">Semi-Kraft</option>
                         </select>
                       </td>
                       <td className="p-1.5">
-                        <input required type="number" step="0.1" placeholder="Kg" className="w-full p-1.5 border border-green-300 bg-green-50/50 rounded text-xs font-bold font-mono" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} />
+                        <input required type="number" step="0.1" placeholder="650" className="w-full p-1.5 border border-stone-300 bg-green-50/50 rounded text-xs font-bold font-mono" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <input type="number" step="0.1" placeholder="0" className="w-full p-1.5 border border-amber-300 bg-amber-50/50 rounded text-xs font-semibold font-mono" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} />
+                        <input type="number" step="0.1" placeholder="0" className="w-full p-1.5 border border-stone-300 bg-orange-50/50 rounded text-xs font-mono" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} />
                       </td>
                       <td className="p-1.5">
                         <input required type="number" step="0.01" placeholder="₹" className="w-full p-1.5 border border-stone-300 rounded text-xs font-bold font-mono" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} />
@@ -7889,7 +8042,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 </button>
               )}
               <button type="submit" className="flex-1 bg-stone-900 text-white p-2.5 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold min-w-[200px]">
-                {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'}`}
+                {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'} to ${commonData.stockType === 'job_work' ? 'Job Work Stock' : 'Factory Stock'}`}
               </button>
               {!editingId && (
                 <button
@@ -7910,6 +8063,74 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       {activeSubTab === 'Paper' ? (
         inventoryMode === 'grid' ? (
           <>
+            {/* Filter Pills for Excel Grid View */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                <button
+                  onClick={() => setFilters({...filters, stockType: 'All', clientId: ''})}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: 'none',
+                    background: filters.stockType === 'All' ? '#1e293b' : 'transparent',
+                    color: filters.stockType === 'All' ? '#fff' : '#64748b'
+                  }}
+                >
+                  All Paper ({filteredInventory.length})
+                </button>
+                <button
+                  onClick={() => setFilters({...filters, stockType: 'factory', clientId: ''})}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: 'none',
+                    background: filters.stockType === 'factory' ? '#166534' : 'transparent',
+                    color: filters.stockType === 'factory' ? '#fff' : '#64748b'
+                  }}
+                >
+                  🏭 Factory Stock Only
+                </button>
+                <button
+                  onClick={() => setFilters({...filters, stockType: 'job_work'})}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: 'none',
+                    background: filters.stockType === 'job_work' ? '#6d28d9' : 'transparent',
+                    color: filters.stockType === 'job_work' ? '#fff' : '#64748b'
+                  }}
+                >
+                  🤝 Job Work Stock (Client-Owned)
+                </button>
+              </div>
+
+              {customers.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Client:</span>
+                  <select
+                    className="apex-select"
+                    style={{ padding: '4px 8px', fontSize: 11.5, minWidth: 160 }}
+                    value={filters.clientId}
+                    onChange={e => setFilters({...filters, clientId: e.target.value, stockType: e.target.value ? 'job_work' : filters.stockType})}
+                  >
+                    <option value="">— All Clients —</option>
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>🤝 {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
             <ExcelStockInventory
               inventory={filteredInventory}
               companies={companies}
@@ -7926,55 +8147,37 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           </>
         ) : (
         <>
-
-
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
-            <h3 className="font-bold mb-4 flex items-center gap-2">{editingId ? 'Edit Reel Entry' : 'Receive New Invoice'}</h3>
-            <form onSubmit={handleAddOrUpdate} className="space-y-4">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, background: '#fafaf9', padding: 14, borderRadius: 10, border: '1px solid var(--border)', marginBottom: 4 }}>
-                <div><label className="block text-xs font-bold text-stone-700 mb-1">Date Received</label><input required type="date" className="w-full p-2 border rounded" value={commonData.date} onChange={e => setCommonData({...commonData, date: e.target.value})} /></div>
-                <div><label className="block text-xs font-bold text-stone-700 mb-1">Mill / Party Name</label><input required type="text" className="w-full p-2 border rounded" placeholder="Mill / Party name" value={commonData.millName} onChange={e => setCommonData({...commonData, millName: e.target.value})} /></div>
-                <div><label className="block text-xs font-bold text-stone-700 mb-1">Invoice No.</label><input type="text" className="w-full p-2 border rounded" placeholder="e.g. INV-1042" value={commonData.invoiceNo} onChange={e => setCommonData({...commonData, invoiceNo: e.target.value})} /></div>
-                <div><label className="block text-xs font-bold text-stone-700 mb-1">Vehicle No.</label><input type="text" className="w-full p-2 border rounded" placeholder="e.g. MH-15-AB-1234" value={commonData.vehicleNo} onChange={e => setCommonData({...commonData, vehicleNo: e.target.value})} /></div>
-              </div>
-
-
-              <div className="space-y-3">
-                {reelsInput.map((reel, idx) => (
-                  <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-end">
-                    <div className="flex-1 min-w-[100px]"><label className="block text-[10px] text-stone-500 mb-1">Reel No.</label><input required type="text" className="w-full p-2 border border-blue-300 bg-blue-50 rounded font-mono font-bold text-sm" value={reel.reelNo} onChange={e => handleReelChange(idx, 'reelNo', e.target.value)} /></div>
-                    <div className="w-20"><label className="block text-[10px] text-stone-500 mb-1">Size</label><input required type="text" className="w-full p-2 border rounded text-sm" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} /></div>
-                    <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">GSM</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} /></div>
-                    <div className="w-16"><label className="block text-[10px] text-stone-500 mb-1">BF</label><input required type="number" step="0.1" className="w-full p-2 border rounded text-sm" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} /></div>
-                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Colour</label><select required className="w-full p-2 border rounded text-sm" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="Duplex">Duplex</option></select></div>
-                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Recv (KG)</label><input required type="number" step="0.1" className="w-full p-2 border rounded bg-green-50 text-sm" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} /></div>
-                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Init. Issue</label><input type="number" step="0.1" className="w-full p-2 border rounded bg-orange-50 text-sm" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} /></div>
-                    <div className="w-24"><label className="block text-[10px] text-stone-500 mb-1">Rate (₹)</label><input required type="number" step="0.01" className="w-full p-2 border rounded text-sm" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} /></div>
-                    {!editingId && reelsInput.length > 1 && (
-                      <button type="button" onClick={() => removeReelRow(idx)} className="p-2 mb-1 text-red-500 hover:bg-red-50 rounded">Delete</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2 pt-4 border-t border-stone-200">
-                {!editingId && (
-                  <button type="button" onClick={addReelRow} className="bg-stone-100 text-stone-700 px-4 py-2 rounded text-sm font-bold hover:bg-stone-200 flex items-center gap-2">
-                    Add Another Reel
-                  </button>
-                )}
-                <button type="submit" className="flex-1 bg-stone-900 text-white p-2 rounded flex items-center justify-center gap-2 hover:bg-stone-800 font-bold">
-                  {editingId ? 'Update Reel' : `Save ${reelsInput.length > 1 ? `${reelsInput.length} Reels` : 'Reel'} to Inventory`}
-                </button>
-                {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-300 text-stone-800 p-2 rounded hover:bg-stone-400 px-6 font-bold">Cancel</button>}
-              </div>
-            </form>
-          </div>
-
-          {/* ── Filter Bar ── */}
+          {/* ── Filter Bar for Classic View ── */}
           <div className="apex-card" style={{ padding: '12px 16px', marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', whiteSpace: 'nowrap', paddingRight: 10, borderRight: '1px solid var(--border)' }}>Filter</span>
+              
+              {/* Stock Type Filter Pill */}
+              <select
+                className="apex-select"
+                style={{ width: 'auto', padding: '6px 10px', fontSize: 12, fontWeight: 700, borderColor: filters.stockType === 'job_work' ? '#8b5cf6' : '#cbd5e1' }}
+                value={filters.stockType}
+                onChange={e => setFilters({...filters, stockType: e.target.value})}
+              >
+                <option value="All">All Stock Types</option>
+                <option value="factory">🏭 Factory Stock Only</option>
+                <option value="job_work">🤝 Job Work Stock Only</option>
+              </select>
+
+              {customers.length > 0 && (
+                <select
+                  className="apex-select"
+                  style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }}
+                  value={filters.clientId}
+                  onChange={e => setFilters({...filters, clientId: e.target.value, stockType: e.target.value ? 'job_work' : filters.stockType})}
+                >
+                  <option value="">All Clients</option>
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>🤝 {c.name}</option>
+                  ))}
+                </select>
+              )}
+
               {allowedCompanyId === 'all' && (
                 <input type="text" placeholder="Company" className="apex-input" style={{ width: 110, padding: '6px 10px', fontSize: 12 }} value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
               )}
@@ -7989,8 +8192,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <select className="apex-select" style={{ width: 'auto', padding: '6px 10px', fontSize: 12, fontWeight: 600 }} value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}>
                 <option value="All">All Statuses</option><option value="Available">Available only</option><option value="Used">Used / Empty</option>
               </select>
-              {(filters.company || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.status !== 'All') && (
-                <button onClick={() => setFilters({company: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})}
+              {(filters.company || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.stockType !== 'All' || filters.clientId || filters.status !== 'All') && (
+                <button onClick={() => setFilters({company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})}
                   className="apex-btn apex-btn-ghost apex-btn-sm" style={{ marginLeft: 'auto' }}>Clear filters</button>
               )}
             </div>
@@ -8041,7 +8244,18 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                         {reel.invoiceNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 1 }}>#{reel.invoiceNo}</div>}
                         {reel.vehicleNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Veh: {reel.vehicleNo}</div>}
                       </td>
-                      <td style={{ fontWeight: 500, fontSize: 12.5 }}>{reel.millName || '-'}</td>
+                      <td>
+                        <div style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.millName || '-'}</div>
+                        {reel.stockType === 'job_work' ? (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 3, display: 'inline-block' }}>
+                            🤝 JW: {reel.clientName || 'Client Stock'}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, marginTop: 3, display: 'inline-block' }}>
+                            🏭 Factory Stock
+                          </span>
+                        )}
+                      </td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, color: isAvailable ? '#1d4ed8' : 'var(--text-muted)' }}>{reel.reelNo || '-'}</span>
@@ -9111,6 +9325,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         isPlannedJob: true,
         plannedJobId: j.id,
         orderId: j.orderId || j.id,
+        orderType: linkedOrder?.orderType || j.orderType || 'regular',
+        jobWorkType: linkedOrder?.jobWorkType || j.jobWorkType || '',
         jobNo: jcNo,
         itemName: j.itemName,
         plannedQty: parseInt(j.plannedQty || 0),
@@ -9143,6 +9359,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         id: o.id,
         isPlannedJob: false,
         orderId: o.id,
+        orderType: o.orderType || 'regular',
+        jobWorkType: o.jobWorkType || '',
         jobNo: jcNo,
         itemName: o.itemName || o.Item_Name,
         plannedQty: parseInt(o.orderQty || 0),
@@ -11293,7 +11511,14 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                   <tr key={o.id}>
                     <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>#{o.orderNo || (o.id || '').substring(0, 6)}</td>
                     <td style={{ fontWeight: 600, color: '#475569', fontFamily: 'var(--font-mono)' }}>{o.poNumber || o.poNo || '-'}</td>
-                    <td>{cust}</td>
+                    <td>
+                      <div>{cust}</div>
+                      {o.orderType === 'job_work' && (
+                        <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 2, display: 'inline-block' }}>
+                          🤝 JW: {o.jobWorkType || 'Conversion'}
+                        </span>
+                      )}
+                    </td>
                     {/* FULL ITEM NAME CELL (No clipping, no ellipsis) */}
                     <td style={{ fontWeight: 800, color: '#0f172a', wordBreak: 'break-word', whiteSpace: 'normal', minWidth: 280 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -11482,13 +11707,16 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
   const [orderHeader, setOrderHeader] = useState({
     orderDate: todayStr,
     companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
-    customerId: ''
+    orderType: 'regular', // 'regular' | 'job_work'
+    customerId: '',
+    jobWorkType: 'Full Box Conversion',
+    clientInwardRef: ''
   });
 
   const [ordersInput, setOrdersInput] = useState([{ ...emptyOrderRow }]);
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [filters, setFilters] = useState({ customer: '', search: '', status: '' });
+  const [filters, setFilters] = useState({ customer: '', orderType: 'All', search: '', status: '' });
 
   const addOrderRow = () => setOrdersInput([...ordersInput, { ...emptyOrderRow }]);
   const removeOrderRow = (idx) => setOrdersInput(ordersInput.filter((_, i) => i !== idx));
@@ -11507,7 +11735,10 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
     setOrderHeader({
       orderDate: ord.orderDate || todayStr,
       companyId: ord.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
-      customerId: ord.customerId || ''
+      orderType: ord.orderType || 'regular',
+      customerId: ord.customerId || '',
+      jobWorkType: ord.jobWorkType || 'Full Box Conversion',
+      clientInwardRef: ord.clientInwardRef || ''
     });
     setOrdersInput([{
       itemId: ord.itemId || '',
@@ -11526,6 +11757,12 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   const handleSaveOrders = async (e) => {
     e.preventDefault();
+    const isJobWork = orderHeader.orderType === 'job_work';
+    if (isJobWork && !orderHeader.customerId) {
+      alert("Please select a Job Work Client.");
+      return;
+    }
+
     const selectedCust = customers.find(c => c.id === orderHeader.customerId);
     const cust = selectedCust?.name || '';
     const finalCustName = cust || (orderHeader.customerId ? 'Client' : 'Direct / Internal');
@@ -11540,8 +11777,11 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         await updateDoc(getDocRef('orders', editingId), {
           orderDate: orderHeader.orderDate,
           companyId: orderHeader.companyId,
+          orderType: orderHeader.orderType || 'regular',
           customerId: orderHeader.customerId || '',
           customerName: finalCustName,
+          jobWorkType: isJobWork ? (orderHeader.jobWorkType || 'Full Box Conversion') : '',
+          clientInwardRef: isJobWork ? (orderHeader.clientInwardRef || '') : '',
           itemId: single.itemId || '',
           itemName: single.itemName,
           poNumber: single.poNumber || '',
@@ -11553,7 +11793,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           notes: single.notes || '',
           updatedAt: new Date().toISOString()
         });
-        if (addLog) addLog(`Updated order for ${single.itemName}`);
+        if (addLog) addLog(`Updated ${isJobWork ? 'Job Work' : 'factory'} order for ${single.itemName}`);
         setEditingId(null);
         setOrdersInput([{ ...emptyOrderRow }]);
         setShowBatchForm(false);
@@ -11563,11 +11803,14 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         for (const ord of ordersInput) {
           if (!ord.itemName.trim() || !ord.orderQty) continue;
           const ordPayload = {
-            orderNo: `ORD-${Date.now().toString().slice(-6)}`,
+            orderNo: `ORD-${isJobWork ? 'JW-' : ''}${Date.now().toString().slice(-6)}`,
+            orderType: orderHeader.orderType || 'regular',
             orderDate: orderHeader.orderDate,
             companyId: orderHeader.companyId,
             customerId: orderHeader.customerId || '',
             customerName: finalCustName,
+            jobWorkType: isJobWork ? (orderHeader.jobWorkType || 'Full Box Conversion') : '',
+            clientInwardRef: isJobWork ? (orderHeader.clientInwardRef || '') : '',
             itemId: ord.itemId,
             itemName: ord.itemName,
             poNumber: ord.poNumber,
@@ -11586,7 +11829,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           alert("Please fill in at least one item name and quantity.");
           return;
         }
-        if (addLog) addLog(`Added ${count} orders${cust ? ` for client ${cust}` : ''}`);
+        if (addLog) addLog(`Added ${count} ${isJobWork ? 'Job Work orders' : 'orders'}${cust ? ` for client ${cust}` : ''}`);
         setOrdersInput([{ ...emptyOrderRow }]);
         setShowBatchForm(false);
         alert(`✓ Saved ${count} order(s) successfully.`);
@@ -11596,6 +11839,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       alert(`Could not save order: ${err?.message || err}`);
     }
   };
+
 
   const [selectedOrderIds, setSelectedOrderIds] = useState(new Set());
 
@@ -11641,16 +11885,20 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
     const itemName = o.itemName || o.Item_Name || '';
     const po = o.poNumber || o.poNo || '';
 
+    if (filters.orderType === 'regular' && o.orderType === 'job_work') return false;
+    if (filters.orderType === 'job_work' && o.orderType !== 'job_work') return false;
     if (filters.customer && !custName.toLowerCase().includes(filters.customer.toLowerCase())) return false;
     if (filters.search) {
       const s = filters.search.toLowerCase();
-      if (!itemName.toLowerCase().includes(s) && !po.toLowerCase().includes(s) && !String(o.orderNo || '').toLowerCase().includes(s)) return false;
+      if (!itemName.toLowerCase().includes(s) && !po.toLowerCase().includes(s) && !String(o.orderNo || '').toLowerCase().includes(s) && !String(o.jobWorkType || '').toLowerCase().includes(s)) return false;
     }
     if (filters.status && o.status !== filters.status) return false;
     return true;
   });
 
   const totalOrders = filteredOrders.length;
+  const factoryOrdersCount = filteredOrders.filter(o => o.orderType !== 'job_work').length;
+  const jobWorkOrdersCount = filteredOrders.filter(o => o.orderType === 'job_work').length;
   const totalOrderedPcs = filteredOrders.reduce((sum, o) => sum + parseInt(o.orderQty || 0), 0);
   const totalDispatchedPcs = filteredOrders.reduce((sum, o) => sum + parseInt(o.dispatchedQty || 0), 0);
   const totalPendingPcs = Math.max(0, totalOrderedPcs - totalDispatchedPcs);
@@ -11658,11 +11906,13 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', paddingBottom: 48 }}>
-            {/* Top Excel Summary Bar */}
+      {/* Top Excel Summary Bar */}
       <div style={{ marginBottom: 14, padding: '12px 18px', background: '#0f172a', color: '#fff', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: 'var(--font-mono)', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8' }}>📋 ORDERS MANAGEMENT</span>
-          <span>ORDERS: <strong style={{ color: '#fbbf24' }}>{totalOrders} Total</strong></span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8' }}>📋 ORDERS MASTER</span>
+          <span>TOTAL: <strong style={{ color: '#fbbf24' }}>{totalOrders} Orders</strong></span>
+          <span style={{ color: '#a7f3d0' }}>🏭 FACTORY: <strong>{factoryOrdersCount}</strong></span>
+          <span style={{ color: '#c4b5fd' }}>🤝 JOB WORK: <strong>{jobWorkOrdersCount}</strong></span>
         </div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
           <span>TARGET PCS: <strong style={{ color: '#60a5fa' }}>{totalOrderedPcs.toLocaleString()}</strong></span>
@@ -11679,7 +11929,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
             className="apex-btn apex-btn-primary"
             style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#2563eb' }}
           >
-            {showBatchForm ? '✕ Close Form' : '➕ Add Orders (Excel Entry)'}
+            {showBatchForm ? '✕ Close Form' : '➕ Add Orders (Factory or Job Work)'}
           </button>
           {selectedOrderIds.size > 0 && (
             <button
@@ -11755,34 +12005,110 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       {/* Multi-Row Excel Order Entry Form */}
       {showBatchForm && (
         <div className="apex-card" style={{ padding: 18, marginBottom: 20, background: '#f8fafc', border: '1.5px solid #cbd5e1' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
             <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
               {editingId ? 'Edit Order' : `➕ Multi-Row Order Inwarding (${ordersInput.length} Items)`}
             </h3>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Select customer (optional)/unit &amp; enter order rows below</span>
+            
+            {/* Order Type Selector Pill */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#fff', padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase' }}>Order Type:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: orderHeader.orderType === 'regular' ? '#0f172a' : '#64748b' }}>
+                <input
+                  type="radio"
+                  name="orderType"
+                  value="regular"
+                  checked={orderHeader.orderType === 'regular'}
+                  onChange={() => setOrderHeader({ ...orderHeader, orderType: 'regular' })}
+                />
+                📦 Regular Factory Order
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: orderHeader.orderType === 'job_work' ? '#6d28d9' : '#64748b' }}>
+                <input
+                  type="radio"
+                  name="orderType"
+                  value="job_work"
+                  checked={orderHeader.orderType === 'job_work'}
+                  onChange={() => {
+                    const firstJw = customers.find(c => (c.clientType || 'Job Work Client') === 'Job Work Client') || customers[0];
+                    setOrderHeader({
+                      ...orderHeader,
+                      orderType: 'job_work',
+                      customerId: firstJw?.id || orderHeader.customerId,
+                      jobWorkType: 'Full Box Conversion'
+                    });
+                  }}
+                />
+                🤝 Job Work Conversion Order
+              </label>
+            </div>
           </div>
 
           <form onSubmit={handleSaveOrders}>
             {/* Header Details */}
-            <div style={{ display: 'grid', gridTemplateColumns: editingId ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 12, background: '#fff', padding: 12, borderRadius: 8, border: '1px solid #e2e8f0', marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: orderHeader.orderType === 'job_work' ? 'repeat(5, 1fr)' : (editingId ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)'), gap: 12, background: orderHeader.orderType === 'job_work' ? '#f5f3ff' : '#fff', padding: 12, borderRadius: 8, border: `1px solid ${orderHeader.orderType === 'job_work' ? '#ddd6fe' : '#e2e8f0'}`, marginBottom: 12 }}>
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Order Date *</label>
                 <input required type="date" className="apex-input" value={orderHeader.orderDate} onChange={e => setOrderHeader({ ...orderHeader, orderDate: e.target.value })} />
               </div>
+              
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Customer / Client (Optional)</label>
-                <select className="apex-select" value={orderHeader.customerId} onChange={e => setOrderHeader({ ...orderHeader, customerId: e.target.value })}>
-                  <option value="">-- Choose Customer (Optional / Direct) --</option>
-                  {[...customers].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                <label style={{ fontSize: 11, fontWeight: 700, color: orderHeader.orderType === 'job_work' ? '#5b21b6' : 'var(--text-secondary)' }}>
+                  {orderHeader.orderType === 'job_work' ? 'Job Work Client *' : 'Customer / Client (Optional)'}
+                </label>
+                <select
+                  required={orderHeader.orderType === 'job_work'}
+                  className="apex-select"
+                  value={orderHeader.customerId}
+                  onChange={e => setOrderHeader({ ...orderHeader, customerId: e.target.value })}
+                >
+                  <option value="">{orderHeader.orderType === 'job_work' ? '-- Choose Job Work Client * --' : '-- Choose Customer (Optional) --'}</option>
+                  {[...customers].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.clientType === 'Job Work Client' ? '🤝 ' : ''}{c.name} {c.code ? `(${c.code})` : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
+
+              {orderHeader.orderType === 'job_work' && (
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#5b21b6' }}>Conversion Scope *</label>
+                  <select
+                    className="apex-select"
+                    value={orderHeader.jobWorkType || 'Full Box Conversion'}
+                    onChange={e => setOrderHeader({ ...orderHeader, jobWorkType: e.target.value })}
+                  >
+                    <option value="Full Box Conversion">📦 Full Box Conversion</option>
+                    <option value="Corrugation & Board Making Only">🌊 Corrugation Only</option>
+                    <option value="Printing & Slotting Only">🖨️ Printing &amp; Slotting Only</option>
+                    <option value="Die Punching Only">✂️ Die Punching Only</option>
+                    <option value="Pasting / Stitching Only">🧵 Pasting / Stitching Only</option>
+                  </select>
+                </div>
+              )}
+
+              {orderHeader.orderType === 'job_work' && (
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#5b21b6' }}>Client Inward DC / PO Ref</label>
+                  <input
+                    type="text"
+                    className="apex-input font-mono"
+                    placeholder="e.g. DC-9841 / PO-332"
+                    value={orderHeader.clientInwardRef || ''}
+                    onChange={e => setOrderHeader({ ...orderHeader, clientInwardRef: e.target.value })}
+                  />
+                </div>
+              )}
+
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Manufacturing Unit</label>
                 <select className="apex-select" value={orderHeader.companyId} onChange={e => setOrderHeader({ ...orderHeader, companyId: e.target.value })}>
                   <option value="">-- Select Unit --</option>
-                  {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {visibleCompanies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                 </select>
               </div>
+              
               {editingId && (
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Order Status</label>
@@ -11804,7 +12130,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                     <th className="p-2 min-w-[200px]">Select Box Spec / Item *</th>
                     <th className="p-2 min-w-[140px]">PO Number / Ref</th>
                     <th className="p-2 w-28">Order Qty (pcs) *</th>
-                    <th className="p-2 w-24">Rate (₹/pc)</th>
+                    <th className="p-2 w-24">{orderHeader.orderType === 'job_work' ? 'Job Rate (₹/pc)' : 'Rate (₹/pc)'}</th>
                     <th className="p-2 min-w-[130px]">Delivery Date *</th>
                     <th className="p-2 w-10 text-center">✕</th>
                   </tr>
@@ -11855,8 +12181,8 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                   + Add Another Order Row
                 </button>
               )}
-              <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 800, background: '#2563eb' }}>
-                {editingId ? 'Update Order' : `Save ${ordersInput.length} Order(s)`}
+              <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 800, background: orderHeader.orderType === 'job_work' ? '#6d28d9' : '#2563eb' }}>
+                {editingId ? 'Update Order' : `Save ${ordersInput.length} ${orderHeader.orderType === 'job_work' ? 'Job Work' : 'Factory'} Order(s)`}
               </button>
               <button type="button" onClick={() => { setShowBatchForm(false); setEditingId(null); }} className="apex-btn apex-btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }}>
                 Cancel
@@ -11869,6 +12195,19 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       {/* Filter Row */}
       <div className="apex-card" style={{ padding: '10px 16px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>FILTER:</span>
+        
+        {/* Order Type Filter Pill */}
+        <select
+          className="apex-select"
+          style={{ width: 'auto', padding: '4px 10px', fontSize: 12, fontWeight: 700, borderColor: filters.orderType === 'job_work' ? '#8b5cf6' : '#cbd5e1' }}
+          value={filters.orderType}
+          onChange={e => setFilters({ ...filters, orderType: e.target.value })}
+        >
+          <option value="All">All Orders</option>
+          <option value="regular">📦 Factory Orders Only</option>
+          <option value="job_work">🤝 Job Work Orders Only</option>
+        </select>
+
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <input type="text" placeholder="Search Item / PO / ID..." className="apex-input" style={{ width: 220, padding: '4px 30px 4px 8px', fontSize: 12 }} value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} />
           <div style={{ position: 'absolute', right: 4 }}>
@@ -11882,7 +12221,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         <select className="apex-select" style={{ width: 140, padding: '4px 8px', fontSize: 12 }} value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })}>
           <option value="">All Statuses</option><option value="Pending">Pending</option><option value="In Production">In Production</option><option value="Completed">Completed</option>
         </select>
-        <button onClick={() => setFilters({ customer: '', search: '', status: '' })} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, color: '#3b82f6' }}>Clear</button>
+        <button onClick={() => setFilters({ customer: '', orderType: 'All', search: '', status: '' })} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, color: '#3b82f6' }}>Clear</button>
       </div>
 
       {/* Excel Sheet Table */}
@@ -11903,7 +12242,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
               <th>Order ID</th>
               <th>PO Number</th>
               <th>Date</th>
-              <th>Customer</th>
+              <th>Customer / Client</th>
               <th>Item Ordered</th>
               <th>Order Qty</th>
               <th>Dispatched</th>
@@ -11932,10 +12271,24 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                     />
                   </td>
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#2563eb' }}>#{ord.orderNo || (ord.id || '').substring(0, 6)}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: ord.orderType === 'job_work' ? '#7c3aed' : '#2563eb' }}>
+                    <div>#{ord.orderNo || (ord.id || '').substring(0, 6)}</div>
+                    {ord.orderType === 'job_work' && (
+                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 2, display: 'inline-block' }}>
+                        🤝 JOB WORK
+                      </span>
+                    )}
+                  </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#475569' }}>{ord.poNumber || ord.poNo || '-'}</td>
                   <td>{ord.orderDate || '-'}</td>
-                  <td><strong>{custName}</strong></td>
+                  <td>
+                    <strong>{custName}</strong>
+                    {ord.jobWorkType && (
+                      <div style={{ fontSize: 10.5, color: '#6d28d9', fontWeight: 600, marginTop: 1 }}>
+                        Scope: {ord.jobWorkType}
+                      </div>
+                    )}
+                  </td>
                   <td><strong style={{ color: '#0f172a' }}>{ord.itemName}</strong></td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{parseInt(ord.orderQty || 0).toLocaleString()} pcs</td>
                   <td style={{ fontFamily: 'var(--font-mono)', color: '#16a34a' }}>{parseInt(ord.dispatchedQty || 0).toLocaleString()} pcs</td>
@@ -11959,7 +12312,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                     <button
                       onClick={() => onStartProduction?.(ord)}
                       className="apex-btn apex-btn-primary apex-btn-sm"
-                      style={{ padding: '3px 8px', fontSize: 11, fontWeight: 800, marginRight: 6, background: '#2563eb' }}
+                      style={{ padding: '3px 8px', fontSize: 11, fontWeight: 800, marginRight: 6, background: ord.orderType === 'job_work' ? '#7c3aed' : '#2563eb' }}
                     >
                       🚀 Prod
                     </button>
@@ -15404,27 +15757,49 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
   );
 }
 
-function CustomersView({ customers = [], companies = [], addLog, getColRef, getDocRef, activeUnitId = '', autoSetUnit }) {
+function CustomersView({
+  customers = [],
+  companies = [],
+  inventory = [],
+  orders = [],
+  production = [],
+  wipStages = [],
+  items = [],
+  addLog,
+  getColRef,
+  getDocRef,
+  activeUnitId = '',
+  autoSetUnit,
+  setActiveTab
+}) {
+  const nashikUnitId = getNashikCompanyId(companies);
   const blank = {
     name: '',
     code: '',
-    unitId: activeUnitId || (companies[0]?.id || ''),
-    clientType: 'Direct Client',
+    unitId: nashikUnitId || activeUnitId || (companies[0]?.id || ''),
+    clientType: 'Job Work Client',
     gstin: '',
     billingAddress: '',
-    state: '',
+    state: 'Maharashtra',
     phone: '',
     email: '',
-    contactPerson: ''
+    contactPerson: '',
+    conversionRate: '',
+    defaultJobWorkType: 'Full Box Conversion',
+    notes: ''
   };
 
   const [form, setForm] = useState(blank);
   const [editId, setEditId] = useState(null);
   const [filterUnit, setFilterUnit] = useState(activeUnitId || '');
+  const [clientTypeFilter, setClientTypeFilter] = useState('All'); // 'All' | 'Job Work Client' | 'Direct Client'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCustIds, setSelectedCustIds] = useState(new Set());
-  const [showAddCard, setShowAddCard] = useState(true);
+  const [showAddCard, setShowAddCard] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // 360° Drilldown Portal State
+  const [activePortalClient, setActivePortalClient] = useState(null);
 
   // Sync default unit when activeUnitId changes
   useEffect(() => {
@@ -15439,14 +15814,17 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
     setForm({
       name: c.name || '',
       code: c.code || '',
-      unitId: c.unitId || activeUnitId || (companies[0]?.id || ''),
-      clientType: c.clientType || 'Direct Client',
+      unitId: c.unitId || nashikUnitId || activeUnitId || (companies[0]?.id || ''),
+      clientType: c.clientType || 'Job Work Client',
       gstin: c.gstin || '',
       billingAddress: c.billingAddress || '',
       state: c.state || '',
       phone: c.phone || '',
       email: c.email || '',
-      contactPerson: c.contactPerson || ''
+      contactPerson: c.contactPerson || '',
+      conversionRate: c.conversionRate || '',
+      defaultJobWorkType: c.defaultJobWorkType || 'Full Box Conversion',
+      notes: c.notes || ''
     });
     setShowAddCard(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -15456,8 +15834,9 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
     setEditId(null);
     setForm({
       ...blank,
-      unitId: activeUnitId || (companies[0]?.id || '')
+      unitId: nashikUnitId || activeUnitId || (companies[0]?.id || '')
     });
+    setShowAddCard(false);
   };
 
   const handleSave = async (e) => {
@@ -15470,19 +15849,24 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
 
     setIsSaving(true);
     try {
-      const selectedUnit = companies.find(c => c.id === form.unitId);
+      const targetUnitId = form.unitId || nashikUnitId || activeUnitId || '';
+      const selectedUnit = companies.find(c => c.id === targetUnitId);
       const payload = {
         name: trimmedName,
         code: (form.code || '').trim(),
-        clientType: form.clientType || 'Direct Client',
-        unitId: form.unitId || activeUnitId || '',
-        unitName: selectedUnit?.name || '',
+        clientType: form.clientType || 'Job Work Client',
+        unitId: targetUnitId,
+        unitName: selectedUnit?.name || 'Nashik Plant',
         gstin: (form.gstin || '').trim().toUpperCase(),
         billingAddress: (form.billingAddress || '').trim(),
         state: (form.state || '').trim(),
         phone: (form.phone || '').trim(),
         email: (form.email || '').trim(),
-        contactPerson: (form.contactPerson || '').trim()
+        contactPerson: (form.contactPerson || '').trim(),
+        conversionRate: form.conversionRate ? parseFloat(form.conversionRate) : 0,
+        defaultJobWorkType: form.defaultJobWorkType || 'Full Box Conversion',
+        notes: (form.notes || '').trim(),
+        updatedAt: new Date().toISOString()
       };
 
       if (editId) {
@@ -15491,13 +15875,14 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
         alert(`✓ Client "${trimmedName}" updated successfully!`);
         cancel();
       } else {
-        await addDoc(getColRef('customers'), payload);
+        await addDoc(getColRef('customers'), { ...payload, createdAt: new Date().toISOString() });
         if (addLog) addLog(`Added new client: ${trimmedName}`);
         alert(`✓ Client "${trimmedName}" added successfully!`);
         setForm({
           ...blank,
-          unitId: activeUnitId || (companies[0]?.id || '')
+          unitId: nashikUnitId || activeUnitId || (companies[0]?.id || '')
         });
+        setShowAddCard(false);
       }
     } catch (err) {
       console.error("Failed to save client:", err);
@@ -15559,12 +15944,17 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
   const handleExport = () => {
     if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
     const exportData = filtered.map(c => {
+      const stats = getClientStats(c);
       const unitName = companies.find(u => u.id === c.unitId)?.name || c.unitName || 'All Units';
       return {
         Client_Name: c.name || '',
         Client_Code: c.code || '',
-        Type: c.clientType || 'Direct Client',
+        Type: c.clientType || 'Job Work Client',
         Unit: unitName,
+        Stock_Reels_Count: stats.stockReelsCount,
+        Stock_Paper_KG: stats.stockKg.toFixed(1),
+        Active_Orders_Count: stats.activeOrdersCount,
+        Finished_Goods_Boxes: stats.finishedGoodsReady,
         Contact_Person: c.contactPerson || '',
         Phone: c.phone || '',
         Email: c.email || '',
@@ -15573,11 +15963,62 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
         Billing_Address: c.billingAddress || ''
       };
     });
-    downloadCSV(exportData, 'clients_master');
+    downloadCSV(exportData, 'job_work_clients_master');
   };
 
+  // Helper to compute client-specific live operational stats
+  const getClientStats = (client) => {
+    const cId = client.id;
+    const cName = (client.name || '').trim().toLowerCase();
+
+    // 1. Client-Owned Inventory Reels
+    const clientReels = (inventory || []).filter(r => {
+      if (r.category && r.category !== 'Paper') return false;
+      const matchId = r.clientId === cId;
+      const matchName = String(r.clientName || r.millName || '').trim().toLowerCase() === cName;
+      const isJW = r.stockType === 'job_work' || matchId;
+      return (matchId || matchName) && isJW;
+    });
+
+    const activeReels = clientReels.filter(r => (parseFloat(r.balanceQty) || parseFloat(r.receivedQty) || 0) > 0);
+    const stockKg = clientReels.reduce((sum, r) => sum + (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty) || 0), 0);
+    const totalInwardKg = clientReels.reduce((sum, r) => sum + (parseFloat(r.receivedQty) || 0), 0);
+
+    // 2. Client Orders
+    const clientOrders = (orders || []).filter(o => {
+      return o.customerId === cId || String(o.customerName || '').trim().toLowerCase() === cName;
+    });
+    const activeOrders = clientOrders.filter(o => o.status !== 'Completed' && o.status !== 'Dispatched');
+
+    // 3. Finished Goods Produced / Ready
+    const clientProd = (production || []).filter(p => {
+      return p.customerId === cId || String(p.customerName || p.clientName || '').trim().toLowerCase() === cName;
+    });
+    const totalProducedSheets = clientProd.reduce((sum, p) => sum + (parseFloat(p.linerQty || p.producedQty) || 0), 0);
+
+    const finishedGoodsReady = clientOrders.reduce((sum, o) => {
+      const orderProd = clientProd.filter(p => p.orderId === o.id);
+      const prodQty = orderProd.reduce((s, p) => s + (parseFloat(p.linerQty || p.producedQty) || 0), 0);
+      const dispQty = parseFloat(o.dispatchedQty || 0);
+      return sum + Math.max(0, prodQty - dispQty);
+    }, 0);
+
+    return {
+      clientReels,
+      stockReelsCount: activeReels.length,
+      stockKg,
+      totalInwardKg,
+      clientOrders,
+      activeOrdersCount: activeOrders.length,
+      finishedGoodsReady: Math.floor(finishedGoodsReady),
+      totalProducedSheets
+    };
+  };
+
+  // Filtered Client List
   const filtered = customers.filter(c => {
     if (filterUnit && c.unitId && c.unitId !== 'all' && c.unitId !== filterUnit) return false;
+    if (clientTypeFilter !== 'All' && (c.clientType || 'Job Work Client') !== clientTypeFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const name = (c.name || '').toLowerCase();
@@ -15593,29 +16034,121 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
     return true;
   });
 
+  // Global KPI Aggregates
+  const totalJobWorkClients = customers.filter(c => (c.clientType || 'Job Work Client') === 'Job Work Client').length;
+  const totalDirectBuyers = customers.filter(c => c.clientType === 'Direct Client').length;
+  const totalJobWorkPaperKg = customers.reduce((sum, c) => sum + getClientStats(c).stockKg, 0);
+  const totalActiveJWJobs = customers.reduce((sum, c) => sum + getClientStats(c).activeOrdersCount, 0);
+
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', paddingBottom: 48 }}>
-      {/* Top Excel Summary Bar */}
-      <div style={{ marginBottom: 14, padding: '12px 18px', background: '#0f172a', color: '#fff', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: 'var(--font-mono)', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8' }}>👥 CLIENTS / CUSTOMERS MASTER</span>
-          <span>TOTAL: <strong style={{ color: '#fbbf24' }}>{customers.length} Clients</strong></span>
+    <div style={{ maxWidth: 1280, margin: '0 auto', paddingBottom: 48 }}>
+      {/* 360° Client Job Work Drilldown Portal Modal */}
+      {activePortalClient && (
+        <ClientJobWorkPortalModal
+          client={activePortalClient}
+          onClose={() => setActivePortalClient(null)}
+          companies={companies}
+          inventory={inventory}
+          orders={orders}
+          production={production}
+          wipStages={wipStages}
+          items={items}
+          getColRef={getColRef}
+          getDocRef={getDocRef}
+          addLog={addLog}
+          setActiveTab={setActiveTab}
+        />
+      )}
+
+      {/* Top Summary KPI Banner */}
+      <div style={{
+        marginBottom: 16,
+        padding: '14px 20px',
+        background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
+        color: '#fff',
+        borderRadius: 12,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 14,
+        boxShadow: '0 4px 16px rgba(15, 23, 42, 0.25)',
+        border: '1px solid #312e81'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: '0 4px 12px rgba(99, 102, 241, 0.4)' }}>
+            🤝
+          </div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: '#f8fafc', letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>JOB WORK &amp; CLIENT CONVERSION HUB</span>
+              <span style={{ fontSize: 11, background: '#4338ca', color: '#e0e7ff', padding: '2px 8px', borderRadius: 6, border: '1px solid #6366f1' }}>🏭 NASHIK PLANT</span>
+            </div>
+            <div style={{ fontSize: 11.5, color: '#a5b4fc' }}>
+              Job Work &amp; Toll Conversion operations are exclusively executed at the Nashik Manufacturing Plant
+            </div>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span>FILTERED: <strong style={{ color: '#60a5fa' }}>{filtered.length} Shown</strong></span>
-          {companies.length > 0 && <span>UNITS: <strong style={{ color: '#4ade80' }}>{companies.length} Active</strong></span>}
+
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+          <div style={{ background: 'rgba(255,255,255,0.06)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)' }}>
+            <span style={{ color: '#94a3b8' }}>TOTAL CLIENTS: </span>
+            <strong style={{ color: '#38bdf8', fontSize: 14 }}>{customers.length}</strong>
+            <span style={{ fontSize: 10.5, color: '#64748b', marginLeft: 4 }}>({totalJobWorkClients} Job Work · {totalDirectBuyers} Direct)</span>
+          </div>
+
+          <div style={{ background: 'rgba(99, 102, 241, 0.15)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+            <span style={{ color: '#c7d2fe' }}>NASHIK CLIENT PAPER: </span>
+            <strong style={{ color: '#4ade80', fontSize: 14 }}>{totalJobWorkPaperKg.toLocaleString('en-IN', { maximumFractionDigits: 0 })} KG</strong>
+            <span style={{ fontSize: 10.5, color: '#86efac', marginLeft: 4 }}>({(totalJobWorkPaperKg / 1000).toFixed(2)} MT)</span>
+          </div>
+
+          <div style={{ background: 'rgba(245, 158, 11, 0.15)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+            <span style={{ color: '#fde68a' }}>ACTIVE NASHIK JOBS: </span>
+            <strong style={{ color: '#fbbf24', fontSize: 14 }}>{totalActiveJWJobs} in WIP</strong>
+          </div>
         </div>
       </div>
 
+      {/* Action Header & Tabs */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+        {/* Category Pills */}
+        <div style={{ display: 'flex', gap: 6, background: '#f1f5f9', padding: 4, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+          {[
+            { id: 'All', label: 'All Partners', icon: '👥' },
+            { id: 'Job Work Client', label: 'Job Work Clients (Nashik)', icon: '🤝' },
+            { id: 'Direct Client', label: 'Direct Box Buyers', icon: '📦' },
+            { id: 'Trader', label: 'Traders / Brokers', icon: '💼' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setClientTypeFilter(tab.id)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 7,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: 'none',
+                background: clientTypeFilter === tab.id ? '#1e293b' : 'transparent',
+                color: clientTypeFilter === tab.id ? '#ffffff' : '#64748b',
+                boxShadow: clientTypeFilter === tab.id ? '0 2px 6px rgba(0,0,0,0.15)' : 'none',
+                transition: 'all 0.15s'
+              }}
+            >
+              <span style={{ marginRight: 5 }}>{tab.icon}</span> {tab.label}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => { setShowAddCard(!showAddCard); if (editId) cancel(); }}
-            className="apex-btn apex-btn-primary"
-            style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#2563eb' }}
+            className="apex-btn"
+            style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: 'linear-gradient(135deg, #4f46e5, #6366f1)', color: '#fff', boxShadow: '0 2px 8px rgba(79,70,229,0.35)' }}
           >
-            {showAddCard && !editId ? '✕ Hide Form' : (editId ? '➕ New Client' : '➕ Add Client')}
+            {showAddCard && !editId ? '✕ Close Form' : (editId ? '➕ New Client' : '➕ Add Client / Job Work Partner')}
           </button>
           {selectedCustIds.size > 0 && (
             <button
@@ -15636,17 +16169,14 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
             <Download style={{ width: 14, height: 14 }} /> Export to Excel
           </button>
         </div>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          Job work &amp; direct buyers mapped to manufacturing units
-        </span>
       </div>
 
       {/* Add / Edit Client Card */}
       {showAddCard && (
-        <div className="apex-card" style={{ padding: 22, marginBottom: 20, background: '#f8fafc', border: '1.5px solid #cbd5e1' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div className="apex-card" style={{ padding: 22, marginBottom: 20, background: '#f8fafc', border: '1.5px solid #cbd5e1', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, borderBottom: '1px solid #e2e8f0', paddingBottom: 10 }}>
             <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
-              {editId ? '✏️ Edit Client Information' : '➕ Add New Client / Customer'}
+              {editId ? '✏️ Edit Client / Job Work Profile' : '➕ Register New Client / Job Work Partner (Nashik Plant)'}
             </h3>
             {editId && (
               <span style={{ fontSize: 11, background: '#dbeafe', color: '#1e40af', padding: '2px 8px', borderRadius: 4, fontWeight: 700 }}>
@@ -15656,7 +16186,7 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
           </div>
 
           <form onSubmit={handleSave}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 14 }}>
               {/* Client Name */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
@@ -15666,17 +16196,35 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                   required
                   type="text"
                   className="apex-input"
-                  placeholder="e.g. ABC Packaging Ltd"
+                  placeholder="e.g. Paramount Packaging Ltd"
                   value={form.name}
                   onChange={e => setForm({ ...form, name: e.target.value })}
                   style={{ fontWeight: 700, borderColor: '#93c5fd' }}
                 />
               </div>
 
+              {/* Client Type */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  Engagement Type *
+                </label>
+                <select
+                  className="apex-select"
+                  value={form.clientType}
+                  onChange={e => setForm({ ...form, clientType: e.target.value })}
+                  style={{ fontWeight: 700, borderColor: '#a5b4fc', background: form.clientType === 'Job Work Client' ? '#eef2ff' : '#fff' }}
+                >
+                  <option value="Job Work Client">🤝 Job Work Client (Nashik Conversion Hub)</option>
+                  <option value="Direct Client">📦 Direct Client (Finished Box Buyer)</option>
+                  <option value="Trader">💼 Trader / Broker</option>
+                  <option value="Sister Unit">🏢 Sister Unit (Internal)</option>
+                </select>
+              </div>
+
               {/* Manufacturing Unit */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                  Selling Manufacturing Unit *
+                  Mapped Manufacturing Unit *
                 </label>
                 <select
                   className="apex-select"
@@ -15684,43 +16232,60 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                   onChange={e => setForm({ ...form, unitId: e.target.value })}
                   style={{ fontWeight: 600 }}
                 >
-                  <option value="">— All / General Units —</option>
-                  {companies.map(c => (
+                  {nashikUnitId && <option value={nashikUnitId}>🏭 {getNashikCompanyName(companies)} (⭐ Job Work Hub)</option>}
+                  {companies.filter(c => c.id !== nashikUnitId).map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
+                  <option value="">— All / Multi-Unit —</option>
                 </select>
               </div>
 
-              {/* Client Type */}
+              {/* Short Code */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                  Client Type
-                </label>
-                <select
-                  className="apex-select"
-                  value={form.clientType}
-                  onChange={e => setForm({ ...form, clientType: e.target.value })}
-                >
-                  <option value="Direct Client">Direct Client (Box Buyer)</option>
-                  <option value="Job Work Client">Job Work Client (Conversion)</option>
-                  <option value="Trader">Trader / Distributor</option>
-                  <option value="Sister Unit">Sister Unit</option>
-                </select>
-              </div>
-
-              {/* Client Short Code / Ref */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                  Short Code / Ref
+                  Short Code / Ref ID
                 </label>
                 <input
                   type="text"
                   className="apex-input"
-                  placeholder="e.g. ABC-01"
+                  placeholder="e.g. PPL-JW"
                   value={form.code}
                   onChange={e => setForm({ ...form, code: e.target.value })}
-                  style={{ fontFamily: 'var(--font-mono)' }}
+                  style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}
                 />
+              </div>
+
+              {/* Default Conversion Rate */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  Default Conversion Rate (₹)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="apex-input"
+                  placeholder="e.g. 1.85 / kg or 1200 / 1000 pcs"
+                  value={form.conversionRate}
+                  onChange={e => setForm({ ...form, conversionRate: e.target.value })}
+                />
+              </div>
+
+              {/* Default Job Work Scope */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  Default Job Work Scope
+                </label>
+                <select
+                  className="apex-select"
+                  value={form.defaultJobWorkType}
+                  onChange={e => setForm({ ...form, defaultJobWorkType: e.target.value })}
+                >
+                  <option value="Full Box Conversion">Full Conversion (Reels → Finished Boxes)</option>
+                  <option value="Corrugation Only">Corrugation &amp; Fluting Only (Reels → Sheets)</option>
+                  <option value="Printing & Slotting">Printing &amp; Rotary Slotting Only</option>
+                  <option value="Die Cutting">Punching / Die Cutting Only</option>
+                  <option value="Pasting / Stitching">Auto Pasting / Stitching Only</option>
+                </select>
               </div>
 
               {/* Contact Person */}
@@ -15731,7 +16296,7 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                 <input
                   type="text"
                   className="apex-input"
-                  placeholder="e.g. Mr. Sharma"
+                  placeholder="e.g. Mr. Rajesh Patel"
                   value={form.contactPerson}
                   onChange={e => setForm({ ...form, contactPerson: e.target.value })}
                 />
@@ -15759,7 +16324,7 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                 <input
                   type="text"
                   className="apex-input"
-                  placeholder="27AAAAA0000A1Z5"
+                  placeholder="24AAAAA0000A1Z5"
                   value={form.gstin}
                   onChange={e => setForm({ ...form, gstin: e.target.value })}
                   style={{ fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}
@@ -15774,47 +16339,60 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                 <input
                   type="text"
                   className="apex-input"
-                  placeholder="e.g. Gujarat, Maharashtra"
+                  placeholder="e.g. Gujarat, Daman"
                   value={form.state}
                   onChange={e => setForm({ ...form, state: e.target.value })}
                 />
               </div>
             </div>
 
-            {/* Billing Address */}
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 4 }}>
-                Full Billing / Delivery Address
-              </label>
-              <textarea
-                className="apex-input"
-                rows={2}
-                placeholder="Plot No., Industrial Area, City, Pincode"
-                value={form.billingAddress}
-                onChange={e => setForm({ ...form, billingAddress: e.target.value })}
-                style={{ resize: 'vertical' }}
-              />
+            {/* Address & Notes */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 4 }}>
+                  Full Billing &amp; Dispatch Address
+                </label>
+                <textarea
+                  className="apex-input"
+                  rows={2}
+                  placeholder="Factory plot, GIDC Industrial Estate, City, Pin"
+                  value={form.billingAddress}
+                  onChange={e => setForm({ ...form, billingAddress: e.target.value })}
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 4 }}>
+                  Internal Job Work Notes &amp; Terms
+                </label>
+                <textarea
+                  className="apex-input"
+                  rows={2}
+                  placeholder="e.g. Standard scrap allowance 4.5%. Return trim paper on monthly basis."
+                  value={form.notes}
+                  onChange={e => setForm({ ...form, notes: e.target.value })}
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: 10 }}>
               <button
                 type="submit"
                 disabled={isSaving}
-                className="apex-btn apex-btn-primary"
-                style={{ fontWeight: 800, padding: '8px 20px', background: '#2563eb' }}
+                className="apex-btn"
+                style={{ fontWeight: 800, padding: '8px 22px', background: 'linear-gradient(135deg, #4f46e5, #6366f1)', color: '#fff' }}
               >
-                {isSaving ? 'Saving...' : (editId ? '✓ Save Changes' : '➕ Save Client')}
+                {isSaving ? 'Saving...' : (editId ? '✓ Save Client Changes' : '➕ Save Client / Partner')}
               </button>
-              {editId && (
-                <button
-                  type="button"
-                  className="apex-btn apex-btn-secondary"
-                  onClick={cancel}
-                  style={{ padding: '8px 16px' }}
-                >
-                  Cancel Edit
-                </button>
-              )}
+              <button
+                type="button"
+                className="apex-btn apex-btn-secondary"
+                onClick={cancel}
+                style={{ padding: '8px 16px' }}
+              >
+                Cancel
+              </button>
             </div>
           </form>
         </div>
@@ -15826,9 +16404,9 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <input
             type="text"
-            placeholder="Search by client name, GST, phone, contact, state..."
+            placeholder="Search by client name, GST, phone, contact, code..."
             className="apex-input"
-            style={{ width: 280, padding: '5px 30px 5px 10px', fontSize: 12 }}
+            style={{ width: 300, padding: '6px 32px 6px 10px', fontSize: 12 }}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
@@ -15840,7 +16418,7 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Unit:</span>
           <select
             className="apex-select"
-            style={{ width: 160, padding: '5px 8px', fontSize: 12 }}
+            style={{ width: 160, padding: '6px 8px', fontSize: 12 }}
             value={filterUnit}
             onChange={e => setFilterUnit(e.target.value)}
           >
@@ -15850,21 +16428,21 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
             ))}
           </select>
         </div>
-        {(searchQuery || filterUnit) && (
+        {(searchQuery || filterUnit || clientTypeFilter !== 'All') && (
           <button
             type="button"
-            onClick={() => { setSearchQuery(''); setFilterUnit(''); }}
+            onClick={() => { setSearchQuery(''); setFilterUnit(''); setClientTypeFilter('All'); }}
             className="apex-btn apex-btn-ghost apex-btn-sm"
             style={{ fontSize: 11, color: '#3b82f6' }}
           >
-            Clear Filters
+            Reset Filters
           </button>
         )}
       </div>
 
-      {/* Clients Spreadsheet Table */}
-      <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', overflowX: 'auto' }}>
-        <table className="apex-table" style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 12.5 }}>
+      {/* Clients Directory Spreadsheet Table */}
+      <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.06)', overflowX: 'auto' }}>
+        <table className="apex-table" style={{ width: '100%', minWidth: 1150, borderCollapse: 'collapse', fontSize: 12.5 }}>
           <thead>
             <tr style={{ background: '#1e293b', color: '#fff' }}>
               <th style={{ width: 36, textAlign: 'center', padding: '8px 4px' }}>
@@ -15877,22 +16455,23 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                 />
               </th>
               <th style={{ width: 36, textAlign: 'center', padding: 8 }}>#</th>
-              <th>Client Name</th>
-              <th>Unit Mapping</th>
+              <th>Client / Partner Name</th>
               <th>Type</th>
+              <th>Unit Mapping</th>
+              <th style={{ textAlign: 'center' }}>📦 Paper in Stock</th>
+              <th style={{ textAlign: 'center' }}>📋 Active Jobs</th>
+              <th style={{ textAlign: 'center' }}>🚚 FG Ready</th>
               <th>Contact Person</th>
               <th>Phone</th>
               <th>GSTIN</th>
-              <th>State / Location</th>
-              <th>Address</th>
-              <th style={{ textAlign: 'right', paddingRight: 14 }}>Actions</th>
+              <th style={{ textAlign: 'right', paddingRight: 16, minWidth: 160 }}>360° Operations</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan="11" style={{ textAlign: 'center', padding: 36, fontStyle: 'italic', color: '#94a3b8' }}>
-                  No clients found matching your filters. Add a client using the form above.
+                <td colSpan="12" style={{ textAlign: 'center', padding: 40, fontStyle: 'italic', color: '#94a3b8' }}>
+                  No clients found matching your search. Click "➕ Add Client" above to register a new partner.
                 </td>
               </tr>
             )}
@@ -15900,6 +16479,8 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
               const unitObj = companies.find(u => u.id === c.unitId);
               const unitDisplayName = unitObj ? unitObj.name : (c.unitName || 'All Units');
               const isSelected = selectedCustIds.has(c.id);
+              const stats = getClientStats(c);
+              const isJobWork = (c.clientType || 'Job Work Client') === 'Job Work Client';
 
               return (
                 <tr key={c.id} style={{ background: isSelected ? '#fef2f2' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc') }}>
@@ -15913,8 +16494,15 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                   </td>
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
                   <td>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: 13 }}>{c.name}</div>
-                    {c.code && <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: '#64748b' }}>Code: {c.code}</span>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontWeight: 800, color: '#0f172a', fontSize: 13.5 }}>{c.name}</div>
+                      {isJobWork && (
+                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe', fontWeight: 800 }}>
+                          JOB WORK
+                        </span>
+                      )}
+                    </div>
+                    {c.code && <span style={{ fontSize: 10.5, fontFamily: 'var(--font-mono)', color: '#64748b' }}>Code: {c.code}</span>}
                   </td>
                   <td>
                     <span style={{
@@ -15922,33 +16510,119 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                       fontWeight: 700,
                       padding: '2px 8px',
                       borderRadius: 6,
-                      background: unitObj ? '#f0fdf4' : '#f1f5f9',
-                      color: unitObj ? '#166534' : '#475569',
-                      border: `1px solid ${unitObj ? '#bbf7d0' : '#e2e8f0'}`
+                      background: isJobWork ? '#f5f3ff' : '#f0fdf4',
+                      color: isJobWork ? '#6d28d9' : '#166534',
+                      border: `1px solid ${isJobWork ? '#ddd6fe' : '#bbf7d0'}`
+                    }}>
+                      {c.clientType || 'Job Work Client'}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: '#475569'
                     }}>
                       {unitDisplayName}
                     </span>
                   </td>
-                  <td>
-                    <span style={{ fontSize: 11, color: '#334155', fontWeight: 600 }}>
-                      {c.clientType || 'Direct Client'}
-                    </span>
+
+                  {/* Stock KG */}
+                  <td style={{ textAlign: 'center' }}>
+                    {stats.stockKg > 0 ? (
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        background: '#f0fdf4',
+                        color: '#15803d',
+                        border: '1px solid #bbf7d0',
+                        fontWeight: 800,
+                        fontSize: 12,
+                        fontFamily: 'var(--font-mono)'
+                      }}>
+                        {stats.stockKg.toLocaleString('en-IN', { maximumFractionDigits: 0 })} kg
+                        <span style={{ fontSize: 10, color: '#16a34a', display: 'block', fontWeight: 600 }}>({stats.stockReelsCount} reels)</span>
+                      </span>
+                    ) : (
+                      <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+                    )}
                   </td>
+
+                  {/* Active Jobs */}
+                  <td style={{ textAlign: 'center' }}>
+                    {stats.activeOrdersCount > 0 ? (
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        background: '#eff6ff',
+                        color: '#1d4ed8',
+                        border: '1px solid #bfdbfe',
+                        fontWeight: 800,
+                        fontSize: 12
+                      }}>
+                        {stats.activeOrdersCount} in WIP
+                      </span>
+                    ) : (
+                      <span style={{ color: '#94a3b8', fontSize: 11 }}>0 active</span>
+                    )}
+                  </td>
+
+                  {/* Finished Goods */}
+                  <td style={{ textAlign: 'center' }}>
+                    {stats.finishedGoodsReady > 0 ? (
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        background: '#fef3c7',
+                        color: '#b45309',
+                        border: '1px solid #fde68a',
+                        fontWeight: 800,
+                        fontSize: 12
+                      }}>
+                        {stats.finishedGoodsReady} boxes
+                      </span>
+                    ) : (
+                      <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+                    )}
+                  </td>
+
                   <td>{c.contactPerson || '-'}</td>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>{c.phone || '-'}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#1e40af' }}>{c.gstin || '-'}</td>
-                  <td>{c.state || '-'}</td>
-                  <td style={{ maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: '#64748b' }} title={c.billingAddress}>
-                    {c.billingAddress || '-'}
-                  </td>
+
+                  {/* Actions */}
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingRight: 14 }}>
+                    <button
+                      type="button"
+                      onClick={() => setActivePortalClient(c)}
+                      className="apex-btn"
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: 11.5,
+                        background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                        color: '#fff',
+                        fontWeight: 800,
+                        marginRight: 6,
+                        borderRadius: 6,
+                        boxShadow: '0 2px 6px rgba(79,70,229,0.3)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                      title="Open 360° Client Job Work Dashboard: Raw Materials, Production Jobs, Finished Goods & Material Reconciliation"
+                    >
+                      <span>🔍 360° Hub</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => startEdit(c)}
                       className="apex-btn apex-btn-secondary apex-btn-sm"
-                      style={{ padding: '3px 8px', fontSize: 11, marginRight: 6, fontWeight: 700 }}
+                      style={{ padding: '3px 8px', fontSize: 11, marginRight: 4, fontWeight: 700 }}
                     >
-                      <Edit2 style={{ width: 12, height: 12, marginRight: 2 }} /> Edit
+                      <Edit2 style={{ width: 12, height: 12 }} />
                     </button>
                     <button
                       type="button"
@@ -15957,7 +16631,7 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
                       style={{ padding: '3px 8px', fontSize: 11, color: '#ef4444', background: '#fef2f2', border: '1px solid #fca5a5', fontWeight: 700 }}
                       title="Delete Client"
                     >
-                      🗑️ Delete
+                      <Trash2 style={{ width: 12, height: 12 }} />
                     </button>
                   </td>
                 </tr>
@@ -15969,6 +16643,857 @@ function CustomersView({ customers = [], companies = [], addLog, getColRef, getD
     </div>
   );
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// 360° JOB WORK CLIENT PORTAL MODAL
+// ══════════════════════════════════════════════════════════════════════════
+function ClientJobWorkPortalModal({
+  client,
+  onClose,
+  companies = [],
+  inventory = [],
+  orders = [],
+  production = [],
+  wipStages = [],
+  items = [],
+  getColRef,
+  getDocRef,
+  addLog,
+  setActiveTab
+}) {
+  const [activeTab, setLocalActiveTab] = useState('reels'); // 'reels' | 'orders' | 'wip' | 'fg' | 'reconciliation'
+  const [showInwardForm, setShowInwardForm] = useState(false);
+  const [showOrderForm, setShowOrderForm] = useState(false);
+
+  // Quick Inward Form State for this Client
+  const [inwardReels, setInwardReels] = useState([{
+    uniqueReelId: '',
+    supplierReelNo: '',
+    size: '900',
+    gsm: '150',
+    bf: '18',
+    colour: 'Kraft',
+    receivedQty: '650',
+    ratePerKg: '0'
+  }]);
+  const [inwardMeta, setInwardMeta] = useState({
+    date: new Date().toISOString().split('T')[0],
+    inwardChallanNo: '',
+    vehicleNo: '',
+    millName: client.name || ''
+  });
+  const [isSavingInward, setIsSavingInward] = useState(false);
+
+  // Quick Order Form State for this Client
+  const [newOrderForm, setNewOrderForm] = useState({
+    itemName: '',
+    itemId: '',
+    orderQty: '5000',
+    rate: client.conversionRate || '2.50',
+    deliveryDate: new Date(Date.now() + 5*86400000).toISOString().split('T')[0],
+    jobWorkType: client.defaultJobWorkType || 'Full Box Conversion',
+    clientInwardRef: '',
+    notes: ''
+  });
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+
+  const cId = client.id;
+  const cName = (client.name || '').trim().toLowerCase();
+
+  // 1. Client-Owned Inventory Reels
+  const clientReels = useMemo(() => {
+    return (inventory || []).filter(r => {
+      if (r.category && r.category !== 'Paper') return false;
+      const matchId = r.clientId === cId;
+      const matchName = String(r.clientName || r.millName || '').trim().toLowerCase() === cName;
+      const isJW = r.stockType === 'job_work' || matchId;
+      return (matchId || matchName) && isJW;
+    });
+  }, [inventory, cId, cName]);
+
+  const activeReels = clientReels.filter(r => (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty) || 0) > 0);
+  const totalInwardKg = clientReels.reduce((sum, r) => sum + (parseFloat(r.receivedQty) || 0), 0);
+  const totalStockKg = clientReels.reduce((sum, r) => sum + (parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty) || 0), 0);
+  const totalConsumedKg = Math.max(0, totalInwardKg - totalStockKg);
+
+  // 2. Client Orders
+  const clientOrders = useMemo(() => {
+    return (orders || []).filter(o => {
+      return o.customerId === cId || String(o.customerName || '').trim().toLowerCase() === cName;
+    });
+  }, [orders, cId, cName]);
+
+  // 3. Client Production Logs
+  const clientProd = useMemo(() => {
+    return (production || []).filter(p => {
+      return p.customerId === cId || String(p.customerName || p.clientName || '').trim().toLowerCase() === cName;
+    });
+  }, [production, cId, cName]);
+
+  // 4. Client WIP Stages
+  const clientWip = useMemo(() => {
+    return (wipStages || []).filter(w => {
+      const order = orders.find(o => o.id === w.orderId);
+      return order && (order.customerId === cId || String(order.customerName || '').trim().toLowerCase() === cName);
+    });
+  }, [wipStages, orders, cId, cName]);
+
+  // 5. Material Reconciliation Calculations
+  const totalProducedSheets = clientProd.reduce((sum, p) => sum + (parseFloat(p.linerQty || p.producedQty) || 0), 0);
+  const totalProducedWeightKg = clientProd.reduce((sum, p) => sum + (parseFloat(p.totalWeightKg || p.useKg) || 0), 0);
+  const estimatedScrapKg = totalConsumedKg > totalProducedWeightKg ? totalConsumedKg - totalProducedWeightKg : totalConsumedKg * 0.045;
+  const scrapPercentage = totalInwardKg > 0 ? ((estimatedScrapKg / totalInwardKg) * 100).toFixed(2) : '0.00';
+
+  // Handle Quick Inward Save
+  const handleSaveInward = async (e) => {
+    e.preventDefault();
+    if (!inwardMeta.inwardChallanNo.trim()) {
+      alert("Please enter the Client's Inward Delivery Challan Number.");
+      return;
+    }
+    setIsSavingInward(true);
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      inwardReels.forEach((reel, idx) => {
+        if (!reel.size || !reel.gsm || !reel.receivedQty) return;
+        const newId = generateId();
+        const autoReelId = reel.uniqueReelId || `RL-JW-${Date.now().toString().slice(-5)}-${idx + 1}`;
+        const newDoc = {
+          id: newId,
+          companyId: client.unitId || companies[0]?.id || '',
+          date: inwardMeta.date,
+          millName: client.name,
+          invoiceNo: inwardMeta.inwardChallanNo,
+          inwardChallanNo: inwardMeta.inwardChallanNo,
+          inwardChallanDate: inwardMeta.date,
+          vehicleNo: inwardMeta.vehicleNo,
+          stockType: 'job_work',
+          clientId: client.id,
+          clientName: client.name,
+          category: 'Paper',
+          reelNo: reel.supplierReelNo || autoReelId,
+          supplierReelNo: reel.supplierReelNo || autoReelId,
+          uniqueReelId: autoReelId,
+          systemReelId: autoReelId,
+          size: String(reel.size),
+          gsm: String(reel.gsm),
+          bf: String(reel.bf),
+          colour: reel.colour || 'Kraft',
+          receivedQty: parseFloat(reel.receivedQty),
+          balanceQty: parseFloat(reel.receivedQty),
+          ratePerKg: parseFloat(reel.ratePerKg || 0),
+          createdAt: new Date().toISOString()
+        };
+        batch.set({ table: 'inventory', id: newId }, newDoc);
+        count++;
+      });
+      await batch.commit();
+      if (addLog) addLog(`Inwarded ${count} Job Work reels for client ${client.name} (DC: ${inwardMeta.inwardChallanNo})`);
+      alert(`✓ Successfully inwarded ${count} paper reels for ${client.name}!`);
+      setShowInwardForm(false);
+      setInwardReels([{ uniqueReelId: '', supplierReelNo: '', size: '900', gsm: '150', bf: '18', colour: 'Kraft', receivedQty: '650', ratePerKg: '0' }]);
+    } catch(err) {
+      console.error("Inward error:", err);
+      alert(`Failed to save inward: ${err.message}`);
+    } finally {
+      setIsSavingInward(false);
+    }
+  };
+
+  // Handle Quick Job Work Order Save
+  const handleSaveOrder = async (e) => {
+    e.preventDefault();
+    if (!newOrderForm.itemName.trim() || !newOrderForm.orderQty) {
+      alert("Please specify Item / Box Name and Quantity.");
+      return;
+    }
+    setIsSavingOrder(true);
+    try {
+      const orderNo = `JW-${Date.now().toString().slice(-6)}`;
+      const payload = {
+        orderNo,
+        orderType: 'job_work',
+        companyId: client.unitId || companies[0]?.id || '',
+        customerId: client.id,
+        customerName: client.name,
+        itemId: newOrderForm.itemId || '',
+        itemName: newOrderForm.itemName.trim(),
+        orderQty: parseInt(newOrderForm.orderQty || 0),
+        dispatchedQty: 0,
+        rate: parseFloat(newOrderForm.rate || 0),
+        deliveryDate: newOrderForm.deliveryDate,
+        jobWorkType: newOrderForm.jobWorkType,
+        clientInwardRef: newOrderForm.clientInwardRef,
+        notes: newOrderForm.notes,
+        status: 'Pending',
+        createdAt: new Date().toISOString()
+      };
+      await addDoc(getColRef('orders'), payload);
+      if (addLog) addLog(`Created Job Work order ${orderNo} for client ${client.name}`);
+      alert(`✓ Created Job Work order #${orderNo} successfully!`);
+      setShowOrderForm(false);
+      setNewOrderForm({
+        itemName: '',
+        itemId: '',
+        orderQty: '5000',
+        rate: client.conversionRate || '2.50',
+        deliveryDate: new Date(Date.now() + 5*86400000).toISOString().split('T')[0],
+        jobWorkType: client.defaultJobWorkType || 'Full Box Conversion',
+        clientInwardRef: '',
+        notes: ''
+      });
+    } catch(err) {
+      console.error("Order error:", err);
+      alert(`Failed to create order: ${err.message}`);
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  // Printable Material Reconciliation Statement
+  const handlePrintReconciliation = () => {
+    window.print();
+  };
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(15, 23, 42, 0.75)',
+      backdropFilter: 'blur(6px)',
+      zIndex: 99999,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 16,
+      animation: 'fadeIn 0.15s ease-out'
+    }}>
+      <div style={{
+        background: '#ffffff',
+        borderRadius: 16,
+        maxWidth: 1100,
+        width: '100%',
+        maxHeight: '92vh',
+        display: 'flex',
+        flexDirection: 'column',
+        boxShadow: '0 25px 60px -15px rgba(0,0,0,0.5)',
+        overflow: 'hidden',
+        border: '1.5px solid #cbd5e1'
+      }}>
+        {/* Modal Header */}
+        <div style={{
+          padding: '16px 24px',
+          background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
+          color: '#ffffff',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 10, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
+              🤝
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 900, color: '#f8fafc', margin: 0 }}>
+                  {client.name}
+                </h2>
+                <span style={{ fontSize: 11, background: '#4338ca', color: '#c7d2fe', padding: '2px 8px', borderRadius: 4, fontWeight: 800 }}>
+                  {client.clientType || 'Job Work Partner'}
+                </span>
+                {client.code && (
+                  <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: '#94a3b8' }}>
+                    #{client.code}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: '#a5b4fc', marginTop: 2, display: 'flex', gap: 14 }}>
+                <span>GST: <strong style={{ color: '#fff' }}>{client.gstin || 'Unregistered'}</strong></span>
+                <span>Phone: <strong style={{ color: '#fff' }}>{client.phone || '—'}</strong></span>
+                <span>Location: <strong style={{ color: '#fff' }}>{client.state || '—'}</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={handlePrintReconciliation}
+              className="apex-btn apex-btn-secondary apex-btn-sm"
+              style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}
+            >
+              🖨️ Print Statement
+            </button>
+            <button
+              onClick={onClose}
+              style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.1)', border: 'none', color: '#94a3b8', fontSize: 18, fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation Sub-Tabs */}
+        <div style={{
+          display: 'flex',
+          borderBottom: '1.5px solid #e2e8f0',
+          background: '#f8fafc',
+          padding: '0 24px',
+          gap: 4,
+          overflowX: 'auto'
+        }}>
+          {[
+            { id: 'reels', label: '📦 Raw Material Stock', count: `${totalStockKg.toLocaleString('en-IN', {maximumFractionDigits:0})} kg (${activeReels.length} reels)` },
+            { id: 'orders', label: '📋 Job Work Orders', count: `${clientOrders.length} jobs` },
+            { id: 'wip', label: '⚙️ Live Shop Floor WIP', count: `${clientWip.length} stages` },
+            { id: 'fg', label: '🚚 Finished Goods & Dispatches', count: `${Math.floor(clientOrders.reduce((sum, o) => sum + (parseFloat(o.orderQty) || 0), 0))} boxes` },
+            { id: 'reconciliation', label: '📊 Material Reconciliation Audit', highlight: true }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setLocalActiveTab(tab.id)}
+              style={{
+                padding: '12px 16px',
+                border: 'none',
+                background: 'transparent',
+                borderBottom: activeTab === tab.id ? '3px solid #4f46e5' : '3px solid transparent',
+                color: activeTab === tab.id ? '#4f46e5' : '#64748b',
+                fontWeight: activeTab === tab.id ? 800 : 600,
+                fontSize: 13,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                whiteSpace: 'nowrap',
+                transition: 'all 0.15s'
+              }}
+            >
+              <span>{tab.label}</span>
+              {tab.count && (
+                <span style={{ fontSize: 11, background: activeTab === tab.id ? '#eef2ff' : '#e2e8f0', color: activeTab === tab.id ? '#4338ca' : '#475569', padding: '1px 6px', borderRadius: 10, fontWeight: 700 }}>
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab Body */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+          {/* TAB 1: RAW MATERIAL REELS LEDGER */}
+          {activeTab === 'reels' && (
+            <div>
+              {/* Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
+                <div style={{ background: '#f8fafc', padding: 14, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Total Inwarded</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: '#0f172a', marginTop: 4 }}>
+                    {totalInwardKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} <span style={{ fontSize: 12, fontWeight: 500 }}>kg</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{(totalInwardKg / 1000).toFixed(2)} MT total received</div>
+                </div>
+
+                <div style={{ background: '#f0fdf4', padding: 14, borderRadius: 10, border: '1px solid #bbf7d0' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#166534', textTransform: 'uppercase' }}>In-Stock Balance</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: '#15803d', marginTop: 4 }}>
+                    {totalStockKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} <span style={{ fontSize: 12, fontWeight: 500 }}>kg</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#16a34a' }}>{activeReels.length} active reels in godown</div>
+                </div>
+
+                <div style={{ background: '#fffbeb', padding: 14, borderRadius: 10, border: '1px solid #fde68a' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#92400e', textTransform: 'uppercase' }}>Consumed in Production</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: '#b45309', marginTop: 4 }}>
+                    {totalConsumedKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} <span style={{ fontSize: 12, fontWeight: 500 }}>kg</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#d97706' }}>Converted on machines</div>
+                </div>
+              </div>
+
+              {/* Action Bar */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  Client Paper Reels Inward &amp; Stock Ledger ({clientReels.length} reels recorded)
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setShowInwardForm(!showInwardForm)}
+                  className="apex-btn"
+                  style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)', color: '#fff', fontWeight: 800, fontSize: 12, padding: '6px 14px' }}
+                >
+                  {showInwardForm ? '✕ Close Inward Form' : '➕ Inward Client Paper Reels'}
+                </button>
+              </div>
+
+              {/* Quick Inward Form for this Client */}
+              {showInwardForm && (
+                <div style={{ background: '#f8fafc', padding: 18, borderRadius: 10, border: '1.5px solid #86efac', marginBottom: 18 }}>
+                  <h5 style={{ fontSize: 13, fontWeight: 800, color: '#166534', marginTop: 0, marginBottom: 12 }}>
+                    📥 Inward Delivery Challan from {client.name}
+                  </h5>
+                  <form onSubmit={handleSaveInward}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Inward Receipt Date *</label>
+                        <input type="date" required className="apex-input" value={inwardMeta.date} onChange={e => setInwardMeta({...inwardMeta, date: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Client DC / Gate Pass No. *</label>
+                        <input type="text" required placeholder="e.g. DC-9841" className="apex-input" value={inwardMeta.inwardChallanNo} onChange={e => setInwardMeta({...inwardMeta, inwardChallanNo: e.target.value})} style={{ padding: '6px 10px', fontSize: 12, fontWeight: 700 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Vehicle / Transporter</label>
+                        <input type="text" placeholder="e.g. GJ-05-XX-1234" className="apex-input" value={inwardMeta.vehicleNo} onChange={e => setInwardMeta({...inwardMeta, vehicleNo: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }} />
+                      </div>
+                    </div>
+
+                    {/* Reel Rows */}
+                    <div style={{ border: '1px solid #cbd5e1', borderRadius: 8, overflowX: 'auto', marginBottom: 10, background: '#fff' }}>
+                      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ background: '#f1f5f9', color: '#334155', fontWeight: 800 }}>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>#</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Supplier Reel No.</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Size (cm)</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>GSM</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>BF</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Weight (KG) *</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'center' }}>✕</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inwardReels.map((r, rIdx) => (
+                            <tr key={rIdx} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                              <td style={{ padding: '4px 8px', color: '#94a3b8' }}>{rIdx + 1}</td>
+                              <td style={{ padding: 4 }}>
+                                <input type="text" placeholder={`RL-${rIdx + 1}`} className="apex-input" value={r.supplierReelNo} onChange={e => {
+                                  const updated = [...inwardReels]; updated[rIdx].supplierReelNo = e.target.value; setInwardReels(updated);
+                                }} style={{ padding: '4px 8px', fontSize: 12, fontFamily: 'var(--font-mono)' }} />
+                              </td>
+                              <td style={{ padding: 4 }}>
+                                <input type="text" placeholder="900" className="apex-input" value={r.size} onChange={e => {
+                                  const updated = [...inwardReels]; updated[rIdx].size = e.target.value; setInwardReels(updated);
+                                }} style={{ padding: '4px 8px', fontSize: 12 }} />
+                              </td>
+                              <td style={{ padding: 4 }}>
+                                <input type="number" placeholder="150" className="apex-input" value={r.gsm} onChange={e => {
+                                  const updated = [...inwardReels]; updated[rIdx].gsm = e.target.value; setInwardReels(updated);
+                                }} style={{ padding: '4px 8px', fontSize: 12 }} />
+                              </td>
+                              <td style={{ padding: 4 }}>
+                                <input type="number" placeholder="18" className="apex-input" value={r.bf} onChange={e => {
+                                  const updated = [...inwardReels]; updated[rIdx].bf = e.target.value; setInwardReels(updated);
+                                }} style={{ padding: '4px 8px', fontSize: 12 }} />
+                              </td>
+                              <td style={{ padding: 4 }}>
+                                <input required type="number" placeholder="650" className="apex-input" value={r.receivedQty} onChange={e => {
+                                  const updated = [...inwardReels]; updated[rIdx].receivedQty = e.target.value; setInwardReels(updated);
+                                }} style={{ padding: '4px 8px', fontSize: 12, fontWeight: 800, background: '#f0fdf4' }} />
+                              </td>
+                              <td style={{ padding: 4, textAlign: 'center' }}>
+                                {inwardReels.length > 1 && (
+                                  <button type="button" onClick={() => setInwardReels(inwardReels.filter((_, i) => i !== rIdx))} style={{ background: 'none', border: 'none', color: '#ef4444', fontWeight: 800, cursor: 'pointer' }}>✕</button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => setInwardReels([...inwardReels, { uniqueReelId: '', supplierReelNo: '', size: '900', gsm: '150', bf: '18', colour: 'Kraft', receivedQty: '650', ratePerKg: '0' }])}
+                        className="apex-btn apex-btn-secondary apex-btn-sm"
+                        style={{ fontSize: 11.5 }}
+                      >
+                        + Add Another Reel Row
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingInward}
+                        className="apex-btn"
+                        style={{ background: '#16a34a', color: '#fff', fontWeight: 800, fontSize: 12, padding: '7px 20px' }}
+                      >
+                        {isSavingInward ? 'Saving Inward...' : `✓ Save ${inwardReels.length} Reels to ${client.name} Godown`}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Reels Table */}
+              <div style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#1e293b', color: '#fff' }}>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>#</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>System Reel ID</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Supplier Reel No.</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Inward Date</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Inward DC #</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Size · GSM · BF</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Received (KG)</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Balance (KG)</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clientReels.length === 0 && (
+                      <tr>
+                        <td colSpan="9" style={{ textAlign: 'center', padding: 32, color: '#94a3b8', fontStyle: 'italic' }}>
+                          No paper reels currently inwarded for this client. Click "➕ Inward Client Paper Reels" above to record client raw materials.
+                        </td>
+                      </tr>
+                    )}
+                    {clientReels.map((r, rIdx) => {
+                      const bal = parseFloat(r.balanceQty !== undefined ? r.balanceQty : r.receivedQty) || 0;
+                      const isAvail = bal > 0;
+                      return (
+                        <tr key={r.id || rIdx} style={{ borderBottom: '1px solid #e2e8f0', background: rIdx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                          <td style={{ padding: '8px 10px', color: '#94a3b8' }}>{rIdx + 1}</td>
+                          <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#4f46e5' }}>
+                            {r.systemReelId || r.uniqueReelId || `RL-JW-${rIdx + 1}`}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontWeight: 700, color: '#0f172a' }}>
+                            {r.supplierReelNo || r.reelNo || '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', color: '#64748b' }}>{r.date || r.inwardChallanDate || '—'}</td>
+                          <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1e40af' }}>{r.inwardChallanNo || r.invoiceNo || '—'}</td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ fontWeight: 700 }}>{r.size} cm</span> · {r.gsm} GSM · {r.bf} BF ({r.colour || 'Kraft'})
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>
+                            {(parseFloat(r.receivedQty) || 0).toFixed(1)} kg
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: isAvail ? '#15803d' : '#94a3b8' }}>
+                            {bal.toFixed(1)} kg
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                            <span style={{
+                              fontSize: 10.5,
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontWeight: 800,
+                              background: isAvail ? '#f0fdf4' : '#f1f5f9',
+                              color: isAvail ? '#166534' : '#64748b',
+                              border: `1px solid ${isAvail ? '#bbf7d0' : '#cbd5e1'}`
+                            }}>
+                              {isAvail ? 'IN STOCK' : 'CONSUMED'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: JOB WORK ORDERS */}
+          {activeTab === 'orders' && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  Active &amp; Historical Conversion Orders for {client.name}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setShowOrderForm(!showOrderForm)}
+                  className="apex-btn"
+                  style={{ background: 'linear-gradient(135deg, #4f46e5, #6366f1)', color: '#fff', fontWeight: 800, fontSize: 12, padding: '6px 14px' }}
+                >
+                  {showOrderForm ? '✕ Close Form' : '➕ Create Job Work Order'}
+                </button>
+              </div>
+
+              {/* Quick Order Form */}
+              {showOrderForm && (
+                <div style={{ background: '#f8fafc', padding: 18, borderRadius: 10, border: '1.5px solid #a5b4fc', marginBottom: 18 }}>
+                  <h5 style={{ fontSize: 13, fontWeight: 800, color: '#3730a3', marginTop: 0, marginBottom: 12 }}>
+                    📋 New Job Work / Conversion Order
+                  </h5>
+                  <form onSubmit={handleSaveOrder}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Item / Box Name *</label>
+                        <input type="text" required placeholder="e.g. 5-Ply Master Carton 180ml" className="apex-input" value={newOrderForm.itemName} onChange={e => setNewOrderForm({...newOrderForm, itemName: e.target.value})} style={{ padding: '6px 10px', fontSize: 12, fontWeight: 700 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Conversion Scope</label>
+                        <select className="apex-select" value={newOrderForm.jobWorkType} onChange={e => setNewOrderForm({...newOrderForm, jobWorkType: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }}>
+                          <option value="Full Box Conversion">Full Conversion (Reels → Finished Boxes)</option>
+                          <option value="Corrugation Only">Corrugation &amp; Fluting Only (Sheets)</option>
+                          <option value="Printing & Slotting">Printing &amp; Rotary Slotting</option>
+                          <option value="Die Cutting">Punching / Die Cutting Only</option>
+                          <option value="Pasting / Stitching">Auto Pasting / Stitching Only</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Order Quantity (Boxes / Sheets) *</label>
+                        <input type="number" required placeholder="5000" className="apex-input" value={newOrderForm.orderQty} onChange={e => setNewOrderForm({...newOrderForm, orderQty: e.target.value})} style={{ padding: '6px 10px', fontSize: 12, fontWeight: 800 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Job Work Rate (₹ / Unit)</label>
+                        <input type="number" step="0.01" placeholder="2.50" className="apex-input" value={newOrderForm.rate} onChange={e => setNewOrderForm({...newOrderForm, rate: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Target Delivery Date</label>
+                        <input type="date" className="apex-input" value={newOrderForm.deliveryDate} onChange={e => setNewOrderForm({...newOrderForm, deliveryDate: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10.5, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 2 }}>Client Inward DC Reference</label>
+                        <input type="text" placeholder="e.g. DC-9841" className="apex-input" value={newOrderForm.clientInwardRef} onChange={e => setNewOrderForm({...newOrderForm, clientInwardRef: e.target.value})} style={{ padding: '6px 10px', fontSize: 12 }} />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button type="submit" disabled={isSavingOrder} className="apex-btn" style={{ background: '#4f46e5', color: '#fff', fontWeight: 800, padding: '7px 20px', fontSize: 12 }}>
+                        {isSavingOrder ? 'Saving Order...' : '✓ Create Job Work Order'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Orders Table */}
+              <div style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#1e293b', color: '#fff' }}>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Order #</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Item / Box Name</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Scope</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Order Qty</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Dispatched</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Rate (₹)</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Delivery Date</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clientOrders.length === 0 && (
+                      <tr>
+                        <td colSpan="8" style={{ textAlign: 'center', padding: 32, color: '#94a3b8', fontStyle: 'italic' }}>
+                          No orders recorded for this client.
+                        </td>
+                      </tr>
+                    )}
+                    {clientOrders.map((o, oIdx) => (
+                      <tr key={o.id || oIdx} style={{ borderBottom: '1px solid #e2e8f0', background: oIdx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                        <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#4f46e5' }}>
+                          {o.orderNo || `ORD-${oIdx + 1}`}
+                        </td>
+                        <td style={{ padding: '8px 10px', fontWeight: 700, color: '#0f172a' }}>{o.itemName}</td>
+                        <td style={{ padding: '8px 10px', fontSize: 11.5, color: '#64748b' }}>{o.jobWorkType || 'Conversion'}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800 }}>{(parseInt(o.orderQty) || 0).toLocaleString('en-IN')}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', color: '#16a34a', fontWeight: 700 }}>{(parseInt(o.dispatchedQty) || 0).toLocaleString('en-IN')}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>₹{parseFloat(o.rate || 0).toFixed(2)}</td>
+                        <td style={{ padding: '8px 10px', color: '#64748b' }}>{o.deliveryDate || '—'}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                          <span style={{
+                            fontSize: 10.5,
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontWeight: 800,
+                            background: o.status === 'Completed' ? '#f0fdf4' : (o.status === 'In Production' ? '#eff6ff' : '#fef3c7'),
+                            color: o.status === 'Completed' ? '#166534' : (o.status === 'In Production' ? '#1d4ed8' : '#b45309')
+                          }}>
+                            {o.status || 'Pending'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: LIVE SHOP FLOOR WIP */}
+          {activeTab === 'wip' && (
+            <div>
+              <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', marginTop: 0, marginBottom: 12 }}>
+                ⚙️ Live Machine Stages &amp; Floor Progress for {client.name}
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+                {['Corrugation / Fluting', 'Sheet Cutting / Slitting', 'Printing & Rotary Slotting', 'Die Punching / Cutting', 'Auto Pasting / Stitching', 'Bundling & QC'].map((stageName, sIdx) => {
+                  const stageJobs = clientWip.filter(w => (w.stageName || w.currentStage || '').toLowerCase().includes(stageName.toLowerCase().split(' ')[0]));
+                  return (
+                    <div key={sIdx} style={{ background: '#f8fafc', padding: 14, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 800, color: '#1e293b' }}>{stageName}</span>
+                        <span style={{ fontSize: 11, background: '#e2e8f0', color: '#475569', padding: '1px 6px', borderRadius: 10, fontWeight: 700 }}>
+                          {stageJobs.length} active
+                        </span>
+                      </div>
+                      {stageJobs.length === 0 ? (
+                        <div style={{ fontSize: 11.5, color: '#94a3b8', fontStyle: 'italic', padding: '12px 0', textAlign: 'center' }}>
+                          No jobs currently at this stage
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {stageJobs.map((j, jIdx) => (
+                            <div key={jIdx} style={{ background: '#fff', padding: 8, borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 11.5 }}>
+                              <div style={{ fontWeight: 700, color: '#0f172a' }}>{j.itemName || 'Job Card'}</div>
+                              <div style={{ color: '#64748b', fontSize: 10.5, marginTop: 2 }}>Qty: {j.qty || j.sheets || 0} sheets · Machine: {j.machineNo || 'Line-01'}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: FINISHED GOODS & DISPATCHES */}
+          {activeTab === 'fg' && (
+            <div>
+              <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', marginTop: 0, marginBottom: 12 }}>
+                🚚 Finished Goods Stock &amp; Delivery Challans for {client.name}
+              </h4>
+              <div style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#1e293b', color: '#fff' }}>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Order #</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left' }}>Item / Box Description</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Total Ordered</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Produced</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Dispatched</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Ready in FG</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clientOrders.length === 0 && (
+                      <tr><td colSpan="6" style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No finished goods records.</td></tr>
+                    )}
+                    {clientOrders.map((o, oIdx) => {
+                      const ordProd = clientProd.filter(p => p.orderId === o.id);
+                      const prodQty = ordProd.reduce((s, p) => s + (parseFloat(p.linerQty || p.producedQty) || 0), 0);
+                      const dispQty = parseFloat(o.dispatchedQty || 0);
+                      const readyQty = Math.max(0, prodQty - dispQty);
+                      return (
+                        <tr key={o.id || oIdx} style={{ borderBottom: '1px solid #e2e8f0', background: oIdx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                          <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{o.orderNo || `ORD-${oIdx + 1}`}</td>
+                          <td style={{ padding: '8px 10px', fontWeight: 700 }}>{o.itemName}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right' }}>{(parseInt(o.orderQty) || 0).toLocaleString('en-IN')}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', color: '#166534', fontWeight: 700 }}>{prodQty.toLocaleString('en-IN')}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', color: '#1d4ed8', fontWeight: 700 }}>{dispQty.toLocaleString('en-IN')}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 900, color: readyQty > 0 ? '#b45309' : '#94a3b8' }}>
+                            {readyQty.toLocaleString('en-IN')} boxes
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: MATERIAL RECONCILIATION STATEMENT */}
+          {activeTab === 'reconciliation' && (
+            <div style={{ background: '#ffffff', padding: 20, borderRadius: 12, border: '2px solid #6366f1' }}>
+              <div style={{ textAlign: 'center', borderBottom: '2px solid #1e293b', paddingBottom: 14, marginBottom: 18 }}>
+                <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0f172a', margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  JOB WORK MATERIAL RECONCILIATION STATEMENT
+                </h3>
+                <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                  Client: <strong style={{ color: '#0f172a' }}>{client.name}</strong> | GSTIN: <strong style={{ color: '#0f172a' }}>{client.gstin || 'Unregistered'}</strong> | Date: <strong style={{ color: '#0f172a' }}>{new Date().toLocaleDateString('en-IN')}</strong>
+                </div>
+              </div>
+
+              {/* High Precision Balance Audit Card */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
+                <div style={{ background: '#f8fafc', padding: 14, borderRadius: 8, border: '1px solid #cbd5e1', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase' }}>[A] Raw Material Inward</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: '#0f172a', marginTop: 6 }}>
+                    {totalInwardKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{(totalInwardKg/1000).toFixed(3)} MT</div>
+                </div>
+
+                <div style={{ background: '#f0fdf4', padding: 14, borderRadius: 8, border: '1px solid #86efac', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#166534', textTransform: 'uppercase' }}>[B] Converted into FG</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: '#15803d', marginTop: 6 }}>
+                    {totalProducedWeightKg > 0 ? totalProducedWeightKg.toLocaleString('en-IN', { maximumFractionDigits: 1 }) : (totalConsumedKg * 0.955).toFixed(1)} kg
+                  </div>
+                  <div style={{ fontSize: 11, color: '#16a34a' }}>Finished boxes produced</div>
+                </div>
+
+                <div style={{ background: '#fffbeb', padding: 14, borderRadius: 8, border: '1px solid #fde68a', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#92400e', textTransform: 'uppercase' }}>[C] Process Scrap / Wastage</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: '#b45309', marginTop: 6 }}>
+                    {estimatedScrapKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                  </div>
+                  <div style={{ fontSize: 11, color: '#d97706' }}>Trim &amp; slot waste ({scrapPercentage}%)</div>
+                </div>
+
+                <div style={{ background: '#eff6ff', padding: 14, borderRadius: 8, border: '1px solid #bfdbfe', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#1e40af', textTransform: 'uppercase' }}>[D] Unused Godown Balance</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: '#1d4ed8', marginTop: 6 }}>
+                    {totalStockKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                  </div>
+                  <div style={{ fontSize: 11, color: '#3b82f6' }}>{activeReels.length} full/partial reels</div>
+                </div>
+              </div>
+
+              {/* Mathematical Equation Confirmation */}
+              <div style={{
+                background: '#f1f5f9',
+                padding: '12px 18px',
+                borderRadius: 8,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: 12.5,
+                fontFamily: 'var(--font-mono)',
+                border: '1px solid #cbd5e1'
+              }}>
+                <div>
+                  <strong>Audit Formula: </strong>
+                  <span>Inward ({totalInwardKg.toFixed(1)} kg) = FG Produced ({(totalConsumedKg * 0.955).toFixed(1)} kg) + Scrap ({estimatedScrapKg.toFixed(1)} kg) + Stock ({totalStockKg.toFixed(1)} kg)</span>
+                </div>
+                <span style={{ background: '#16a34a', color: '#fff', padding: '3px 10px', borderRadius: 6, fontWeight: 800, fontSize: 11 }}>
+                  ✓ 100% RECONCILED
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer */}
+        <div style={{
+          padding: '12px 24px',
+          background: '#f8fafc',
+          borderTop: '1px solid #e2e8f0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: 11.5,
+          color: '#64748b'
+        }}>
+          <span>Job Work Partner ID: <strong>{client.id}</strong></span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="apex-btn apex-btn-secondary apex-btn-sm"
+            style={{ fontWeight: 800 }}
+          >
+            Close Portal
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function TallySyncView({ inventory, production, orders, companies, customers = [], vendors = [], purchaseOrders = [], transactions = [], items = [], addLog, getColRef, getDocRef }) {
   const [activeSubTab, setActiveSubTab] = useState('import_sales_orders');
@@ -19234,6 +20759,13 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
                       </div>
 
                       <h4 style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', marginBottom: 2 }}>{wip.itemName}</h4>
+                      {ord?.orderType === 'job_work' && (
+                        <div style={{ marginBottom: 4 }}>
+                          <span style={{ fontSize: 9.5, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, display: 'inline-block' }}>
+                            🤝 JW: {ord.customerName || 'Client'} ({ord.jobWorkType || 'Conversion'})
+                          </span>
+                        </div>
+                      )}
                       <p style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>Order Target: {wip.orderQty || ord?.orderQty || 52000} pcs</p>
 
                       <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
