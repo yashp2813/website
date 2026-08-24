@@ -2582,7 +2582,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const [printMode, setPrintMode] = useState('a4_grid'); // 'a4_grid' | 'single'
   const [copiesPerItem, setCopiesPerItem] = useState(1); // Default 1 sticker per reel
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
-  const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 16 slots
+  const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
 
   // Handle single item or array of items
   const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
@@ -2590,7 +2590,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   // Build the list of active items to print
   const effectiveItems = [];
   if (baseItems.length === 1 && fillSingleSheet && printMode === 'a4_grid') {
-    for (let i = 0; i < 16; i++) effectiveItems.push(baseItems[0]);
+    for (let i = 0; i < 12; i++) effectiveItems.push(baseItems[0]);
   } else {
     baseItems.forEach(item => {
       for (let c = 0; c < Math.max(1, copiesPerItem); c++) {
@@ -2609,10 +2609,10 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   effectiveItems.forEach((item, idx) => {
     totalSlots.push({ isBlank: false, item, slotIndex: startOffset + idx });
   });
-  // 3. Pad to complete the 16-slot grid on the last page so alignment never collapses
-  const remainder = totalSlots.length % 16;
+  // 3. Pad to complete the 12-slot grid on the last page so alignment never collapses
+  const remainder = totalSlots.length % 12;
   if (remainder !== 0) {
-    const padCount = 16 - remainder;
+    const padCount = 12 - remainder;
     for (let p = 0; p < padCount; p++) {
       totalSlots.push({ isBlank: true, slotIndex: totalSlots.length });
     }
@@ -2620,7 +2620,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 
   const handlePrint = () => {
     // Generate barcode SVG for a given value using Code128 algorithm
-    const generateBarcodeSVG = (value, barWidth = 1.4, barHeight = 38) => {
+    const generateBarcodeSVG = (value, barWidth = 1.4, barHeight = 40) => {
       // Code128B encoding table
       const CODE128B = {
         ' ':0,  '!':1,  '"':2,  '#':3,  '$':4,  '%':5,  '&':6,  "'":7,
@@ -2686,14 +2686,14 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${barHeight}" viewBox="0 0 ${totalWidth} ${barHeight}">${rects}</svg>`;
     };
 
-    // Build the full sticker slot list
+    // Build the full sticker slot list (12 slots per page)
     const slots = [];
     for (let i = 0; i < startOffset; i++) slots.push(null);
     effectiveItems.forEach(item => slots.push(item));
-    const rem = slots.length % 16;
-    if (rem !== 0) for (let p = 0; p < (16 - rem); p++) slots.push(null);
+    const rem = slots.length % 12;
+    if (rem !== 0) for (let p = 0; p < (12 - rem); p++) slots.push(null);
 
-    // Generate HTML for each sticker cell
+    // Generate HTML for each sticker cell (100mm x 44mm)
     const cellsHtml = slots.map(item => {
       if (!item) {
         return `<div class="cell cell-blank"></div>`;
@@ -2716,14 +2716,14 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       const gsm = item.gsm || '-';
       const bf = item.bf || '-';
       const weightKg = item.balanceQty !== undefined ? item.balanceQty : (item.receivedQty || item.weight || '-');
-      const barcodeSvg = generateBarcodeSVG(sysId, 1.2, 32);
+      const barcodeSvg = generateBarcodeSVG(sysId, 1.35, 38);
       return `
         <div class="cell">
           <div class="cell-header">
             <span class="reel-id">${sysId}</span>
             <span class="reel-sup">Sup: ${supNo} (${colour})</span>
           </div>
-          <div class="cell-specs">${sizeCm}cm &bull; ${gsm}G &bull; ${bf}BF &bull; ${weightKg}kg &bull; ${millName}</div>
+          <div class="cell-specs">${sizeCm}cm &bull; ${gsm} GSM &bull; ${bf} BF &bull; ${weightKg} kg &bull; ${millName}</div>
           <div class="cell-barcode">${barcodeSvg}</div>
           <div class="cell-text">${sysId}</div>
         </div>`;
@@ -2739,22 +2739,23 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Reel Barcode Stickers</title>
+<title>Reel Barcode Stickers (100x44mm)</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  @page { size: A4 portrait; margin: 8mm 6mm; }
+  @page { size: A4 portrait; margin: 16mm 5mm; }
   body { background: #fff; font-family: Arial, sans-serif; }
   .grid {
     display: grid;
-    grid-template-columns: 99mm 99mm;
-    grid-auto-rows: 34mm;
+    grid-template-columns: 100mm 100mm;
+    grid-auto-rows: 44mm;
     gap: 0;
-    width: 198mm;
+    width: 200mm;
+    margin: 0 auto;
   }
   .cell {
-    width: 99mm;
-    height: 34mm;
-    padding: 2.5mm 3.5mm 2mm 3.5mm;
+    width: 100mm;
+    height: 44mm;
+    padding: 3mm 4.5mm 2.5mm 4.5mm;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -2770,12 +2771,12 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     border-bottom: 0.5pt solid #bbb;
     padding-bottom: 1mm;
   }
-  .reel-id { font-size: 11pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
-  .reel-sup { font-size: 7.5pt; font-weight: 700; color: #333; text-align: right; max-width: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
-  .cell-specs { font-size: 7.5pt; font-weight: 700; color: #000; margin-top: 0.5mm; }
+  .reel-id { font-size: 11.5pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
+  .reel-sup { font-size: 8pt; font-weight: 700; color: #333; text-align: right; max-width: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; }
+  .cell-specs { font-size: 8pt; font-weight: 700; color: #000; margin-top: 0.5mm; }
   .cell-barcode { display: flex; justify-content: center; flex: 1; align-items: center; }
   .cell-barcode svg { max-width: 100%; }
-  .cell-text { font-family: 'Courier New', monospace; font-size: 7pt; font-weight: 700; color: #000; letter-spacing: 0.15em; text-align: center; }
+  .cell-text { font-family: 'Courier New', monospace; font-size: 7.5pt; font-weight: 800; color: #000; letter-spacing: 0.15em; text-align: center; }
 </style>
 </head>
 <body>
@@ -2808,7 +2809,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                 </span>
               </h3>
               <p className="text-xs text-stone-500 font-medium">
-                Standard 16-up Die-Cut Sheet (99.1mm × 34mm • 2 Cols × 8 Rows) • Strict Top-Left Grid Alignment
+                Standard 12-up Die-Cut Sheet (100mm × 44mm • 2 Cols × 6 Rows) • Strict Top-Left Grid Alignment
               </p>
             </div>
           </div>
@@ -2821,7 +2822,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                 onClick={() => setPrintMode('a4_grid')}
                 className={`px-3 py-1.5 rounded-md transition ${printMode === 'a4_grid' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-700 hover:text-stone-900'}`}
               >
-                📄 A4 Sheet Grid (16-Up)
+                📄 A4 Sheet Grid (12-Up)
               </button>
               <button
                 type="button"
@@ -2839,7 +2840,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                 <input
                   type="number"
                   min="1"
-                  max="16"
+                  max="12"
                   disabled={fillSingleSheet && baseItems.length === 1}
                   className="w-12 text-center border rounded bg-white py-0.5 font-bold"
                   value={copiesPerItem}
@@ -2857,7 +2858,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                   value={startOffset}
                   onChange={e => setStartOffset(parseInt(e.target.value) || 0)}
                 >
-                  {Array.from({ length: 16 }, (_, i) => (
+                  {Array.from({ length: 12 }, (_, i) => (
                     <option key={i} value={i}>Slot {i + 1} {i === 0 ? '(Top-Left)' : ''}</option>
                   ))}
                 </select>
@@ -2873,7 +2874,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                   onChange={e => setFillSingleSheet(e.target.checked)}
                   className="accent-amber-600 rounded"
                 />
-                Fill Sheet (16 pcs)
+                Fill Sheet (12 pcs)
               </label>
             )}
 
@@ -2889,15 +2890,15 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
         {/* PRINT CONTAINER */}
         <div className="p-6 print:p-0">
           
-          {/* MODE 1: A4 SHEET GRID LAYOUT (Strict 2 Columns x 8 Rows = 16 Labels) */}
+          {/* MODE 1: A4 SHEET GRID LAYOUT (Strict 2 Columns x 6 Rows = 12 Labels, 100mm x 44mm) */}
           {printMode === 'a4_grid' ? (
             <div>
               <div className="text-xs text-stone-500 mb-4 font-medium print:hidden flex justify-between items-center bg-stone-100 p-2.5 rounded-lg border border-stone-200">
                 <span className="font-semibold text-stone-700">
-                  📋 Sheet Layout: <strong>{effectiveItems.length} label(s)</strong> placed starting at <strong>Slot #{startOffset + 1}</strong> • Total Pages: <strong>{Math.ceil(totalSlots.length / 16)} A4 Sheet(s)</strong>
+                  📋 Sheet Layout: <strong>{effectiveItems.length} label(s)</strong> placed starting at <strong>Slot #{startOffset + 1}</strong> • Total Pages: <strong>{Math.ceil(totalSlots.length / 12)} A4 Sheet(s)</strong>
                 </span>
                 <span className="text-stone-500 text-[11px]">
-                  Labels strictly align to the physical die-cut grid from the top-left (no vertical or middle centering).
+                  Labels strictly align to the physical 12-up die-cut grid (100mm × 44mm) from top-left.
                 </span>
               </div>
 
@@ -2921,8 +2922,8 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                         key={`blank-${idx}`}
                         className="a4-sticker-cell a4-sticker-cell-blank rounded-lg p-2 text-center border border-dashed border-stone-200 flex items-center justify-center"
                         style={{
-                          minHeight: '124px',
-                          maxHeight: '128px',
+                          minHeight: '144px',
+                          maxHeight: '150px',
                           boxSizing: 'border-box',
                           background: '#fafafa'
                         }}
@@ -2948,26 +2949,26 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                   return (
                     <div
                       key={`item-${idx}`}
-                      className="a4-sticker-cell bg-white rounded-lg p-2 text-center border border-dashed border-stone-400 print:rounded-none flex flex-col justify-between"
+                      className="a4-sticker-cell bg-white rounded-lg p-2.5 text-center border border-dashed border-stone-400 print:rounded-none flex flex-col justify-between"
                       style={{
-                        minHeight: '124px',
-                        maxHeight: '128px',
+                        minHeight: '144px',
+                        maxHeight: '150px',
                         pageBreakInside: 'avoid',
                         boxSizing: 'border-box'
                       }}
                     >
                       {/* Top Header */}
                       <div className="flex justify-between items-center border-b border-stone-200 pb-1">
-                        <span className="font-black text-black text-sm" style={{ fontSize: '12px', fontWeight: 900 }}>
+                        <span className="font-black text-black text-sm" style={{ fontSize: '12.5px', fontWeight: 900 }}>
                           ID: {systemReelId}
                         </span>
-                        <span className="text-[10px] font-bold text-stone-700 uppercase truncate max-w-[140px]">
+                        <span className="text-[10.5px] font-bold text-stone-700 uppercase truncate max-w-[140px]">
                           {supplierReelNo !== systemReelId ? `Sup: ${supplierReelNo}` : supplier} ({colour})
                         </span>
                       </div>
 
                       {/* Spec Summary Line */}
-                      <p className="text-[11px] font-extrabold text-black my-1" style={{ fontSize: '11px', fontWeight: 800 }}>
+                      <p className="text-[11.5px] font-extrabold text-black my-1" style={{ fontSize: '11.5px', fontWeight: 800 }}>
                         {sizeCm} cm | {gsm} GSM | {bf} BF | {weightKg} kg
                       </p>
 
@@ -2976,8 +2977,8 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
                         {typeof Barcode !== 'undefined' ? (
                           <Barcode
                             value={reelNo}
-                            width={1.3}
-                            height={30}
+                            width={1.4}
+                            height={36}
                             displayValue={false}
                             margin={0}
                           />
@@ -7779,7 +7780,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           <div className="bg-white border border-purple-200 p-4 rounded-xl shadow-sm flex items-center gap-4" style={{ background: '#faf5ff' }}>
             <div className="p-3 bg-purple-100 text-purple-700 rounded-lg font-bold">🤝</div>
             <div>
-              <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Job Work Client Stock</p>
+              <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Job Work Client Stock (Nashik)</p>
               <p className="text-2xl font-bold text-purple-900">{jobWorkKgAvailable.toFixed(1)} <span className="text-xs font-normal text-purple-600">kg (Client-Owned)</span></p>
             </div>
           </div>
@@ -7798,7 +7799,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
             <h3 className="font-bold flex items-center gap-2 text-stone-900">
-              <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward Paper Reels (Factory Stock or Job Work Client Stock)'}
+              <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward Paper Reels (Factory Stock or Nashik Job Work Stock)'}
             </h3>
             <div className="flex items-center gap-3">
               <button
@@ -7862,7 +7863,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                   });
                 }}
               />
-              🤝 Job Work Inward (Client-Supplied Paper)
+              🤝 Job Work Inward (Nashik Plant Client Paper)
             </label>
           </div>
 
@@ -8161,7 +8162,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               >
                 <option value="All">All Stock Types</option>
                 <option value="factory">🏭 Factory Stock Only</option>
-                <option value="job_work">🤝 Job Work Stock Only</option>
+                <option value="job_work">🤝 Job Work Stock (Nashik)</option>
               </select>
 
               {customers.length > 0 && (
@@ -11800,13 +11801,14 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         alert(`✓ Order updated successfully.`);
       } else {
         let count = 0;
+        const targetCompId = isJobWork ? (getNashikCompanyId(companies) || orderHeader.companyId) : orderHeader.companyId;
         for (const ord of ordersInput) {
           if (!ord.itemName.trim() || !ord.orderQty) continue;
           const ordPayload = {
             orderNo: `ORD-${isJobWork ? 'JW-' : ''}${Date.now().toString().slice(-6)}`,
             orderType: orderHeader.orderType || 'regular',
             orderDate: orderHeader.orderDate,
-            companyId: orderHeader.companyId,
+            companyId: targetCompId,
             customerId: orderHeader.customerId || '',
             customerName: finalCustName,
             jobWorkType: isJobWork ? (orderHeader.jobWorkType || 'Full Box Conversion') : '',
@@ -11829,7 +11831,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           alert("Please fill in at least one item name and quantity.");
           return;
         }
-        if (addLog) addLog(`Added ${count} ${isJobWork ? 'Job Work orders' : 'orders'}${cust ? ` for client ${cust}` : ''}`);
+        if (addLog) addLog(`Added ${count} ${isJobWork ? 'Job Work orders (Nashik)' : 'orders'}${cust ? ` for client ${cust}` : ''}`);
         setOrdersInput([{ ...emptyOrderRow }]);
         setShowBatchForm(false);
         alert(`✓ Saved ${count} order(s) successfully.`);
@@ -11912,7 +11914,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           <span style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8' }}>📋 ORDERS MASTER</span>
           <span>TOTAL: <strong style={{ color: '#fbbf24' }}>{totalOrders} Orders</strong></span>
           <span style={{ color: '#a7f3d0' }}>🏭 FACTORY: <strong>{factoryOrdersCount}</strong></span>
-          <span style={{ color: '#c4b5fd' }}>🤝 JOB WORK: <strong>{jobWorkOrdersCount}</strong></span>
+          <span style={{ color: '#c4b5fd' }}>🤝 JOB WORK (NASHIK): <strong>{jobWorkOrdersCount}</strong></span>
         </div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
           <span>TARGET PCS: <strong style={{ color: '#60a5fa' }}>{totalOrderedPcs.toLocaleString()}</strong></span>
@@ -12039,7 +12041,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                     });
                   }}
                 />
-                🤝 Job Work Conversion Order
+                🤝 Job Work Conversion (Nashik Plant)
               </label>
             </div>
           </div>
@@ -12127,46 +12129,113 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                 <thead>
                   <tr className="bg-stone-800 text-white font-bold">
                     <th className="p-2 w-10 text-center">#</th>
-                    <th className="p-2 min-w-[200px]">Select Box Spec / Item *</th>
-                    <th className="p-2 min-w-[140px]">PO Number / Ref</th>
+                    <th className="p-2 min-w-[200px]">Item Master (Box / Product) *</th>
+                    <th className="p-2 min-w-[140px]">Customer PO Number</th>
                     <th className="p-2 w-28">Order Qty (pcs) *</th>
-                    <th className="p-2 w-24">{orderHeader.orderType === 'job_work' ? 'Job Rate (₹/pc)' : 'Rate (₹/pc)'}</th>
-                    <th className="p-2 min-w-[130px]">Delivery Date *</th>
-                    <th className="p-2 w-10 text-center">✕</th>
+                    <th className="p-2 w-24">Rate (₹)</th>
+                    <th className="p-2 w-32">Delivery Target</th>
+                    <th className="p-2 w-20">Ups</th>
+                    <th className="p-2 min-w-[160px]">Special Instructions / Notes</th>
+                    <th className="p-2 w-12 text-center"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-stone-200 bg-white">
-                  {ordersInput.map((ord, idx) => (
-                    <tr key={idx} className="hover:bg-stone-50">
-                      <td className="p-2 text-center font-bold text-stone-500">{idx + 1}</td>
-                      <td className="p-1.5">
-                        <select
+                <tbody>
+                  {ordersInput.map((row, idx) => (
+                    <tr key={idx} className="border-b border-stone-200 hover:bg-stone-50">
+                      <td className="p-2 text-center text-stone-500 font-mono">{idx + 1}</td>
+                      <td className="p-2">
+                        <input
+                          type="text"
                           required
-                          className="w-full p-1.5 border border-blue-300 bg-blue-50/40 rounded font-bold text-xs"
-                          value={ord.itemId}
-                          onChange={e => handleOrderRowChange(idx, 'itemId', e.target.value)}
-                        >
-                          <option value="">-- Select Box Item --</option>
-                          {[...visibleItems].sort((a,b) => (a.name||a.Item_Name||'').localeCompare(b.name||b.Item_Name||'')).map(i => (
-                            <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.size || i.Size_mm || '-'})</option>
-                          ))}
-                        </select>
+                          className="apex-input font-bold"
+                          placeholder="Type or select product..."
+                          list={`items-list-${idx}`}
+                          value={row.itemName}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const matched = items.find(i => (i.name || i.Item_Name || '').toLowerCase() === val.toLowerCase());
+                            if (matched) {
+                              const updated = [...ordersInput];
+                              updated[idx].itemId = matched.id;
+                              updated[idx].itemName = matched.name || matched.Item_Name;
+                              if (matched.rate) updated[idx].rate = String(matched.rate);
+                              if (matched.ups || matched.plannedUps) updated[idx].plannedUps = String(matched.ups || matched.plannedUps);
+                              setOrdersInput(updated);
+                            } else {
+                              handleOrderRowChange(idx, 'itemName', val);
+                            }
+                          }}
+                        />
+                        <datalist id={`items-list-${idx}`}>
+                          {items.map(i => <option key={i.id} value={i.name || i.Item_Name} />)}
+                        </datalist>
                       </td>
-                      <td className="p-1.5">
-                        <input type="text" placeholder="PO-12345" className="w-full p-1.5 border rounded font-mono text-xs" value={ord.poNumber} onChange={e => handleOrderRowChange(idx, 'poNumber', e.target.value)} />
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          className="apex-input font-mono"
+                          placeholder="PO Ref..."
+                          value={row.poNumber}
+                          onChange={e => handleOrderRowChange(idx, 'poNumber', e.target.value)}
+                        />
                       </td>
-                      <td className="p-1.5">
-                        <input required type="number" placeholder="pcs" className="w-full p-1.5 border border-green-300 bg-green-50/40 rounded font-bold font-mono text-xs" value={ord.orderQty} onChange={e => handleOrderRowChange(idx, 'orderQty', e.target.value)} />
+                      <td className="p-2">
+                        <input
+                          type="number"
+                          required
+                          min="1"
+                          className="apex-input font-bold"
+                          placeholder="Pcs"
+                          value={row.orderQty}
+                          onChange={e => handleOrderRowChange(idx, 'orderQty', e.target.value)}
+                        />
                       </td>
-                      <td className="p-1.5">
-                        <input type="number" step="0.01" placeholder="₹" className="w-full p-1.5 border rounded font-mono text-xs" value={ord.rate} onChange={e => handleOrderRowChange(idx, 'rate', e.target.value)} />
+                      <td className="p-2">
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="apex-input"
+                          placeholder="₹ / pc"
+                          value={row.rate}
+                          onChange={e => handleOrderRowChange(idx, 'rate', e.target.value)}
+                        />
                       </td>
-                      <td className="p-1.5">
-                        <input required type="date" className="w-full p-1.5 border rounded text-xs" value={ord.deliveryDate} onChange={e => handleOrderRowChange(idx, 'deliveryDate', e.target.value)} />
+                      <td className="p-2">
+                        <input
+                          type="date"
+                          className="apex-input"
+                          value={row.deliveryDate}
+                          onChange={e => handleOrderRowChange(idx, 'deliveryDate', e.target.value)}
+                        />
                       </td>
-                      <td className="p-1.5 text-center">
-                        {!editingId && ordersInput.length > 1 && (
-                          <button type="button" onClick={() => removeOrderRow(idx)} className="text-red-500 hover:text-red-700 font-bold text-sm">✕</button>
+                      <td className="p-2">
+                        <input
+                          type="number"
+                          min="1"
+                          className="apex-input font-mono text-center"
+                          value={row.plannedUps}
+                          onChange={e => handleOrderRowChange(idx, 'plannedUps', e.target.value)}
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          className="apex-input"
+                          placeholder="Flute / Print / Packing notes..."
+                          value={row.notes}
+                          onChange={e => handleOrderRowChange(idx, 'notes', e.target.value)}
+                        />
+                      </td>
+                      <td className="p-2 text-center">
+                        {ordersInput.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeOrderRow(idx)}
+                            className="text-red-500 hover:text-red-700 font-bold p-1"
+                            title="Remove row"
+                          >
+                            ✕
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -12175,18 +12244,34 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
               </table>
             </div>
 
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               {!editingId && (
-                <button type="button" onClick={addOrderRow} className="apex-btn apex-btn-secondary" style={{ padding: '6px 14px', fontSize: 12, fontWeight: 700 }}>
-                  + Add Another Order Row
+                <button
+                  type="button"
+                  onClick={addOrderRow}
+                  className="apex-btn apex-btn-secondary"
+                  style={{ fontSize: 12, fontWeight: 700 }}
+                >
+                  ➕ Add Another Item Row
                 </button>
               )}
-              <button type="submit" className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 800, background: orderHeader.orderType === 'job_work' ? '#6d28d9' : '#2563eb' }}>
-                {editingId ? 'Update Order' : `Save ${ordersInput.length} ${orderHeader.orderType === 'job_work' ? 'Job Work' : 'Factory'} Order(s)`}
-              </button>
-              <button type="button" onClick={() => { setShowBatchForm(false); setEditingId(null); }} className="apex-btn apex-btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }}>
-                Cancel
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+                <button
+                  type="button"
+                  onClick={() => { setShowBatchForm(false); setEditingId(null); setOrdersInput([{ ...emptyOrderRow }]); }}
+                  className="apex-btn apex-btn-secondary"
+                  style={{ padding: '8px 16px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="apex-btn apex-btn-primary"
+                  style={{ fontWeight: 800, padding: '8px 24px', background: orderHeader.orderType === 'job_work' ? '#7c3aed' : '#2563eb' }}
+                >
+                  {editingId ? '✓ Update Order' : `✓ Save ${ordersInput.length} Order(s)`}
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -12205,7 +12290,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         >
           <option value="All">All Orders</option>
           <option value="regular">📦 Factory Orders Only</option>
-          <option value="job_work">🤝 Job Work Orders Only</option>
+          <option value="job_work">🤝 Job Work Orders (Nashik)</option>
         </select>
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>

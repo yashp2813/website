@@ -190,11 +190,11 @@ p { margin: 0; }
 
   .a4-sticker-print-area {
     display: grid !important;
-    grid-template-columns: 99mm 99mm !important;
-    grid-auto-rows: 34mm !important;
+    grid-template-columns: 100mm 100mm !important;
+    grid-auto-rows: 44mm !important;
     column-gap: 0mm !important;
     row-gap: 0mm !important;
-    width: 198mm !important;
+    width: 200mm !important;
     margin: 0 auto !important;
     justify-content: start !important;
     align-content: start !important;
@@ -202,10 +202,10 @@ p { margin: 0; }
   }
 
   .a4-sticker-cell {
-    width: 99mm !important;
-    height: 34mm !important;
-    min-height: 34mm !important;
-    max-height: 34mm !important;
+    width: 100mm !important;
+    height: 44mm !important;
+    min-height: 44mm !important;
+    max-height: 44mm !important;
     box-sizing: border-box !important;
     page-break-inside: avoid !important;
     break-inside: avoid !important;
@@ -214,7 +214,7 @@ p { margin: 0; }
     display: flex !important;
     flex-direction: column !important;
     justify-content: space-between !important;
-    padding: 3mm 4mm !important;
+    padding: 3.5mm 4.5mm !important;
     border: none !important; /* NO BORDER on pre-cut sticker sheets */
   }
 
