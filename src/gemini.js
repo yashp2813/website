@@ -327,7 +327,8 @@ export function calculateFactoryKPIs({
   companies = [],
   customers = [],
   costings = [],
-  transactions = []
+  transactions = [],
+  plannedJobs = []
 }) {
   const now = new Date();
   const todayStr = now.toISOString().split('T')[0];
