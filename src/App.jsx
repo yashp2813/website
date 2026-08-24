@@ -478,6 +478,14 @@ export function GlobalVoiceAssistant({
   const [isSupported, setIsSupported] = useState(true);
   const [feedbackToast, setFeedbackToast] = useState(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [typedPrompt, setTypedPrompt] = useState('');
+  const [isProcessingPrompt, setIsProcessingPrompt] = useState(false);
+  const [promptHistory, setPromptHistory] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('apex_prompt_history') || '[]');
+    } catch(e) { return []; }
+  });
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [isMicDisabled, setIsMicDisabled] = useState(() => {
@@ -513,6 +521,30 @@ export function GlobalVoiceAssistant({
     }
   };
 
+  const handleExecuteTypedPrompt = async (e, customText) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const textToRun = (customText !== undefined ? customText : typedPrompt).trim();
+    if (!textToRun) return;
+
+    const updatedHist = [textToRun, ...promptHistory.filter(h => h.toLowerCase() !== textToRun.toLowerCase())].slice(0, 12);
+    setPromptHistory(updatedHist);
+    try {
+      localStorage.setItem('apex_prompt_history', JSON.stringify(updatedHist));
+    } catch(err) {}
+
+    setIsProcessingPrompt(true);
+    setTypedPrompt('');
+
+    try {
+      await executeCommand(textToRun);
+    } catch (err) {
+      console.error('Error executing typed command:', err);
+      showToast('❌ Command error: ' + (err.message || err), 'error');
+    } finally {
+      setIsProcessingPrompt(false);
+    }
+  };
+
   useEffect(() => {
     const handleStatus = (e) => {
       if (e && e.detail) {
@@ -522,8 +554,13 @@ export function GlobalVoiceAssistant({
         }
       }
     };
+    const handleOpenPalette = () => setShowCommandPalette(true);
     window.addEventListener('apex-mic-status-changed', handleStatus);
-    return () => window.removeEventListener('apex-mic-status-changed', handleStatus);
+    window.addEventListener('apex-open-command-palette', handleOpenPalette);
+    return () => {
+      window.removeEventListener('apex-mic-status-changed', handleStatus);
+      window.removeEventListener('apex-open-command-palette', handleOpenPalette);
+    };
   }, []);
 
   useEffect(() => {
@@ -540,10 +577,15 @@ export function GlobalVoiceAssistant({
     };
   }, []);
 
-  // Keyboard shortcut: Alt + V or Ctrl + Shift + V
+  // Keyboard shortcut: Cmd/Ctrl + K (Type Command Prompt), Alt + V (Voice), Ctrl + Shift + V
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.altKey && (e.key === 'v' || e.key === 'V')) || 
+      if ((e.metaKey && (e.key === 'k' || e.key === 'K')) || 
+          (e.ctrlKey && (e.key === 'k' || e.key === 'K')) ||
+          (e.altKey && (e.key === 'k' || e.key === 'K'))) {
+        e.preventDefault();
+        setShowCommandPalette(prev => !prev);
+      } else if ((e.altKey && (e.key === 'v' || e.key === 'V')) || 
           (e.ctrlKey && e.shiftKey && (e.key === 'v' || e.key === 'V'))) {
         e.preventDefault();
         toggleAssistant();
@@ -2047,6 +2089,33 @@ export function GlobalVoiceAssistant({
           </div>
         )}
 
+        {/* Type Command Prompt Button (Cmd + K) */}
+        <button
+          type="button"
+          onClick={() => setShowCommandPalette(true)}
+          style={{
+            padding: '7px 14px',
+            borderRadius: 20,
+            background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+            color: '#38bdf8',
+            border: '1.5px solid #0284c7',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 800,
+            boxShadow: '0 4px 14px rgba(2, 132, 199, 0.3)',
+            backdropFilter: 'blur(6px)',
+            transition: 'all 0.2s'
+          }}
+          title="Type any command, prompt, or question (⌘K / Ctrl+K)"
+        >
+          <span style={{ fontSize: 13 }}>💬</span>
+          <span>Type Command</span>
+          <kbd style={{ fontSize: 10, background: 'rgba(56, 189, 248, 0.2)', padding: '1px 5px', borderRadius: 4, color: '#bae6fd', marginLeft: 2 }}>⌘K</kbd>
+        </button>
+
         {/* 1-Click Master Microphone Shut-off / Enable Button */}
         <button
           type="button"
@@ -2128,6 +2197,180 @@ export function GlobalVoiceAssistant({
           </button>
         )}
       </div>
+
+      {/* Interactive Command & Prompt Palette Modal (Cmd+K / Ctrl+K / Type) */}
+      {showCommandPalette && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.8)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 100000,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          paddingTop: '10vh',
+          paddingLeft: 16,
+          paddingRight: 16,
+          animation: 'fadeIn 0.15s ease-out'
+        }}>
+          <div style={{
+            background: '#1e293b',
+            border: '1.5px solid #475569',
+            borderRadius: 16,
+            maxWidth: 680,
+            width: '100%',
+            boxShadow: '0 25px 60px -15px rgba(0,0,0,0.6)',
+            overflow: 'hidden',
+            color: '#fff'
+          }}>
+            {/* Header / Input Form */}
+            <form onSubmit={handleExecuteTypedPrompt} style={{ display: 'flex', alignItems: 'center', padding: '14px 18px', borderBottom: '1px solid #334155', gap: 12, background: '#0f172a' }}>
+              <span style={{ fontSize: 20 }}>💬</span>
+              <input
+                type="text"
+                autoFocus
+                value={typedPrompt}
+                onChange={e => setTypedPrompt(e.target.value)}
+                placeholder="Ask anything or type command (e.g. 'Show 150 GSM stock', 'Job card for 180ml', 'Go to planning')..."
+                style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, outline: 'none', fontFamily: 'inherit' }}
+              />
+              {isProcessingPrompt ? (
+                <span style={{ fontSize: 12, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
+                  <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#38bdf8', animation: 'ping 1s infinite' }} />
+                  Processing...
+                </span>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!typedPrompt.trim()}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 8,
+                    background: typedPrompt.trim() ? '#2563eb' : '#334155',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 800,
+                    fontSize: 12,
+                    cursor: typedPrompt.trim() ? 'pointer' : 'default',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  <span>Run</span> ↵
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowCommandPalette(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', fontWeight: 800, marginLeft: 4 }}
+              >
+                ✕
+              </button>
+            </form>
+
+            {/* Quick suggestions & history */}
+            <div style={{ padding: '16px 20px', maxHeight: '55vh', overflowY: 'auto' }}>
+              {/* Quick Action Chips */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                  ⚡ Instant Prompts & Shortcuts (Click to Run)
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {[
+                    { label: '📊 Paper Stock by GSM', cmd: 'How much paper stock do we have by GSM?' },
+                    { label: '📋 Pending Orders', cmd: 'Show all pending orders' },
+                    { label: '🏭 Production Summary', cmd: 'What is today\'s production status?' },
+                    { label: '⚙️ WIP Queue Status', cmd: 'How many jobs in WIP?' },
+                    { label: '📦 Open Box Database', cmd: 'Go to Box Database' },
+                    { label: '📐 Planning Sheet', cmd: 'Go to Planning' },
+                    { label: '🔥 Today\'s Wastage', cmd: 'What is today\'s wastage and fuel consumption?' },
+                    { label: '🏢 Switch Units', cmd: 'Show My Units' }
+                  ].map((s, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleExecuteTypedPrompt(null, s.cmd)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 8,
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        color: '#e2e8f0',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = '#38bdf8'; e.currentTarget.style.color = '#0f172a'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0'; }}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recent History */}
+              {promptHistory.length > 0 && (
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                    🕒 Recent Typed Prompts
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {promptHistory.map((hist, hIdx) => (
+                      <div
+                        key={hIdx}
+                        onClick={() => handleExecuteTypedPrompt(null, hist)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: 8,
+                          background: '#0f172a',
+                          border: '1px solid #334155',
+                          color: '#cbd5e1',
+                          fontSize: 12.5,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = '#38bdf8'}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = '#334155'}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ color: '#64748b' }}>↵</span> {hist}
+                        </span>
+                        <span style={{ fontSize: 10.5, color: '#64748b' }}>Click to run</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer info */}
+            <div style={{ padding: '10px 18px', background: '#0f172a', borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#94a3b8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span>⌨️ Press <strong style={{ color: '#fff' }}>↵ Enter</strong> to run</span>
+                <span>⚡ Shortcut: <strong style={{ color: '#fff' }}>⌘K / Ctrl+K</strong></span>
+              </div>
+              {!isMicDisabled && (
+                <button
+                  type="button"
+                  onClick={() => { setShowCommandPalette(false); toggleAssistant(); }}
+                  style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontWeight: 700, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                  🎙️ Switch to Voice Dictation
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating HUD Command Notification Toast */}
       {feedbackToast && (
@@ -5192,6 +5435,31 @@ export default function App() {
                 🏭 {companies.find(c => c.id === activeUnitId)?.name || 'All Units'}
               </div>
             )}
+            <button
+              onClick={() => window.dispatchEvent(new Event('apex-open-command-palette'))}
+              style={{
+                width: '100%',
+                marginTop: 8,
+                padding: '6px 10px',
+                borderRadius: 8,
+                background: 'rgba(56, 189, 248, 0.12)',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                color: '#38bdf8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              title="Type any command, query, or prompt (⌘K / Ctrl+K)"
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>💬</span> Prompt AI
+              </span>
+              <kbd style={{ fontSize: 10, background: 'rgba(0,0,0,0.35)', padding: '1px 5px', borderRadius: 4, color: '#bae6fd' }}>⌘K</kbd>
+            </button>
           </div>
         </div>
         <nav className="apex-nav-section" style={{ flex: 1 }}>
