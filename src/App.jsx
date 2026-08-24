@@ -486,6 +486,8 @@ export function GlobalVoiceAssistant({
       return JSON.parse(localStorage.getItem('apex_prompt_history') || '[]');
     } catch(e) { return []; }
   });
+  const [chatMessages, setChatMessages] = useState([]); // Full chat conversation history
+  const chatEndRef = useRef(null); // For auto-scroll to bottom
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [isMicDisabled, setIsMicDisabled] = useState(() => {
@@ -521,25 +523,139 @@ export function GlobalVoiceAssistant({
     }
   };
 
+  // Auto-scroll chat to bottom on new messages
+  useEffect(() => {
+    if (chatEndRef.current && showCommandPalette) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, showCommandPalette]);
+
   const handleExecuteTypedPrompt = async (e, customText) => {
     if (e && e.preventDefault) e.preventDefault();
     const textToRun = (customText !== undefined ? customText : typedPrompt).trim();
     if (!textToRun) return;
 
+    // Save to history
     const updatedHist = [textToRun, ...promptHistory.filter(h => h.toLowerCase() !== textToRun.toLowerCase())].slice(0, 12);
     setPromptHistory(updatedHist);
-    try {
-      localStorage.setItem('apex_prompt_history', JSON.stringify(updatedHist));
-    } catch(err) {}
+    try { localStorage.setItem('apex_prompt_history', JSON.stringify(updatedHist)); } catch(err) {}
 
     setIsProcessingPrompt(true);
     setTypedPrompt('');
 
+    // Append user message to chat
+    const userMsg = { role: 'user', text: textToRun, timestamp: new Date() };
+    setChatMessages(prev => [...prev, userMsg]);
+
+    // If Gemini is configured, call it directly and show rich response in chat
+    if (isGeminiConfigured()) {
+      try {
+        const aiResult = await askFactoryAI(textToRun, {
+          orders, inventory, items, production, wipStages,
+          wastageLogs, companies, customers, costings, transactions, plannedJobs
+        });
+
+        if (aiResult) {
+          // Execute any actions (nav, DB mutations, etc.)
+          const actionsToRun = Array.isArray(aiResult.actions) && aiResult.actions.length > 0
+            ? aiResult.actions : (aiResult.action ? [aiResult.action] : []);
+          
+          let executedActionCount = 0;
+          for (const action of actionsToRun) {
+            if (!action || !action.type || action.type === 'none') continue;
+            // Navigate
+            if (action.type === 'navigate_tab' && action.targetTab) {
+              const tabMap = {
+                'dashboard': 'Dashboard', 'planning': 'Planning', 'orders': 'Orders',
+                'production': 'Production', 'inventory': 'Inventory', 'items': 'Items',
+                'wip': 'WIPTracker', 'finished': 'FinishedGoods', 'wastage': 'Wastage',
+                'costing': 'Costing', 'calculator': 'Calculator', 'reports': 'Reports',
+                'customers': 'Customers', 'logs': 'Logs'
+              };
+              const t = action.targetTab.toLowerCase();
+              const mapped = Object.entries(tabMap).find(([k]) => t.includes(k));
+              if (mapped) { setActiveTab(mapped[1]); executedActionCount++; }
+            }
+            // Open job card
+            if (action.type === 'open_job_card' && onOpenJobCard) {
+              const q = (action.targetOrderId || action.targetItemName || '').toLowerCase();
+              const matched = orders.find(o =>
+                String(o.id).toLowerCase() === q ||
+                String(o.orderNo || '').toLowerCase().includes(q) ||
+                String(o.itemName || '').toLowerCase().includes(q)
+              );
+              if (matched) { onOpenJobCard(matched); executedActionCount++; }
+            }
+            // Create order
+            if (action.type === 'create_order' && action.orderPayload && addDoc && getColRef) {
+              const op = action.orderPayload;
+              const matchedItem = items.find(i => (i.name || i.Item_Name || '').toLowerCase().includes((op.itemName || '').toLowerCase()));
+              const newOrder = {
+                orderNo: `ORD-${Date.now().toString().slice(-6)}`,
+                itemName: op.itemName || '',
+                itemId: matchedItem?.id || '',
+                customerName: op.customerName || '',
+                orderQty: parseInt(op.orderQty || 0),
+                rate: parseFloat(op.unitPrice || 0),
+                deliveryDate: op.deliveryDate || new Date().toISOString().split('T')[0],
+                poNumber: op.poNumber || '',
+                status: 'Pending',
+                createdAt: new Date().toISOString(),
+                companyId: activeUnitId || companies[0]?.id || ''
+              };
+              try { await addDoc(getColRef('orders'), newOrder); executedActionCount++; } catch(err2) {}
+            }
+          }
+
+          // Build rich response for chat
+          let richResponse = aiResult.spokenResponse || '';
+          if (aiResult.displayCard?.metricValue) {
+            richResponse = `**${aiResult.displayCard.metricValue}**\n\n` + richResponse;
+          }
+          if (aiResult.displayCard?.details) {
+            richResponse += '\n\n' + aiResult.displayCard.details;
+          }
+          if (Array.isArray(aiResult.displayCard?.recommendations) && aiResult.displayCard.recommendations.length > 0) {
+            richResponse += '\n\n💡 **Recommendations:**\n' + aiResult.displayCard.recommendations.map(r => `• ${r}`).join('\n');
+          }
+          if (aiResult.troubleshooting?.issue) {
+            richResponse += `\n\n🛠️ **Issue:** ${aiResult.troubleshooting.issue}`;
+            if (aiResult.troubleshooting.rootCauses?.length > 0)
+              richResponse += '\n⚠️ **Root Causes:**\n' + aiResult.troubleshooting.rootCauses.map(c => `• ${c}`).join('\n');
+            if (aiResult.troubleshooting.correctiveActions?.length > 0)
+              richResponse += '\n✅ **Corrective Steps:**\n' + aiResult.troubleshooting.correctiveActions.map(c => `• ${c}`).join('\n');
+          }
+          if (executedActionCount > 0) {
+            richResponse += `\n\n⚡ *${executedActionCount} action${executedActionCount > 1 ? 's' : ''} executed automatically.*`;
+          }
+
+          const aiMsg = {
+            role: 'assistant',
+            text: richResponse,
+            title: aiResult.displayCard?.title || 'Apex AI',
+            timestamp: new Date(),
+            actionsCount: executedActionCount
+          };
+          setChatMessages(prev => [...prev, aiMsg]);
+          speakFeedback(aiResult.spokenResponse);
+        }
+        setIsProcessingPrompt(false);
+        return;
+      } catch (err) {
+        console.warn('Gemini chat error, falling back to executeCommand:', err);
+        const errMsg = { role: 'assistant', text: '⚠️ Gemini AI error: ' + err.message + '\n\nFalling back to command processor...', timestamp: new Date(), isError: true };
+        setChatMessages(prev => [...prev, errMsg]);
+      }
+    }
+
+    // Fallback: route through executeCommand (pattern matching) and show result in chat
     try {
+      // Wrap showToast to capture response into chat
       await executeCommand(textToRun);
     } catch (err) {
       console.error('Error executing typed command:', err);
-      showToast('❌ Command error: ' + (err.message || err), 'error');
+      const errMsg = { role: 'assistant', text: '❌ Command error: ' + (err.message || err), timestamp: new Date(), isError: true };
+      setChatMessages(prev => [...prev, errMsg]);
     } finally {
       setIsProcessingPrompt(false);
     }
@@ -2198,173 +2314,257 @@ export function GlobalVoiceAssistant({
         )}
       </div>
 
-      {/* Interactive Command & Prompt Palette Modal (Cmd+K / Ctrl+K / Type) */}
+
+      {/* ===== FULL GEMINI AI CHAT PANEL ===== */}
       {showCommandPalette && (
         <div style={{
           position: 'fixed',
-          inset: 0,
-          background: 'rgba(15, 23, 42, 0.8)',
-          backdropFilter: 'blur(8px)',
+          top: 0, right: 0, bottom: 0,
+          width: '100%',
+          maxWidth: 480,
+          background: '#0f172a',
+          borderLeft: '1.5px solid #1e3a5f',
           zIndex: 100000,
           display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'center',
-          paddingTop: '10vh',
-          paddingLeft: 16,
-          paddingRight: 16,
-          animation: 'fadeIn 0.15s ease-out'
+          flexDirection: 'column',
+          boxShadow: '-20px 0 60px rgba(0,0,0,0.55)',
+          animation: 'slideInRight 0.22s cubic-bezier(0.4,0,0.2,1)'
         }}>
+          {/* Chat Header */}
           <div style={{
-            background: '#1e293b',
-            border: '1.5px solid #475569',
-            borderRadius: 16,
-            maxWidth: 680,
-            width: '100%',
-            boxShadow: '0 25px 60px -15px rgba(0,0,0,0.6)',
-            overflow: 'hidden',
-            color: '#fff'
+            padding: '14px 18px',
+            borderBottom: '1px solid #1e3a5f',
+            background: '#0a1628',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            flexShrink: 0
           }}>
-            {/* Header / Input Form */}
-            <form onSubmit={handleExecuteTypedPrompt} style={{ display: 'flex', alignItems: 'center', padding: '14px 18px', borderBottom: '1px solid #334155', gap: 12, background: '#0f172a' }}>
-              <span style={{ fontSize: 20 }}>💬</span>
-              <input
-                type="text"
-                autoFocus
-                value={typedPrompt}
-                onChange={e => setTypedPrompt(e.target.value)}
-                placeholder="Ask anything or type command (e.g. 'Show 150 GSM stock', 'Job card for 180ml', 'Go to planning')..."
-                style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, outline: 'none', fontFamily: 'inherit' }}
-              />
-              {isProcessingPrompt ? (
-                <span style={{ fontSize: 12, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
-                  <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#38bdf8', animation: 'ping 1s infinite' }} />
-                  Processing...
-                </span>
-              ) : (
+            <div style={{
+              width: 36, height: 36, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #4f46e5, #0ea5e9)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 18, flexShrink: 0
+            }}>✨</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#e2e8f0', lineHeight: 1.2 }}>Apex AI Assistant</div>
+              <div style={{ fontSize: 11, color: isGeminiConfigured() ? '#34d399' : '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: isGeminiConfigured() ? '#34d399' : '#f59e0b', display: 'inline-block' }} />
+                {isGeminiConfigured() ? 'Gemini AI Connected' : 'Pattern Mode (Add API Key for full AI)'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {chatMessages.length > 0 && (
                 <button
-                  type="submit"
-                  disabled={!typedPrompt.trim()}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: 8,
-                    background: typedPrompt.trim() ? '#2563eb' : '#334155',
-                    color: '#fff',
-                    border: 'none',
-                    fontWeight: 800,
-                    fontSize: 12,
-                    cursor: typedPrompt.trim() ? 'pointer' : 'default',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4
-                  }}
+                  onClick={() => setChatMessages([])}
+                  title="Clear conversation"
+                  style={{ background: 'rgba(255,255,255,0.06)', border: 'none', color: '#94a3b8', padding: '5px 8px', borderRadius: 7, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
                 >
-                  <span>Run</span> ↵
+                  🗑 Clear
                 </button>
               )}
               <button
-                type="button"
                 onClick={() => setShowCommandPalette(false)}
-                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', fontWeight: 800, marginLeft: 4 }}
-              >
-                ✕
-              </button>
-            </form>
+                style={{ background: 'rgba(255,255,255,0.06)', border: 'none', color: '#94a3b8', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >✕</button>
+            </div>
+          </div>
 
-            {/* Quick suggestions & history */}
-            <div style={{ padding: '16px 20px', maxHeight: '55vh', overflowY: 'auto' }}>
-              {/* Quick Action Chips */}
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
-                  ⚡ Instant Prompts & Shortcuts (Click to Run)
-                </label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {/* Chat Messages Area */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '16px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12
+          }}>
+            {/* Welcome state */}
+            {chatMessages.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '20px 10px' }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🏭</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0', marginBottom: 6 }}>Apex Factory AI</div>
+                <div style={{ fontSize: 12.5, color: '#64748b', lineHeight: 1.6, marginBottom: 20 }}>
+                  Ask anything about your factory — inventory, orders, production, wastage, box specs, quality troubleshooting, and more.
+                </div>
+                {/* Quick Suggestion Chips */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, justifyContent: 'center' }}>
                   {[
                     { label: '📊 Paper Stock by GSM', cmd: 'How much paper stock do we have by GSM?' },
-                    { label: '📋 Pending Orders', cmd: 'Show all pending orders' },
-                    { label: '🏭 Production Summary', cmd: 'What is today\'s production status?' },
-                    { label: '⚙️ WIP Queue Status', cmd: 'How many jobs in WIP?' },
-                    { label: '📦 Open Box Database', cmd: 'Go to Box Database' },
-                    { label: '📐 Planning Sheet', cmd: 'Go to Planning' },
-                    { label: '🔥 Today\'s Wastage', cmd: 'What is today\'s wastage and fuel consumption?' },
-                    { label: '🏢 Switch Units', cmd: 'Show My Units' }
+                    { label: '📋 Pending Orders', cmd: 'Show all pending orders with their status' },
+                    { label: '🏭 Today\'s Production', cmd: 'What is today\'s production status and output?' },
+                    { label: '⚙️ WIP Queue', cmd: 'How many jobs are in WIP and what are they?' },
+                    { label: '🔥 Wastage Report', cmd: 'What is today\'s wastage and fuel consumption?' },
+                    { label: '💰 Cost per Box', cmd: 'What is the average cost per kg of paper and cost per box?' },
+                    { label: '📐 Deckle Optimization', cmd: 'How can we optimize deckle trim waste to below 3%?' },
+                    { label: '⚠️ Quality Issues', cmd: 'How to fix board warping in the corrugator?' },
                   ].map((s, idx) => (
                     <button
                       key={idx}
-                      type="button"
                       onClick={() => handleExecuteTypedPrompt(null, s.cmd)}
                       style={{
-                        padding: '6px 12px',
-                        borderRadius: 8,
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        color: '#e2e8f0',
-                        fontSize: 12,
+                        padding: '7px 12px',
+                        borderRadius: 20,
+                        background: 'rgba(79,70,229,0.12)',
+                        border: '1px solid rgba(79,70,229,0.3)',
+                        color: '#a5b4fc',
+                        fontSize: 11.5,
                         fontWeight: 600,
                         cursor: 'pointer',
-                        transition: 'all 0.15s',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4
+                        transition: 'all 0.15s'
                       }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#38bdf8'; e.currentTarget.style.color = '#0f172a'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0'; }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(79,70,229,0.25)'; e.currentTarget.style.color = '#fff'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(79,70,229,0.12)'; e.currentTarget.style.color = '#a5b4fc'; }}
                     >
                       {s.label}
                     </button>
                   ))}
                 </div>
+                {promptHistory.length > 0 && (
+                  <div style={{ marginTop: 20, textAlign: 'left' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>🕒 Recent</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {promptHistory.slice(0, 6).map((h, hIdx) => (
+                        <div
+                          key={hIdx}
+                          onClick={() => handleExecuteTypedPrompt(null, h)}
+                          style={{ padding: '7px 12px', borderRadius: 8, background: '#1e293b', border: '1px solid #334155', color: '#94a3b8', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = '#4f46e5'; e.currentTarget.style.color = '#e2e8f0'; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = '#334155'; e.currentTarget.style.color = '#94a3b8'; }}
+                        >
+                          <span style={{ color: '#475569', fontSize: 11 }}>↵</span>
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+            )}
 
-              {/* Recent History */}
-              {promptHistory.length > 0 && (
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
-                    🕒 Recent Typed Prompts
-                  </label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {promptHistory.map((hist, hIdx) => (
-                      <div
-                        key={hIdx}
-                        onClick={() => handleExecuteTypedPrompt(null, hist)}
-                        style={{
-                          padding: '8px 12px',
-                          borderRadius: 8,
-                          background: '#0f172a',
-                          border: '1px solid #334155',
-                          color: '#cbd5e1',
-                          fontSize: 12.5,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = '#38bdf8'}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = '#334155'}
-                      >
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ color: '#64748b' }}>↵</span> {hist}
-                        </span>
-                        <span style={{ fontSize: 10.5, color: '#64748b' }}>Click to run</span>
-                      </div>
-                    ))}
+            {/* Conversation Messages */}
+            {chatMessages.map((msg, idx) => (
+              <div key={idx} style={{
+                display: 'flex',
+                flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
+                alignItems: 'flex-start',
+                gap: 9
+              }}>
+                {/* Avatar */}
+                <div style={{
+                  width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+                  background: msg.role === 'user'
+                    ? 'linear-gradient(135deg, #0ea5e9, #2563eb)'
+                    : (msg.isError ? '#7f1d1d' : 'linear-gradient(135deg, #4f46e5, #7c3aed)'),
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
+                }}>
+                  {msg.role === 'user' ? '👤' : (msg.isError ? '⚠️' : '✨')}
+                </div>
+                {/* Bubble */}
+                <div style={{
+                  maxWidth: '82%',
+                  background: msg.role === 'user'
+                    ? 'linear-gradient(135deg, #1d4ed8, #1e40af)'
+                    : (msg.isError ? '#450a0a' : '#1e293b'),
+                  borderRadius: msg.role === 'user' ? '18px 4px 18px 18px' : '4px 18px 18px 18px',
+                  padding: '10px 14px',
+                  border: msg.isError ? '1px solid #991b1b' : (msg.role === 'user' ? 'none' : '1px solid #334155')
+                }}>
+                  {msg.role === 'assistant' && msg.title && msg.title !== 'Apex AI' && (
+                    <div style={{ fontSize: 11, fontWeight: 800, color: '#a5b4fc', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{msg.title}</div>
+                  )}
+                  <div style={{
+                    fontSize: 12.5, color: msg.role === 'user' ? '#e0f2fe' : '#cbd5e1',
+                    lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    fontWeight: msg.role === 'user' ? 600 : 400
+                  }}>
+                    {msg.text.split(/(\*\*.*?\*\*)/g).map((part, pi) =>
+                      part.startsWith('**') && part.endsWith('**')
+                        ? <strong key={pi} style={{ color: '#f1f5f9', fontWeight: 800 }}>{part.slice(2, -2)}</strong>
+                        : part.startsWith('*') && part.endsWith('*')
+                          ? <em key={pi} style={{ color: '#94a3b8' }}>{part.slice(1, -1)}</em>
+                          : <span key={pi}>{part}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 9.5, color: msg.role === 'user' ? '#93c5fd' : '#475569', marginTop: 5, textAlign: msg.role === 'user' ? 'left' : 'right' }}>
+                    {msg.timestamp?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Footer info */}
-            <div style={{ padding: '10px 18px', background: '#0f172a', borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#94a3b8' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span>⌨️ Press <strong style={{ color: '#fff' }}>↵ Enter</strong> to run</span>
-                <span>⚡ Shortcut: <strong style={{ color: '#fff' }}>⌘K / Ctrl+K</strong></span>
               </div>
+            ))}
+
+            {/* Thinking indicator */}
+            {isProcessingPrompt && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+                <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>✨</div>
+                <div style={{ background: '#1e293b', borderRadius: '4px 18px 18px 18px', padding: '12px 16px', border: '1px solid #334155', display: 'flex', gap: 5, alignItems: 'center' }}>
+                  {[0, 150, 300].map(delay => (
+                    <span key={delay} style={{
+                      width: 7, height: 7, borderRadius: '50%', background: '#4f46e5',
+                      animation: `bounce 1.2s ${delay}ms infinite`
+                    }} />
+                  ))}
+                  <span style={{ fontSize: 11, color: '#64748b', marginLeft: 6 }}>Gemini AI is thinking...</span>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input Bar */}
+          <div style={{
+            borderTop: '1px solid #1e3a5f',
+            background: '#0a1628',
+            padding: '10px 12px',
+            flexShrink: 0
+          }}>
+            <form onSubmit={handleExecuteTypedPrompt} style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <textarea
+                autoFocus={chatMessages.length > 0}
+                value={typedPrompt}
+                onChange={e => setTypedPrompt(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (typedPrompt.trim() && !isProcessingPrompt) handleExecuteTypedPrompt(e);
+                  }
+                }}
+                placeholder="Ask anything about your factory… (↵ to send, Shift+↵ new line)"
+                rows={2}
+                style={{
+                  flex: 1, background: '#1e293b', border: '1.5px solid #334155', color: '#e2e8f0',
+                  fontSize: 13, fontFamily: 'inherit', borderRadius: 12, padding: '9px 13px',
+                  outline: 'none', resize: 'none', lineHeight: 1.5,
+                  transition: 'border-color 0.15s'
+                }}
+                onFocus={e => { e.target.style.borderColor = '#4f46e5'; }}
+                onBlur={e => { e.target.style.borderColor = '#334155'; }}
+              />
+              <button
+                type="submit"
+                disabled={!typedPrompt.trim() || isProcessingPrompt}
+                style={{
+                  width: 42, height: 42, borderRadius: 12, flexShrink: 0,
+                  background: (typedPrompt.trim() && !isProcessingPrompt) ? 'linear-gradient(135deg, #4f46e5, #2563eb)' : '#1e293b',
+                  border: 'none', color: '#fff', cursor: (typedPrompt.trim() && !isProcessingPrompt) ? 'pointer' : 'default',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 18, transition: 'all 0.15s',
+                  boxShadow: (typedPrompt.trim() && !isProcessingPrompt) ? '0 4px 14px rgba(79,70,229,0.5)' : 'none'
+                }}
+                title="Send (Enter)"
+              >
+                {isProcessingPrompt ? '⏳' : '↑'}
+              </button>
+            </form>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 7, fontSize: 10.5, color: '#334155' }}>
+              <span>⌘K to toggle • Shift+↵ new line</span>
               {!isMicDisabled && (
                 <button
                   type="button"
                   onClick={() => { setShowCommandPalette(false); toggleAssistant(); }}
-                  style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontWeight: 700, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                  style={{ background: 'none', border: 'none', color: '#4f46e5', cursor: 'pointer', fontSize: 10.5, fontWeight: 700, padding: 0 }}
                 >
-                  🎙️ Switch to Voice Dictation
+                  🎙 Switch to Voice
                 </button>
               )}
             </div>
@@ -2373,6 +2573,7 @@ export function GlobalVoiceAssistant({
       )}
 
       {/* Floating HUD Command Notification Toast */}
+
       {feedbackToast && (
         <div style={{
           position: 'fixed',
