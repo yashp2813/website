@@ -2584,19 +2584,19 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
   const [measuredWidthMm, setMeasuredWidthMm] = useState('96.0'); // For 1-click auto-calibrator
 
-  // True physical dimensions for TechNova NovaJet 12L (100mm × 44mm with 2mm gaps)
+  // Exact physical dimensions for TechNova NovaJet 12L:
+  // Top: 9.0mm, Left: 4.0mm, Sticker: 100.0mm × 44.0mm, Row Gap (V): 3.0mm, Col Gap (H): 2.0mm
   const [topMarginMm, setTopMarginMm] = useState(() => {
     const saved = localStorage.getItem('novajet_top_margin');
-    return saved !== null ? parseFloat(saved) : 11.5;
+    return saved !== null ? parseFloat(saved) : 9.0;
   });
-  // Default left margin set to 2.0mm to prevent rightward shift caused by printer hardware grab margins
   const [leftMarginMm, setLeftMarginMm] = useState(() => {
     const saved = localStorage.getItem('novajet_left_margin');
-    return saved !== null ? parseFloat(saved) : 2.0;
+    return saved !== null ? parseFloat(saved) : 4.0;
   });
   const [rowGapMm, setRowGapMm] = useState(() => {
     const saved = localStorage.getItem('novajet_row_gap');
-    return saved !== null ? parseFloat(saved) : 2.0;
+    return saved !== null ? parseFloat(saved) : 3.0;
   });
   const [colGapMm, setColGapMm] = useState(() => {
     const saved = localStorage.getItem('novajet_col_gap');
@@ -2610,7 +2610,6 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     const saved = localStorage.getItem('novajet_label_height');
     return saved !== null ? parseFloat(saved) : 44.0;
   });
-  // Scale compensation for printers / Safari drivers that shrink by default (e.g. 100% = 1:1, 104% - 108% if printer shrinks)
   const [printScalePct, setPrintScalePct] = useState(() => {
     const saved = localStorage.getItem('novajet_print_scale');
     return saved !== null ? parseFloat(saved) : 100;
@@ -2622,32 +2621,32 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   };
 
   const applyPreset = (preset) => {
-    if (preset === 'novajet_12l') {
-      saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 2.0, setLeftMarginMm);
-      saveSetting('novajet_row_gap', 2.0, setRowGapMm);
+    if (preset === 'novajet_12l' || preset === 'exact_sheet') {
+      // User's exact sheet measurements
+      saveSetting('novajet_top_margin', 9.0, setTopMarginMm);
+      saveSetting('novajet_left_margin', 4.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 3.0, setRowGapMm);
       saveSetting('novajet_col_gap', 2.0, setColGapMm);
       saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
       saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
       saveSetting('novajet_print_scale', 100, setPrintScalePct);
     } else if (preset === 'novajet_left_shift') {
-      // Compensate for printers shifting too far to the right
-      saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 0.5, setLeftMarginMm);
-      saveSetting('novajet_row_gap', 2.0, setRowGapMm);
+      // Offset compensation if printer hardware grabs paper to the right
+      saveSetting('novajet_top_margin', 9.0, setTopMarginMm);
+      saveSetting('novajet_left_margin', 2.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 3.0, setRowGapMm);
+      saveSetting('novajet_col_gap', 2.0, setColGapMm);
+      saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
+      saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
+      saveSetting('novajet_print_scale', 100, setPrintScalePct);
+    } else if (preset === 'novajet_safari_boost') {
+      saveSetting('novajet_top_margin', 9.0, setTopMarginMm);
+      saveSetting('novajet_left_margin', 3.0, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 3.0, setRowGapMm);
       saveSetting('novajet_col_gap', 2.0, setColGapMm);
       saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
       saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
       saveSetting('novajet_print_scale', 104, setPrintScalePct);
-    } else if (preset === 'novajet_safari_boost') {
-      // Scale compensation with calibrated left margin
-      saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 1.5, setLeftMarginMm);
-      saveSetting('novajet_row_gap', 2.0, setRowGapMm);
-      saveSetting('novajet_col_gap', 2.0, setColGapMm);
-      saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
-      saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
-      saveSetting('novajet_print_scale', 105, setPrintScalePct);
     } else if (preset === 'novajet_zerogap') {
       saveSetting('novajet_top_margin', 16.5, setTopMarginMm);
       saveSetting('novajet_left_margin', 3.0, setLeftMarginMm);
@@ -3162,37 +3161,39 @@ ${bodyContent}
             </div>
           </div>
 
-          {/* 1-Click Automatic Ruler Calibration & Left-Shift Fix Banner */}
+          {/* 1-Click Exact NovaJet Geometry & Auto-Calibrator Banner */}
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-3 flex items-center justify-between flex-wrap gap-3 shadow-xs">
             <div className="flex items-center gap-2.5">
               <span className="text-xl">📐</span>
               <div>
                 <div className="font-extrabold text-blue-950 text-xs flex items-center gap-2">
-                  Auto-Calibrate &amp; Quick Shift Controls
-                  <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Fast Fix</span>
+                  NovaJet 12L Factory Specs
+                  <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">9mm Top • 4mm Side • 3mm / 2mm Gaps</span>
                 </div>
                 <p className="text-[11px] text-blue-800">
-                  If print is shifted to the right, click <strong>⬅️ 2mm Left</strong>. If size is slightly small, enter ruler width and click <strong>Auto-Calibrate</strong>:
+                  Exact Sheet Specs: <strong>100×44mm</strong> stickers, <strong>9mm</strong> top margin, <strong>4mm</strong> side margin, <strong>3mm</strong> vertical gap, <strong>2mm</strong> horizontal gap.
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Quick Left-Shift Buttons for Instant Centering */}
+              {/* 1-Click Reset to Exact Factory Specs */}
+              <button
+                type="button"
+                onClick={() => applyPreset('exact_sheet')}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black shadow-xs transition flex items-center gap-1.5"
+                title="Reset all margins and gaps to your exact physical sheet specs"
+              >
+                🎯 Reset to Exact Specs
+              </button>
+
+              {/* Quick Left-Shift Buttons */}
               <div className="flex items-center gap-1 bg-white border border-blue-300 px-2 py-1 rounded-lg">
-                <span className="text-[10px] font-black text-blue-900 mr-1 uppercase">Shift Left:</span>
-                <button
-                  type="button"
-                  onClick={() => nudgeLeft(-2.0)}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-black shadow-xs transition"
-                  title="Shift entire grid 2mm to the Left"
-                >
-                  ⬅️ 2mm Left
-                </button>
+                <span className="text-[10px] font-black text-blue-900 mr-1 uppercase">Nudge:</span>
                 <button
                   type="button"
                   onClick={() => nudgeLeft(-1.0)}
-                  className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-950 rounded text-xs font-bold transition"
+                  className="px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-950 rounded text-xs font-bold transition"
                   title="Shift entire grid 1mm to the Left"
                 >
                   ⬅️ 1mm
@@ -3200,7 +3201,7 @@ ${bodyContent}
                 <button
                   type="button"
                   onClick={() => nudgeLeft(1.0)}
-                  className="px-2 py-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded text-xs font-bold transition"
+                  className="px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded text-xs font-bold transition"
                   title="Shift entire grid 1mm to the Right"
                 >
                   1mm ➡️
@@ -3297,9 +3298,9 @@ ${bodyContent}
                     onChange={e => applyPreset(e.target.value)}
                     defaultValue="novajet_12l"
                   >
-                    <option value="novajet_12l">NovaJet 12L Standard (100×44mm • Side: 2.0mm)</option>
-                    <option value="novajet_left_shift">👈 Left-Shift Fix (Side: 0.5mm • 104% Scale)</option>
-                    <option value="novajet_safari_boost">⚡ Mac / Safari Shrunk Print Fix (Side: 1.5mm • 105% Scale)</option>
+                    <option value="novajet_12l">🎯 NovaJet 12L Exact (Top: 9mm, Side: 4mm, Gaps: V 3mm / H 2mm)</option>
+                    <option value="novajet_left_shift">👈 Offset Left Shift (Top: 9mm, Side: 2mm, Gaps: V 3mm / H 2mm)</option>
+                    <option value="novajet_safari_boost">⚡ Mac / Safari Shrunk Fix (104% Scale • Top: 9mm)</option>
                     <option value="novajet_zerogap">NovaJet 12L (0mm Gaps • Flush)</option>
                     <option value="avery_12">Avery / Desmat (2.5mm Gaps • 99.1×42.3)</option>
                   </select>

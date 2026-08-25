@@ -152,24 +152,24 @@ p { margin: 0; }
     margin: 0 !important;
   }
 
-  /* NovaJet 12L Sheet Containers */
+  /* NovaJet 12L Sheet Containers (Exact Factory Specs: 9mm Top, 4mm Side, 3mm Row Gap, 2mm Col Gap) */
   .sheet-page {
     width: 210mm !important;
     height: 297mm !important;
     min-height: 297mm !important;
     max-height: 297mm !important;
-    padding-top: 16.5mm !important;
-    padding-bottom: 16.5mm !important;
-    padding-left: 5mm !important;
-    padding-right: 5mm !important;
+    padding-top: 9mm !important;
+    padding-bottom: 9mm !important;
+    padding-left: 4mm !important;
+    padding-right: 4mm !important;
     box-sizing: border-box !important;
     page-break-after: always !important;
     break-after: page !important;
     display: grid !important;
     grid-template-columns: 100mm 100mm !important;
     grid-template-rows: repeat(6, 44mm) !important;
-    column-gap: 0mm !important;
-    row-gap: 0mm !important;
+    column-gap: 2mm !important;
+    row-gap: 3mm !important;
     overflow: hidden !important;
     background: #ffffff !important;
   }
@@ -178,10 +178,12 @@ p { margin: 0; }
     display: grid !important;
     grid-template-columns: 100mm 100mm !important;
     grid-auto-rows: 44mm !important;
-    column-gap: 0mm !important;
-    row-gap: 0mm !important;
-    width: 200mm !important;
-    margin: 0 auto !important;
+    column-gap: 2mm !important;
+    row-gap: 3mm !important;
+    width: 202mm !important;
+    margin-left: 4mm !important;
+    margin-right: auto !important;
+    padding-top: 9mm !important;
     justify-content: start !important;
     align-content: start !important;
     page-break-inside: auto !important;
