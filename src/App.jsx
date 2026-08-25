@@ -7329,7 +7329,7 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
       </div>
 
       {/* Top KPI Cards Strip: Raw Material | Finished Goods (Next to Raw Material) | Monthly Production | Pending Orders */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
+      <div className="dash-top-kpi-grid">
         {/* 1. RAW MATERIAL STOCK */}
         <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: 18 }}>
           <p style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em' }}>
@@ -7402,7 +7402,7 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <div className="dash-factory-status-grid">
           {stageStats.map(st => (
             <div 
               key={st.stage} 

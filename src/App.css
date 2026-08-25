@@ -1445,12 +1445,12 @@
   }
   .dash-wrapper { padding: 72px 14px 80px !important; }
 
-  /* Mobile bottom action bar */
+  /* Mobile bottom action bar - Active only on mobile */
   .mobile-bottom-bar {
     position: fixed;
     bottom: 0; left: 0; right: 0;
     background: var(--brand);
-    display: flex;
+    display: flex !important;
     align-items: center;
     justify-content: space-around;
     padding: 6px 0 env(safe-area-inset-bottom, 6px);
@@ -1547,7 +1547,7 @@
   }
 }
 
-/* Mobile top header bar */
+/* Mobile Elements Hidden on Desktop by Default */
 .mobile-top-bar {
   display: none;
   position: fixed;
@@ -1562,8 +1562,18 @@
   border-bottom: 1px solid rgba(255,255,255,.08);
 }
 
+.mobile-bottom-bar {
+  display: none !important;
+}
+
+.mobile-sidebar-overlay {
+  display: none !important;
+}
+
 @media (max-width: 768px) {
-  .mobile-top-bar { display: flex; }
+  .mobile-top-bar { display: flex !important; }
+  .mobile-bottom-bar { display: flex !important; }
+  .mobile-sidebar-overlay { display: block !important; }
 }
 
 .mobile-top-bar-title {
@@ -1589,6 +1599,45 @@
   background: rgba(255,255,255,.18);
 }
 
+/* ══════════════════════════════════════════════════
+   DASHBOARD RESPONSIVE GRIDS (PC / TABLET / MOBILE)
+══════════════════════════════════════════════════ */
+.dash-top-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+@media (max-width: 1200px) {
+  .dash-top-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
+@media (max-width: 640px) {
+  .dash-top-kpi-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+.dash-factory-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+@media (max-width: 1200px) {
+  .dash-factory-status-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
 @media (max-width: 768px) {
-  /* removed floating voice widget hide rule, it now renders in portal */
+  .dash-factory-status-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .dash-factory-status-grid {
+    grid-template-columns: 1fr;
+  }
 }
