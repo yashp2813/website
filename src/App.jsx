@@ -17451,6 +17451,7 @@ function ClientJobWorkPortalModal({
   const [activeTab, setLocalActiveTab] = useState('reels'); // 'reels' | 'orders' | 'wip' | 'fg' | 'reconciliation'
   const [showInwardForm, setShowInwardForm] = useState(false);
   const [showOrderForm, setShowOrderForm] = useState(false);
+  const [printTagData, setPrintTagData] = useState(null);
 
   // Quick Inward Form State for this Client
   const [inwardReels, setInwardReels] = useState([{
@@ -17800,18 +17801,30 @@ function ClientJobWorkPortalModal({
               </div>
 
               {/* Action Bar */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
                 <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', margin: 0 }}>
                   Client Paper Reels Inward &amp; Stock Ledger ({clientReels.length} reels recorded)
                 </h4>
-                <button
-                  type="button"
-                  onClick={() => setShowInwardForm(!showInwardForm)}
-                  className="apex-btn"
-                  style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)', color: '#fff', fontWeight: 800, fontSize: 12, padding: '6px 14px' }}
-                >
-                  {showInwardForm ? '✕ Close Inward Form' : '➕ Inward Client Paper Reels'}
-                </button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {activeReels.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPrintTagData({ type: 'reel', data: activeReels })}
+                      className="apex-btn"
+                      style={{ background: '#4f46e5', color: '#fff', fontWeight: 800, fontSize: 12, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 5 }}
+                    >
+                      🖨️ Print All Reel Barcodes ({activeReels.length})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowInwardForm(!showInwardForm)}
+                    className="apex-btn"
+                    style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)', color: '#fff', fontWeight: 800, fontSize: 12, padding: '6px 14px' }}
+                  >
+                    {showInwardForm ? '✕ Close Inward Form' : '➕ Inward Client Paper Reels'}
+                  </button>
+                </div>
               </div>
 
               {/* Quick Inward Form for this Client */}
@@ -17926,12 +17939,13 @@ function ClientJobWorkPortalModal({
                       <th style={{ padding: '8px 10px', textAlign: 'right' }}>Received (KG)</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right' }}>Balance (KG)</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center' }}>Status</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Barcode</th>
                     </tr>
                   </thead>
                   <tbody>
                     {clientReels.length === 0 && (
                       <tr>
-                        <td colSpan="9" style={{ textAlign: 'center', padding: 32, color: '#94a3b8', fontStyle: 'italic' }}>
+                        <td colSpan="10" style={{ textAlign: 'center', padding: 32, color: '#94a3b8', fontStyle: 'italic' }}>
                           No paper reels currently inwarded for this client. Click "➕ Inward Client Paper Reels" above to record client raw materials.
                         </td>
                       </tr>
@@ -17971,6 +17985,17 @@ function ClientJobWorkPortalModal({
                             }}>
                               {isAvail ? 'IN STOCK' : 'CONSUMED'}
                             </span>
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => setPrintTagData({ type: 'reel', data: r })}
+                              className="apex-btn apex-btn-secondary apex-btn-xs"
+                              style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px' }}
+                              title="Print barcode sticker for this client reel"
+                            >
+                              🖨️ Label
+                            </button>
                           </td>
                         </tr>
                       );
@@ -18277,6 +18302,14 @@ function ClientJobWorkPortalModal({
           </button>
         </div>
       </div>
+
+      <PrintBarcodeLabelModal
+        isOpen={!!printTagData}
+        onClose={() => setPrintTagData(null)}
+        type={printTagData?.type}
+        data={printTagData?.data}
+        allInventory={inventory}
+      />
     </div>
   );
 }
