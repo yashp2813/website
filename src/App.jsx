@@ -1,7 +1,7 @@
 import './App.css';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
-  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key
+  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key, Menu, X
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
@@ -4501,24 +4501,24 @@ function UniversalCsvImportModal({
   const uniqueClients = Array.from(new Set(parsedRows.map(r => r.clientName || r.name).filter(Boolean)));
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(5px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 940, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(5px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px 8px' }}>
+      <div style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 940, maxHeight: '95vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
         
         {/* Header */}
-        <div style={{ padding: '18px 24px', borderBottom: '1.5px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1.5px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
           <div>
-            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 22 }}>📥</span> Direct CSV &amp; Excel Data Importer
+            <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 20 }}>📥</span> Direct CSV &amp; Excel Data Importer
             </h2>
-            <p style={{ fontSize: 12, color: '#64748b', margin: '3px 0 0 0' }}>
+            <p style={{ fontSize: 11.5, color: '#64748b', margin: '2px 0 0 0' }}>
               Directly upload or paste your factory spreadsheet files into the ERP system
             </p>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer', padding: 4 }}>✕</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: '#94a3b8', cursor: 'pointer', padding: 4, lineHeight: 1 }}>✕</button>
         </div>
 
         {/* Modal Body */}
-        <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '16px 14px', overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
 
           {/* SUCCESS SCREEN */}
           {importSummary ? (
@@ -4549,7 +4549,7 @@ function UniversalCsvImportModal({
           ) : (
             <>
               {/* Mode Selection Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginBottom: 16 }}>
                 
                 {/* Mode 1: Own Stock Inventory */}
                 <div
@@ -4979,13 +4979,17 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
       setSearchResult(null);
       setMountJobId('');
       setCameraError(null);
-      if (scanTab === 'usb') {
+      const isPhone = typeof window !== 'undefined' && (window.innerWidth <= 768 || (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024));
+      if (isPhone) {
+        setScanTab('camera');
+      }
+      if (scanTab === 'usb' && !isPhone) {
         setTimeout(() => inputRef.current?.focus(), 80);
       }
     } else {
       stopCamera();
     }
-  }, [isOpen, scanTab]);
+  }, [isOpen]);
 
   useEffect(() => {
     return () => {
@@ -5274,7 +5278,7 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
 
                   {prefilledJobId ? (
                     // 5 Stand options for user: Top, Flute(C), Backing(C), Flute(B), Backing(B)
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(64px, 1fr))', gap: 6 }}>
                       {[
                         ['Top', '⬆️', 'Top'],
                         ['Flute(C)', '🌊', 'Flute(C)'],
@@ -6000,6 +6004,7 @@ export default function App() {
   const [attachPrefillOrderId, setAttachPrefillOrderId] = useState('');
   const [completeJobModalOrder, setCompleteJobModalOrder] = useState(null);
   const [csvImportModal, setCsvImportModal] = useState({ isOpen: false, mode: 'own_stock' });
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const [isGlobalMicDisabled, setIsGlobalMicDisabled] = useState(() => {
     return localStorage.getItem('apex_mic_disabled') === 'true';
@@ -6750,7 +6755,49 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100svh', fontFamily: 'var(--font)' }}>
-      <aside className="apex-sidebar">
+      
+      {/* Mobile Top Navigation Header */}
+      <header className="mobile-top-bar">
+        <button
+          type="button"
+          className="mobile-hamburger"
+          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          aria-label="Toggle Menu"
+        >
+          {isMobileSidebarOpen ? <X style={{ width: 22, height: 22 }} /> : <Menu style={{ width: 22, height: 22 }} />}
+        </button>
+
+        <div className="mobile-top-bar-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Package style={{ width: 18, height: 18, color: '#f59e0b' }} />
+          <span style={{ fontWeight: 800 }}>Apex ERP</span>
+          <span style={{ fontSize: 10.5, background: 'rgba(255,255,255,0.12)', padding: '2px 8px', borderRadius: 10, color: '#fbbf24', fontWeight: 700, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {companies.find(c => c.id === activeUnitId)?.name || 'All Units'}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setIsBarcodeModalOpen(true)}
+            className="apex-btn apex-btn-sm"
+            style={{ background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff', fontWeight: 800, padding: '5px 10px', fontSize: 11.5, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4, boxShadow: '0 2px 6px rgba(37,99,235,0.4)', minHeight: 34 }}
+            title="Scan Reel Barcode / QR with Phone Camera"
+          >
+            <ScanLine style={{ width: 14, height: 14 }} />
+            <span>Scan</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile Sidebar Backdrop Overlay */}
+      {isMobileSidebarOpen && (
+        <div
+          className="mobile-sidebar-overlay"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`apex-sidebar ${isMobileSidebarOpen ? 'open' : ''}`}>
         <div className="apex-sidebar-logo">
           <h2><Package style={{ width: 20, height: 20 }} /> Apex ERP</h2>
 
@@ -6782,28 +6829,28 @@ export default function App() {
           </div>
         </div>
         <nav className="apex-nav-section" style={{ flex: 1 }}>
-          {canAccess(currentErpUser.role, 'dashboard') && <NavButton icon={<LayoutDashboard />} label="Dashboard" isActive={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />}
-          {canAccess(currentErpUser.role, 'calculator') && <NavButton icon={<Calculator />} label="Calculator" isActive={activeTab === 'calculator'} onClick={() => setActiveTab('calculator')} />}
-          {canAccess(currentErpUser.role, 'costing') && <NavButton icon={<Coins />} label="Cost Calculator" isActive={activeTab === 'costing'} onClick={() => setActiveTab('costing')} />}
+          {canAccess(currentErpUser.role, 'dashboard') && <NavButton icon={<LayoutDashboard />} label="Dashboard" isActive={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'calculator') && <NavButton icon={<Calculator />} label="Calculator" isActive={activeTab === 'calculator'} onClick={() => { setActiveTab('calculator'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'costing') && <NavButton icon={<Coins />} label="Cost Calculator" isActive={activeTab === 'costing'} onClick={() => { setActiveTab('costing'); setIsMobileSidebarOpen(false); }} />}
 
           <div className="apex-nav-label">Operations</div>
-          {canAccess(currentErpUser.role, 'planning') && <NavButton icon={<CalendarDays />} label="Planning Sheet" isActive={activeTab === 'planning'} onClick={() => setActiveTab('planning')} />}
-          {canAccess(currentErpUser.role, 'orders') && <NavButton icon={<ShoppingCart />} label="Orders" isActive={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />}
-          {canAccess(currentErpUser.role, 'production') && <NavButton icon={<Factory />} label="Production Log" isActive={activeTab === 'production'} onClick={() => setActiveTab('production')} />}
-          {canAccess(currentErpUser.role, 'wip_tracker') && <NavButton icon={<GanttChart />} label="WIP Tracker" isActive={activeTab === 'wip_tracker'} onClick={() => setActiveTab('wip_tracker')} />}
-          {canAccess(currentErpUser.role, 'finished_goods') && <NavButton icon={<Truck />} label="Finished Goods" isActive={activeTab === 'finished_goods'} onClick={() => setActiveTab('finished_goods')} />}
-          {canAccess(currentErpUser.role, 'wastage') && <NavButton icon={<Flame />} label="Power & Fuel" isActive={activeTab === 'wastage' || activeTab === 'fuel_gum'} onClick={() => setActiveTab('wastage')} />}
+          {canAccess(currentErpUser.role, 'planning') && <NavButton icon={<CalendarDays />} label="Planning Sheet" isActive={activeTab === 'planning'} onClick={() => { setActiveTab('planning'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'orders') && <NavButton icon={<ShoppingCart />} label="Orders" isActive={activeTab === 'orders'} onClick={() => { setActiveTab('orders'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'production') && <NavButton icon={<Factory />} label="Production Log" isActive={activeTab === 'production'} onClick={() => { setActiveTab('production'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'wip_tracker') && <NavButton icon={<GanttChart />} label="WIP Tracker" isActive={activeTab === 'wip_tracker'} onClick={() => { setActiveTab('wip_tracker'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'finished_goods') && <NavButton icon={<Truck />} label="Finished Goods" isActive={activeTab === 'finished_goods'} onClick={() => { setActiveTab('finished_goods'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'wastage') && <NavButton icon={<Flame />} label="Power & Fuel" isActive={activeTab === 'wastage' || activeTab === 'fuel_gum'} onClick={() => { setActiveTab('wastage'); setIsMobileSidebarOpen(false); }} />}
 
           <div className="apex-nav-label">Inventory & Masters</div>
-          {canAccess(currentErpUser.role, 'inventory') && <NavButton icon={<Archive />} label="Stock Inventory" isActive={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />}
-          {canAccess(currentErpUser.role, 'items') && <NavButton icon={<Package />} label="Box Database" isActive={activeTab === 'items'} onClick={() => setActiveTab('items')} />}
-          {canAccess(currentErpUser.role, 'customers') && <NavButton icon={<Users />} label="Job Work Clients (Nashik)" isActive={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />}
+          {canAccess(currentErpUser.role, 'inventory') && <NavButton icon={<Archive />} label="Stock Inventory" isActive={activeTab === 'inventory'} onClick={() => { setActiveTab('inventory'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'items') && <NavButton icon={<Package />} label="Box Database" isActive={activeTab === 'items'} onClick={() => { setActiveTab('items'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'customers') && <NavButton icon={<Users />} label="Job Work Clients (Nashik)" isActive={activeTab === 'customers'} onClick={() => { setActiveTab('customers'); setIsMobileSidebarOpen(false); }} />}
 
           {canAccess(currentErpUser.role, 'reports') && <div className="apex-nav-label">Reports & Admin</div>}
-          {canAccess(currentErpUser.role, 'reports') && <NavButton icon={<BarChart3 />} label="Daily Reports" isActive={activeTab === 'reports'} onClick={() => setActiveTab('reports')} />}
-          {canAccess(currentErpUser.role, 'logs') && <NavButton icon={<History />} label="Activity Logs" isActive={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />}
-          {canAccess(currentErpUser.role, 'companies') && <NavButton icon={<Building2 />} label="My Units" isActive={activeTab === 'companies'} onClick={() => setActiveTab('companies')} />}
-          {canAccess(currentErpUser.role, 'users') && <NavButton icon={<Users />} label="Users & Access" isActive={activeTab === 'users'} onClick={() => setActiveTab('users')} />}
+          {canAccess(currentErpUser.role, 'reports') && <NavButton icon={<BarChart3 />} label="Daily Reports" isActive={activeTab === 'reports'} onClick={() => { setActiveTab('reports'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'logs') && <NavButton icon={<History />} label="Activity Logs" isActive={activeTab === 'logs'} onClick={() => { setActiveTab('logs'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'companies') && <NavButton icon={<Building2 />} label="My Units" isActive={activeTab === 'companies'} onClick={() => { setActiveTab('companies'); setIsMobileSidebarOpen(false); }} />}
+          {canAccess(currentErpUser.role, 'users') && <NavButton icon={<Users />} label="Users & Access" isActive={activeTab === 'users'} onClick={() => { setActiveTab('users'); setIsMobileSidebarOpen(false); }} />}
         </nav>
         <div className="apex-sidebar-footer">
           <button
@@ -6934,6 +6981,57 @@ export default function App() {
         {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} currentUserRole={currentErpUser?.role} currentUser={currentErpUser} />}
         {activeTab === 'logs'            && canAccess(currentErpUser.role,'logs')            && <LogsView logs={logs} currentUser={currentErpUser} orders={orders} inventory={inventory} />}
       </main>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <nav className="mobile-bottom-bar">
+        <button
+          type="button"
+          className={`mobile-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('dashboard'); setIsMobileSidebarOpen(false); }}
+        >
+          <LayoutDashboard style={{ width: 20, height: 20 }} />
+          <span>Dashboard</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-tab-btn ${activeTab === 'inventory' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('inventory'); setIsMobileSidebarOpen(false); }}
+        >
+          <Archive style={{ width: 20, height: 20 }} />
+          <span>Stock</span>
+        </button>
+
+        <button
+          type="button"
+          className="mobile-tab-btn"
+          onClick={() => { setIsBarcodeModalOpen(true); setIsMobileSidebarOpen(false); }}
+          style={{ color: '#38bdf8' }}
+        >
+          <div style={{ background: 'linear-gradient(135deg, #2563eb, #6366f1)', color: '#fff', width: 42, height: 42, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(37,99,235,0.45)', marginTop: -14, border: '2px solid #fff' }}>
+            <ScanLine style={{ width: 22, height: 22 }} />
+          </div>
+          <span style={{ fontWeight: 800, color: '#38bdf8' }}>Scan</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-tab-btn ${activeTab === 'production' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('production'); setIsMobileSidebarOpen(false); }}
+        >
+          <Factory style={{ width: 20, height: 20 }} />
+          <span>Production</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-tab-btn ${activeTab === 'customers' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('customers'); setIsMobileSidebarOpen(false); }}
+        >
+          <Users style={{ width: 20, height: 20 }} />
+          <span>Job Work</span>
+        </button>
+      </nav>
     </div>
   );
 }
