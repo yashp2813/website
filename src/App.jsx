@@ -6382,12 +6382,44 @@ export default function App() {
     }
   });
 
-  const savePlannedJobs = (jobs) => {
-    setPlannedJobs(jobs);
+  const savePlannedJobs = async (jobs) => {
+    const list = Array.isArray(jobs) ? jobs : [];
+    setPlannedJobs(list);
     try {
-      localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(jobs));
-      window.dispatchEvent(new CustomEvent('apex_jobs_changed', { detail: jobs }));
+      localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(list));
+      localStorage.setItem(`erp_planned_jobs_all`, JSON.stringify(list));
+      window.dispatchEvent(new CustomEvent('apex_jobs_changed', { detail: list }));
     } catch(e) {}
+
+    try {
+      // Sync each job card directly to Turso DB so all mobile phones & workstations see active job cards in real time
+      await executeQuery("DELETE FROM planned_jobs");
+      for (const j of list) {
+        if (!j.id) continue;
+        await executeQuery(
+          `INSERT OR REPLACE INTO planned_jobs (
+            id, orderId, companyId, customerId, customerName, itemId, itemName,
+            jobNo, plannedQty, orderQty, queueId, ups, status, deckleSize, flute,
+            notes, attachedReels, rollStandTop, rollStandFluteC, rollStandBackingC,
+            rollStandFluteB, rollStandBackingB, componentKey, sortOrder, createdAt, updatedAt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            j.id, j.orderId || '', j.companyId || '', j.customerId || '', j.customerName || '', j.itemId || '', j.itemName || '',
+            j.jobNo || '', parseInt(j.plannedQty || 0), parseInt(j.orderQty || 0), j.queueId || 'q_line1', parseInt(j.ups || 1),
+            j.status || 'Planned', j.deckleSize || '', j.flute || 'B', j.notes || '',
+            typeof j.attachedReels === 'object' ? JSON.stringify(j.attachedReels) : (j.attachedReels || ''),
+            typeof j.rollStandTop === 'object' ? JSON.stringify(j.rollStandTop) : (j.rollStandTop || ''),
+            typeof j.rollStandFluteC === 'object' ? JSON.stringify(j.rollStandFluteC) : (j.rollStandFluteC || ''),
+            typeof j.rollStandBackingC === 'object' ? JSON.stringify(j.rollStandBackingC) : (j.rollStandBackingC || ''),
+            typeof j.rollStandFluteB === 'object' ? JSON.stringify(j.rollStandFluteB) : (j.rollStandFluteB || ''),
+            typeof j.rollStandBackingB === 'object' ? JSON.stringify(j.rollStandBackingB) : (j.rollStandBackingB || ''),
+            j.componentKey || '', parseInt(j.sortOrder || 0), j.createdAt || new Date().toISOString(), new Date().toISOString()
+          ]
+        );
+      }
+    } catch(err) {
+      console.warn("Could not sync planned_jobs to Turso database:", err);
+    }
   };
 
   useEffect(() => {
@@ -6414,13 +6446,13 @@ export default function App() {
           return obj;
         });
       };
-      const [users, comps, itms, prod, ords, wst, inv, lg, cost, vend, pos, txns, custs, disps, wip, daily] = await Promise.all([
+      const [users, comps, itms, prod, ords, wst, inv, lg, cost, vend, pos, txns, custs, disps, wip, daily, pJobs] = await Promise.all([
         fetchTable('erp_users').catch(()=>[]), fetchTable('companies').catch(()=>[]), fetchTable('items').catch(()=>[]),
         fetchTable('production').catch(()=>[]), fetchTable('orders').catch(()=>[]), fetchTable('wastage').catch(()=>[]),
         fetchTable('inventory').catch(()=>[]), fetchTable('logs').catch(()=>[]), fetchTable('costings').catch(()=>[]),
         fetchTable('vendors').catch(()=>[]), fetchTable('purchaseOrders').catch(()=>[]), fetchTable('transactions').catch(()=>[]),
         fetchTable('customers').catch(()=>[]), fetchTable('dispatches').catch(()=>[]), fetchTable('wip_stages').catch(()=>[]),
-        fetchTable('daily_reports').catch(()=>[])
+        fetchTable('daily_reports').catch(()=>[]), fetchTable('planned_jobs').catch(()=>[])
       ]);
       setErpUsers(users);
       setCompanies(comps);
@@ -6442,6 +6474,36 @@ export default function App() {
       setDispatches(disps);
       setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, []) })));
       setDailyReports(daily);
+
+      // Cloud Planned Jobs Sync
+      if (Array.isArray(pJobs) && pJobs.length > 0) {
+        const parsedPJobs = pJobs.map(j => ({
+          ...j,
+          attachedReels: safeJsonParse(j.attachedReels, []),
+          rollStandTop: safeJsonParse(j.rollStandTop, null),
+          rollStandFluteC: safeJsonParse(j.rollStandFluteC, null),
+          rollStandBackingC: safeJsonParse(j.rollStandBackingC, null),
+          rollStandFluteB: safeJsonParse(j.rollStandFluteB, null),
+          rollStandBackingB: safeJsonParse(j.rollStandBackingB, null),
+        }));
+        setPlannedJobs(parsedPJobs);
+        try {
+          localStorage.setItem('erp_planned_jobs_all', JSON.stringify(parsedPJobs));
+        } catch(e) {}
+      } else {
+        // Fallback: If cloud DB planned_jobs is empty, check localStorage and seed to cloud
+        try {
+          const localSaved = localStorage.getItem(`erp_planned_jobs_${uid || 'all'}`) || localStorage.getItem('erp_planned_jobs_all');
+          if (localSaved) {
+            const localList = JSON.parse(localSaved);
+            if (Array.isArray(localList) && localList.length > 0) {
+              setPlannedJobs(localList);
+              savePlannedJobs(localList);
+            }
+          }
+        } catch(e) {}
+      }
+
       setIsDbReady(true);
     } catch (err) {
       console.error("Turso DB load error:", err);
@@ -6776,6 +6838,29 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            onClick={toggleGlobalMic}
+            className="apex-btn apex-btn-sm"
+            style={{
+              background: isGlobalMicDisabled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+              border: `1px solid ${isGlobalMicDisabled ? '#ef4444' : '#22c55e'}`,
+              color: isGlobalMicDisabled ? '#fca5a5' : '#86efac',
+              fontWeight: 800,
+              padding: '4px 8px',
+              fontSize: 11,
+              borderRadius: 6,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              minHeight: 34
+            }}
+            title={isGlobalMicDisabled ? "Microphone is Muted. Tap to enable voice input." : "Microphone is Active. Tap to mute."}
+          >
+            {isGlobalMicDisabled ? <MicOff style={{ width: 14, height: 14, color: '#ef4444' }} /> : <Mic style={{ width: 14, height: 14, color: '#4ade80' }} />}
+            <span style={{ fontSize: 10.5 }}>{isGlobalMicDisabled ? 'Mic Off' : 'Mic On'}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setIsBarcodeModalOpen(true)}
@@ -11217,11 +11302,9 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       });
     });
 
-    // 2. Only include direct standalone jobs created without an order (from Create Direct Job Modal)
-    // Note: Sales Orders entered by the Sales team are strictly excluded until a job is created for them.
+    // 2. Include all active pending orders so operators on mobile can always see and execute all factory job cards
     (visibleOrders || []).filter(o => 
-      o.status !== 'Completed' && 
-      (o.poNumber === 'STANDALONE-JOB' || o.isDirectJob || String(o.orderNo || '').startsWith('JOB-')) &&
+      !['completed','delivered','cancelled'].includes((o.status || '').toLowerCase()) && 
       !seenJobIds.has(o.id) &&
       !seenJobNos.has(String(o.orderNo || '').toUpperCase())
     ).forEach(o => {

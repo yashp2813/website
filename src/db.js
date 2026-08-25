@@ -324,6 +324,41 @@ export const initDb = async () => {
       remarks TEXT,
       createdAt TEXT,
       updatedAt TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS planned_jobs (
+      id TEXT PRIMARY KEY,
+      orderId TEXT,
+      companyId TEXT,
+      customerId TEXT,
+      customerName TEXT,
+      itemId TEXT,
+      itemName TEXT,
+      jobNo TEXT,
+      plannedQty INTEGER,
+      orderQty INTEGER,
+      queueId TEXT,
+      ups INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'Planned',
+      deckleSize TEXT,
+      flute TEXT,
+      notes TEXT,
+      attachedReels TEXT,
+      rollStandTop TEXT,
+      rollStandFluteC TEXT,
+      rollStandBackingC TEXT,
+      rollStandFluteB TEXT,
+      rollStandBackingB TEXT,
+      componentKey TEXT,
+      sortOrder INTEGER DEFAULT 0,
+      createdAt TEXT,
+      updatedAt TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS planning_queues (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      color TEXT,
+      companyId TEXT,
+      sortOrder INTEGER DEFAULT 0
     )`
   ];
 
