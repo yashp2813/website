@@ -1545,3 +1545,7 @@
 .mobile-hamburger:active {
   background: rgba(255,255,255,.18);
 }
+
+@media (max-width: 768px) {
+  /* removed floating voice widget hide rule, it now renders in portal */
+}

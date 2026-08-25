@@ -1,5 +1,6 @@
 import './App.css';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key, Menu, X
 } from 'lucide-react';
@@ -472,7 +473,8 @@ export function GlobalVoiceAssistant({
   addDoc,
   updateDoc,
   deleteDoc,
-  addLog
+  addLog,
+  isMobileMode
 }) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
@@ -2026,32 +2028,33 @@ export function GlobalVoiceAssistant({
 
   if (!isSupported) return null;
 
-  return (
-    <>
-      {/* Floating System Voice Command Action Button */}
-      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 10 }}>
-        {isListening && (
-          <div style={{
-            background: 'rgba(15, 23, 42, 0.95)',
-            color: '#fff',
-            padding: '8px 14px',
-            borderRadius: 24,
-            fontSize: 12,
-            fontWeight: 700,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            backdropFilter: 'blur(8px)',
-            border: '1px solid rgba(244, 63, 94, 0.4)'
-          }}>
-            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f43f5e', animation: 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite' }} />
-            <span>Listening... (Say "Help", "Job Card for [Item]", "How much 150 GSM paper?")</span>
-          </div>
-        )}
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
+  const widgetContent = (
+    <div className="floating-voice-widget" style={isMobileMode ? { display: 'flex', alignItems: 'center', gap: 6 } : { position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 10 }}>
+      {isListening && !isMobileMode && (
+        <div style={{
+          background: 'rgba(15, 23, 42, 0.95)',
+          color: '#fff',
+          padding: '8px 14px',
+          borderRadius: 24,
+          fontSize: 12,
+          fontWeight: 700,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          backdropFilter: 'blur(8px)',
+          border: '1px solid rgba(244, 63, 94, 0.4)'
+        }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f43f5e', animation: 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite' }} />
+          <span>Listening... (Say "Help", "Job Card for [Item]")</span>
+        </div>
+      )}
 
-        {/* 1-Click Master Microphone Shut-off / Enable Button */}
+      {/* 1-Click Master Microphone Shut-off / Enable Button */}
+      {!isMobileMode && (
         <button
           type="button"
           onClick={toggleMicMute}
@@ -2071,15 +2074,17 @@ export function GlobalVoiceAssistant({
             backdropFilter: 'blur(6px)',
             transition: 'all 0.2s'
           }}
-          title={isMicDisabled ? "Microphone is shut off across the entire app. Click to turn mic ON." : "Click to shut off microphone completely (avoids picking up background noise)."}
+          title={isMicDisabled ? "Microphone is shut off. Click to turn mic ON." : "Click to shut off microphone"}
         >
           {isMicDisabled ? (
-            <><MicOff style={{ width: 15, height: 15, color: '#fff' }} /> <span>Mic: OFF (Muted)</span></>
+            <><MicOff style={{ width: 15, height: 15, color: '#fff' }} /> <span>Mic: OFF</span></>
           ) : (
             <><MicOff style={{ width: 14, height: 14, color: '#f87171' }} /> <span>Shut Off Mic</span></>
           )}
         </button>
+      )}
 
+      {!isMobileMode && (
         <button
           type="button"
           onClick={() => setShowHelpModal(true)}
@@ -2102,36 +2107,44 @@ export function GlobalVoiceAssistant({
         >
           ?
         </button>
+      )}
 
-        {!isMicDisabled && (
-          <button
-            type="button"
-            onClick={toggleAssistant}
-            style={{
-              width: 54,
-              height: 54,
-              borderRadius: '50%',
-              background: isListening ? 'linear-gradient(135deg, #ef4444, #e11d48)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-              color: '#fff',
-              border: 'none',
-              boxShadow: isListening ? '0 0 24px rgba(239, 68, 68, 0.7)' : '0 8px 24px rgba(37, 99, 235, 0.45)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              transform: isListening ? 'scale(1.08)' : 'scale(1)'
-            }}
-            title={isListening ? 'Stop listening' : '🎙️ System Voice Assistant (Alt + V) - Click and speak any command'}
-          >
-            {isListening ? (
-              <MicOff style={{ width: 24, height: 24 }} />
-            ) : (
-              <Mic style={{ width: 24, height: 24 }} />
-            )}
-          </button>
-        )}
-      </div>
+      {!isMicDisabled && (
+        <button
+          type="button"
+          onClick={toggleAssistant}
+          style={{
+            width: isMobileMode ? 34 : 54,
+            height: isMobileMode ? 34 : 54,
+            borderRadius: '50%',
+            background: isListening ? 'linear-gradient(135deg, #ef4444, #e11d48)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+            color: '#fff',
+            border: 'none',
+            boxShadow: isListening ? '0 0 24px rgba(239, 68, 68, 0.7)' : (isMobileMode ? '0 2px 6px rgba(37, 99, 235, 0.4)' : '0 8px 24px rgba(37, 99, 235, 0.45)'),
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            transform: isListening ? 'scale(1.08)' : 'scale(1)'
+          }}
+          title={isListening ? 'Stop listening' : '🎙️ Voice Assistant'}
+        >
+          {isListening ? (
+            <MicOff style={{ width: isMobileMode ? 16 : 24, height: isMobileMode ? 16 : 24 }} />
+          ) : (
+            <Mic style={{ width: isMobileMode ? 16 : 24, height: isMobileMode ? 16 : 24 }} />
+          )}
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {isMobileMode && mounted && document.getElementById('mobile-voice-portal-target') 
+        ? createPortal(widgetContent, document.getElementById('mobile-voice-portal-target'))
+        : (!isMobileMode ? widgetContent : null)}
 
       {/* Floating HUD Command Notification Toast */}
       {feedbackToast && (
@@ -6838,38 +6851,16 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            type="button"
-            onClick={toggleGlobalMic}
-            className="apex-btn apex-btn-sm"
-            style={{
-              background: isGlobalMicDisabled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
-              border: `1px solid ${isGlobalMicDisabled ? '#ef4444' : '#22c55e'}`,
-              color: isGlobalMicDisabled ? '#fca5a5' : '#86efac',
-              fontWeight: 800,
-              padding: '4px 8px',
-              fontSize: 11,
-              borderRadius: 6,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              minHeight: 34
-            }}
-            title={isGlobalMicDisabled ? "Microphone is Muted. Tap to enable voice input." : "Microphone is Active. Tap to mute."}
-          >
-            {isGlobalMicDisabled ? <MicOff style={{ width: 14, height: 14, color: '#ef4444' }} /> : <Mic style={{ width: 14, height: 14, color: '#4ade80' }} />}
-            <span style={{ fontSize: 10.5 }}>{isGlobalMicDisabled ? 'Mic Off' : 'Mic On'}</span>
-          </button>
-
+          <div id="mobile-voice-portal-target" style={{ display: 'flex' }}></div>
           <button
             type="button"
             onClick={() => setIsBarcodeModalOpen(true)}
             className="apex-btn apex-btn-sm"
-            style={{ background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff', fontWeight: 800, padding: '5px 10px', fontSize: 11.5, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4, boxShadow: '0 2px 6px rgba(37,99,235,0.4)', minHeight: 34 }}
+            style={{ background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff', fontWeight: 800, padding: '5px 12px', fontSize: 12, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 5, boxShadow: '0 2px 6px rgba(37,99,235,0.4)', minHeight: 34 }}
             title="Scan Reel Barcode / QR with Phone Camera"
           >
-            <ScanLine style={{ width: 14, height: 14 }} />
-            <span>Scan</span>
+            <ScanLine style={{ width: 15, height: 15 }} />
+            <span>Scan Reel</span>
           </button>
         </div>
       </header>
@@ -7047,6 +7038,7 @@ export default function App() {
         updateDoc={updateDoc}
         deleteDoc={deleteDoc}
         addLog={addLog}
+        isMobileMode={isPhone}
       />
       <main className={`apex-main ${activeTab === 'dashboard' ? 'dash-mode' : ''}`}>
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
@@ -7321,7 +7313,7 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
       </div>
 
       {/* Top KPI Cards Strip: Raw Material | Finished Goods (Next to Raw Material) | Monthly Production | Pending Orders */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
         {/* 1. RAW MATERIAL STOCK */}
         <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: 18 }}>
           <p style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em' }}>
@@ -7384,17 +7376,17 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
 
       {/* LIVE FACTORY STATUS STRIP (With Value ₹ and Weight KG on the bottom of each stage) */}
       <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', boxShadow: '0 0 8px #f59e0b' }} />
             <h4 style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>Live Factory Status</h4>
           </div>
-          <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+          <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'var(--font-mono)', display: 'block' }}>
             Shop Floor: <strong>{activeWipBatches} batches</strong> · WIP: <strong style={{ color: '#f59e0b' }}>{totalWipPcs.toLocaleString()} pcs</strong> (<strong>{(totalWipWeightKg / 1000).toFixed(1)} Tons</strong> · <strong style={{ color: '#4ade80' }}>₹{Math.round(totalWipVal).toLocaleString('en-IN')}</strong>)
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           {stageStats.map(st => (
             <div 
               key={st.stage} 
@@ -11247,6 +11239,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
   const [suggestedSheets, setSuggestedSheets] = useState(null);
   const [quickEntryMode, setQuickEntryMode] = useState(() => localStorage.getItem('apex_quickEntry') === 'true');
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [viewingJobCardModal, setViewingJobCardModal] = useState(null);
   
   const [consumedReels, setConsumedReels] = useState([{ reelNo: '', weight: '' }]);
   const [isBarcodeScanOpen, setIsBarcodeScanOpen] = useState(false);
@@ -11904,6 +11897,15 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                       </div>
                     </>
                   )}
+                  <div className="h-6 w-px bg-slate-700"></div>
+                  <button
+                    type="button"
+                    onClick={() => setViewingJobCardModal({ order: linkedOrd || currentJob, job: currentJob, item: currentItem, company: companies.find(c => c.id === currentJob.companyId), customer: customers.find(c => c.id === currentJob.customerId) })}
+                    className="apex-btn apex-btn-sm"
+                    style={{ background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff', fontWeight: 800, padding: '5px 12px', fontSize: 11, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', border: 'none', boxShadow: '0 2px 6px rgba(37,99,235,0.4)' }}
+                  >
+                    📋 View Job Card
+                  </button>
                 </div>
               </div>
             );
@@ -12048,17 +12050,17 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                 const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
 
                 return (
-                  <div key={idx} className="bg-slate-800/90 p-3.5 rounded-lg border border-slate-700 space-y-2">
-                    <div className="flex flex-wrap md:flex-nowrap gap-3 items-end">
-                      <div className="flex-1 min-w-[160px]">
-                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
-                          Reel Number {reel.stand && <span className="text-amber-400 font-normal ml-1 font-sans">({reel.stand})</span>}
+                  <div key={idx} className="bg-slate-800/90 p-3 rounded-lg border border-slate-700 space-y-2">
+                    <div className="grid grid-cols-[1fr,90px,auto] sm:grid-cols-[1fr,140px,auto] gap-2 sm:gap-3 items-end">
+                      <div className="min-w-0">
+                        <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          Reel No {reel.stand && <span className="text-amber-400 font-normal ml-1 font-sans">({reel.stand})</span>}
                         </label>
                         <input
                           required
                           type="text"
-                          placeholder="Type or scan Reel No (e.g. R-101)"
-                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-sm uppercase font-mono font-bold outline-none focus:border-amber-400"
+                          placeholder="Reel/Scan"
+                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs sm:text-sm uppercase font-mono font-bold outline-none focus:border-amber-400"
                           value={reel.reelNo}
                           onChange={e => {
                             const val = e.target.value;
@@ -12076,14 +12078,14 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                         />
                       </div>
 
-                      <div className="flex-1 min-w-[140px]">
-                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">KG Consumed</label>
+                      <div className="min-w-0">
+                        <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">KG Used</label>
                         <input
                           required
                           type="number"
                           step="0.1"
-                          placeholder="0.0 KG"
-                          className="w-full p-2 border border-slate-600 bg-amber-500/10 text-amber-300 rounded text-sm font-mono font-bold outline-none focus:border-amber-400"
+                          placeholder="0.0"
+                          className="w-full p-2 border border-slate-600 bg-amber-500/10 text-amber-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
                           value={reel.weight}
                           onChange={e => {
                             const upd = [...consumedReels];
@@ -12093,11 +12095,11 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                         />
                       </div>
 
-                      {consumedReels.length > 1 && (
-                        <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition">
+                      {consumedReels.length > 1 ? (
+                        <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 mb-[1px] bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition">
                           <Trash2 className="w-4 h-4"/>
                         </button>
-                      )}
+                      ) : <div style={{ width: 34 }}></div>}
                     </div>
 
                     {/* LIVE REEL SPECIFICATION MATCH BADGE */}
@@ -12329,6 +12331,18 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
           </div>
         );
       })}
+      {/* Render JobCardViewModal when clicked in Production View */}
+      {viewingJobCardModal && (
+        <JobCardViewModal
+          order={viewingJobCardModal.order}
+          job={viewingJobCardModal.job}
+          item={viewingJobCardModal.item || items.find(i => i.id === viewingJobCardModal.order?.itemId || i.name === viewingJobCardModal.order?.itemName || i.Item_Name === viewingJobCardModal.order?.itemName)}
+          company={viewingJobCardModal.company || companies.find(c => c.id === viewingJobCardModal.order?.companyId)}
+          customer={viewingJobCardModal.customer || customers.find(c => c.id === viewingJobCardModal.order?.customerId)}
+          onClose={() => setViewingJobCardModal(null)}
+          onDownloadPdf={typeof generateJobCard === 'function' ? generateJobCard : null}
+        />
+      )}
     </div>
   );
 }
@@ -12481,30 +12495,30 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
-      <div className="bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[92vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
+      <div className="bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[95vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
         
         {/* Top Header Bar */}
-        <div className="flex justify-between items-center px-6 py-4 border-b border-stone-200 bg-stone-50 print:hidden sticky top-0 z-10">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">📋</span>
+        <div className="flex justify-between items-center px-4 py-3 md:px-6 md:py-4 border-b border-stone-200 bg-stone-50 print:hidden sticky top-0 z-10">
+          <div className="flex items-center gap-2 md:gap-3">
+            <span className="text-xl md:text-2xl">📋</span>
             <div>
-              <h3 className="font-extrabold text-stone-900 text-base">Factory Production Job Card</h3>
-              <p className="text-xs text-stone-500 font-medium">{jcNo} • Item: {itemName}</p>
+              <h3 className="font-extrabold text-stone-900 text-sm md:text-base">Factory Production Job Card</h3>
+              <p className="text-[11px] md:text-xs text-stone-500 font-medium">{jcNo} • Item: {itemName}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handlePrint} className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
-              🖨️ Print Job Card
+            <button onClick={handlePrint} className="px-3 py-1.5 md:px-4 md:py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+              🖨️ Print
             </button>
-            <button onClick={onClose} className="px-3 py-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-lg text-xs font-bold transition">
+            <button onClick={onClose} className="px-3 py-1.5 md:px-3 md:py-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-lg text-xs font-bold transition">
               ✕ Close
             </button>
           </div>
         </div>
 
         {/* PRINTABLE JOB CARD LAYOUT (MATCHING USER REFERENCE DOCS) */}
-        <div className="p-8 print:p-4 text-xs text-stone-900 font-sans" id="printable-job-card">
+        <div className="p-4 md:p-8 print:p-4 text-xs text-stone-900 font-sans" id="printable-job-card">
           
           {/* Header Box */}
           <div className="border-2 border-stone-900 p-4 mb-4 rounded-lg bg-stone-50/50">
@@ -13258,7 +13272,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${Math.max(1, Math.min(queuesList.length, 4))}, minmax(320px, 1fr))`,
+          gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, 300px), 1fr))`,
           gap: 14,
           overflowX: 'auto',
           paddingBottom: 8
@@ -13674,6 +13688,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
   const [ordersInput, setOrdersInput] = useState([{ ...emptyOrderRow }]);
   const [showBatchForm, setShowBatchForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [selectedJobCardOrder, setSelectedJobCardOrder] = useState(null);
   const [filters, setFilters] = useState({ customer: '', orderType: 'All', search: '', status: '' });
 
   const addOrderRow = () => setOrdersInput([...ordersInput, { ...emptyOrderRow }]);
@@ -14352,6 +14367,14 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingRight: 14 }}>
                     <button
+                      onClick={() => setSelectedJobCardOrder(ord)}
+                      className="apex-btn apex-btn-secondary apex-btn-sm"
+                      style={{ padding: '3px 8px', fontSize: 11, fontWeight: 800, marginRight: 6, color: '#2563eb', background: '#eff6ff', borderColor: '#bfdbfe' }}
+                      title="View & Print Official Job Card"
+                    >
+                      📋 Job Card
+                    </button>
+                    <button
                       onClick={() => onStartProduction?.(ord)}
                       className="apex-btn apex-btn-primary apex-btn-sm"
                       style={{ padding: '3px 8px', fontSize: 11, fontWeight: 800, marginRight: 6, background: ord.orderType === 'job_work' ? '#7c3aed' : '#2563eb' }}
@@ -14381,6 +14404,19 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           </tbody>
         </table>
       </div>
+
+      {/* Render JobCardViewModal when clicked in Orders View */}
+      {selectedJobCardOrder && (
+        <JobCardViewModal
+          order={selectedJobCardOrder}
+          job={null}
+          item={items.find(i => i.id === selectedJobCardOrder.itemId || i.name === selectedJobCardOrder.itemName || i.Item_Name === selectedJobCardOrder.itemName)}
+          company={companies.find(c => c.id === selectedJobCardOrder.companyId || c.name === selectedJobCardOrder.companyId)}
+          customer={customers.find(c => c.id === selectedJobCardOrder.customerId || c.name === selectedJobCardOrder.customerName)}
+          onClose={() => setSelectedJobCardOrder(null)}
+          onDownloadPdf={typeof generateJobCard === 'function' ? generateJobCard : null}
+        />
+      )}
     </div>
   );
 }
