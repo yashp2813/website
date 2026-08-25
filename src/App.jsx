@@ -8874,7 +8874,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
-  const [filters, setFilters] = useState({ company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All' });
+  const defaultFilters = { company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All', startDate: '', endDate: '', minRate: '', maxRate: '', invoiceNo: '', vehicleNo: '' };
+  const [filters, setFilters] = useState(defaultFilters);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const [consumableData, setConsumableData] = useState({ 
       date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
@@ -9302,6 +9304,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     });
   }, [inventory, production]);
 
+  const uniqueMills = useMemo(() => Array.from(new Set(inventory.map(r => r.millName).filter(Boolean))).sort(), [inventory]);
+  const uniqueSizes = useMemo(() => Array.from(new Set(inventory.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
+  const uniqueGsms = useMemo(() => Array.from(new Set(inventory.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
+  const uniqueBfs = useMemo(() => Array.from(new Set(inventory.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
+  const uniqueColours = useMemo(() => Array.from(new Set(inventory.map(r => r.colour).filter(Boolean))).sort(), [inventory]);
+
   const filteredInventory = useMemo(() => {
     return inventoryWithUsage.filter(reel => {
       if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
@@ -9314,16 +9322,40 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         if (!matchId && !matchName) return false;
       }
       if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
-      if (filters.searchReel && !String(reel.reelNo || '').toLowerCase().includes(filters.searchReel.toLowerCase())) return false;
+      if (filters.searchReel) {
+        const sQ = filters.searchReel.toLowerCase().trim();
+        const matchReelNo = String(reel.reelNo || '').toLowerCase().includes(sQ);
+        const matchSupNo = String(reel.supplierReelNo || '').toLowerCase().includes(sQ);
+        const matchSysId = String(reel.systemReelId || reel.uniqueReelId || '').toLowerCase().includes(sQ);
+        const matchInv = String(reel.invoiceNo || '').toLowerCase().includes(sQ);
+        const matchVeh = String(reel.vehicleNo || '').toLowerCase().includes(sQ);
+        const matchMill = String(reel.millName || '').toLowerCase().includes(sQ);
+        const matchClient = String(reel.clientName || '').toLowerCase().includes(sQ);
+        if (!matchReelNo && !matchSupNo && !matchSysId && !matchInv && !matchVeh && !matchMill && !matchClient) return false;
+      }
       if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
       if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) return false;
       if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) return false;
       if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
       if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
       if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
+      if (filters.status === 'Low' && ((reel.balanceQty || 0) <= 0 || (reel.balanceQty || 0) >= lowStockThreshold)) return false;
+
+      // Date Range Filter
+      if (filters.startDate && reel.date && reel.date < filters.startDate) return false;
+      if (filters.endDate && reel.date && reel.date > filters.endDate) return false;
+
+      // Rate Filter
+      if (filters.minRate && (parseFloat(reel.ratePerKg || 0) < parseFloat(filters.minRate))) return false;
+      if (filters.maxRate && (parseFloat(reel.ratePerKg || 0) > parseFloat(filters.maxRate))) return false;
+
+      // Invoice & Vehicle Filter
+      if (filters.invoiceNo && !String(reel.invoiceNo || '').toLowerCase().includes(filters.invoiceNo.toLowerCase())) return false;
+      if (filters.vehicleNo && !String(reel.vehicleNo || '').toLowerCase().includes(filters.vehicleNo.toLowerCase())) return false;
+
       return true;
     });
-  }, [inventoryWithUsage, allowedCompanyId, filters, companies]);
+  }, [inventoryWithUsage, allowedCompanyId, filters, companies, lowStockThreshold]);
 
   const toggleSelection = (id) => {
     const newSet = new Set(selectedIds);
@@ -9798,150 +9830,460 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       )}
 
       {activeSubTab === 'Paper' ? (
-        inventoryMode === 'grid' ? (
-          <>
-            {/* Filter Pills for Excel Grid View */}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                <button
-                  onClick={() => setFilters({...filters, stockType: 'All', clientId: ''})}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    fontSize: 11.5,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    border: 'none',
-                    background: filters.stockType === 'All' ? '#1e293b' : 'transparent',
-                    color: filters.stockType === 'All' ? '#fff' : '#64748b'
-                  }}
-                >
-                  All Paper ({filteredInventory.length})
-                </button>
-                <button
-                  onClick={() => setFilters({...filters, stockType: 'factory', clientId: ''})}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    fontSize: 11.5,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    border: 'none',
-                    background: filters.stockType === 'factory' ? '#166534' : 'transparent',
-                    color: filters.stockType === 'factory' ? '#fff' : '#64748b'
-                  }}
-                >
-                  🏭 Factory Stock Only
-                </button>
-                <button
-                  onClick={() => setFilters({...filters, stockType: 'job_work'})}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    fontSize: 11.5,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    border: 'none',
-                    background: filters.stockType === 'job_work' ? '#6d28d9' : 'transparent',
-                    color: filters.stockType === 'job_work' ? '#fff' : '#64748b'
-                  }}
-                >
-                  🤝 Job Work Stock (Client-Owned)
-                </button>
+        <>
+          {/* ── INDUSTRIAL MULTI-PARAMETER FILTER CONTROL PANEL ── */}
+          <div className="apex-card" style={{ padding: '14px 18px', marginBottom: 16, background: '#ffffff', border: '1.5px solid #e2e8f0', borderRadius: 10, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+            {/* ROW 1: Quick Status Tabs, Ownership & View Mode Switcher */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Status Segmented Control */}
+                <div style={{ display: 'flex', background: '#f1f5f9', padding: 3, borderRadius: 8, border: '1px solid #e2e8f0', gap: 2 }}>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, status: 'All' }))}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.status === 'All' ? '#0f172a' : 'transparent',
+                      color: filters.status === 'All' ? '#fff' : '#64748b',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    All ({inventoryWithUsage.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, status: 'Available' }))}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.status === 'Available' ? '#16a34a' : 'transparent',
+                      color: filters.status === 'Available' ? '#fff' : '#166534',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    🟢 Active Stock ({inventoryWithUsage.filter(r => (r.balanceQty || 0) > 0).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, status: 'Used' }))}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.status === 'Used' ? '#ef4444' : 'transparent',
+                      color: filters.status === 'Used' ? '#fff' : '#991b1b',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    🔴 Consumed ({inventoryWithUsage.filter(r => (r.balanceQty || 0) <= 0).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, status: 'Low' }))}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.status === 'Low' ? '#f59e0b' : 'transparent',
+                      color: filters.status === 'Low' ? '#fff' : '#92400e',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    ⚠️ Low (&lt;{lowStockThreshold}kg)
+                  </button>
+                </div>
+
+                {/* Stock Ownership Segmented Control */}
+                <div style={{ display: 'flex', background: '#f8fafc', padding: 3, borderRadius: 8, border: '1px solid #e2e8f0', gap: 2 }}>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, stockType: 'All', clientId: '' }))}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.stockType === 'All' ? '#334155' : 'transparent',
+                      color: filters.stockType === 'All' ? '#fff' : '#64748b'
+                    }}
+                  >
+                    All Types
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, stockType: 'factory', clientId: '' }))}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.stockType === 'factory' ? '#047857' : 'transparent',
+                      color: filters.stockType === 'factory' ? '#fff' : '#065f46'
+                    }}
+                  >
+                    🏭 Factory Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, stockType: 'job_work' }))}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: filters.stockType === 'job_work' ? '#7c3aed' : 'transparent',
+                      color: filters.stockType === 'job_work' ? '#fff' : '#6d28d9'
+                    }}
+                  >
+                    🤝 Job Work
+                  </button>
+                </div>
               </div>
 
-              {customers.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Client:</span>
-                  <select
-                    className="apex-select"
-                    style={{ padding: '4px 8px', fontSize: 11.5, minWidth: 160 }}
-                    value={filters.clientId}
-                    onChange={e => setFilters({...filters, clientId: e.target.value, stockType: e.target.value ? 'job_work' : filters.stockType})}
+              {/* Right tools: View Mode & Export */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="apex-btn"
+                  style={{ padding: '5px 12px', fontSize: 12, background: '#f8fafc', border: '1px solid #cbd5e1', color: '#1e293b', fontWeight: 700 }}
+                  title="Download filtered reels as CSV"
+                >
+                  📥 Export CSV ({filteredInventory.length})
+                </button>
+                <div style={{ display: 'flex', background: '#e2e8f0', padding: 2, borderRadius: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => setInventoryMode('grid')}
+                    style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: inventoryMode === 'grid' ? '#2563eb' : 'transparent', color: inventoryMode === 'grid' ? '#fff' : '#475569' }}
                   >
-                    <option value="">— All Clients —</option>
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>🤝 {c.name}</option>
-                    ))}
-                  </select>
+                    📊 Excel Grid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInventoryMode('table')}
+                    style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: inventoryMode === 'table' ? '#2563eb' : 'transparent', color: inventoryMode === 'table' ? '#fff' : '#475569' }}
+                  >
+                    📋 Classic Table
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
 
-            <ExcelStockInventory
-              inventory={filteredInventory}
-              companies={companies}
-              role={role}
-              updateDoc={updateDoc}
-              getDocRef={getDocRef}
-              deleteDoc={deleteDoc}
-              addDoc={addDoc}
-              addLog={addLog}
-              lowStockThreshold={lowStockThreshold}
-              onPrintBarcode={(reel) => setPrintTagData({ type: 'reel', data: reel })}
-              onOpenCsvImport={onOpenCsvImport}
-            />
-            <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} addLog={addLog} />
-          </>
-        ) : (
-        <>
-          {/* ── Filter Bar for Classic View ── */}
-          <div className="apex-card" style={{ padding: '12px 16px', marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', whiteSpace: 'nowrap', paddingRight: 10, borderRight: '1px solid var(--border)' }}>Filter</span>
-              
-              {/* Stock Type Filter Pill */}
-              <select
-                className="apex-select"
-                style={{ width: 'auto', padding: '6px 10px', fontSize: 12, fontWeight: 700, borderColor: filters.stockType === 'job_work' ? '#8b5cf6' : '#cbd5e1' }}
-                value={filters.stockType}
-                onChange={e => setFilters({...filters, stockType: e.target.value})}
-              >
-                <option value="All">All Stock Types</option>
-                <option value="factory">🏭 Factory Stock Only</option>
-                <option value="job_work">🤝 Job Work Stock (Nashik)</option>
-              </select>
+            {/* ROW 2: Primary Parameter Inputs (Search, Mill, Size, GSM, BF, Colour, Adv toggle) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, alignItems: 'center' }}>
+              {/* Global Search */}
+              <div style={{ gridColumn: 'span 2', minWidth: 200, position: 'relative' }}>
+                <input
+                  type="text"
+                  className="apex-input"
+                  placeholder="🔍 Search Reel #, Supplier No, ID, Invoice, Mill..."
+                  style={{ width: '100%', padding: '7px 28px 7px 10px', fontSize: 12.5, fontWeight: 600, borderColor: filters.searchReel ? '#2563eb' : '#cbd5e1', background: filters.searchReel ? '#eff6ff' : '#fff' }}
+                  value={filters.searchReel}
+                  onChange={e => setFilters(f => ({ ...f, searchReel: e.target.value }))}
+                />
+                {filters.searchReel && (
+                  <button
+                    type="button"
+                    onClick={() => setFilters(f => ({ ...f, searchReel: '' }))}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', fontWeight: 800, fontSize: 13 }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
 
-              {customers.length > 0 && (
+              {/* Mill / Party Selector */}
+              <div>
                 <select
                   className="apex-select"
-                  style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }}
-                  value={filters.clientId}
-                  onChange={e => setFilters({...filters, clientId: e.target.value, stockType: e.target.value ? 'job_work' : filters.stockType})}
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.millName ? 700 : 400, borderColor: filters.millName ? '#2563eb' : '#cbd5e1' }}
+                  value={filters.millName}
+                  onChange={e => setFilters(f => ({ ...f, millName: e.target.value }))}
                 >
-                  <option value="">All Clients</option>
-                  {customers.map(c => (
-                    <option key={c.id} value={c.id}>🤝 {c.name}</option>
+                  <option value="">All Mills / Parties</option>
+                  {uniqueMills.map(m => (
+                    <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-              )}
+              </div>
 
-              {allowedCompanyId === 'all' && (
-                <input type="text" placeholder="Company" className="apex-input" style={{ width: 110, padding: '6px 10px', fontSize: 12 }} value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
-              )}
-              <input type="text" placeholder="Mill / Party" className="apex-input" style={{ width: 110, padding: '6px 10px', fontSize: 12 }} value={filters.millName} onChange={e => setFilters({...filters, millName: e.target.value})} />
-              <input type="text" placeholder="Reel No." className="apex-input" style={{ width: 96, padding: '6px 10px', fontSize: 12 }} value={filters.searchReel} onChange={e => setFilters({...filters, searchReel: e.target.value})} />
-              <input type="text" placeholder="Size (cm)" className="apex-input" style={{ width: 88, padding: '6px 10px', fontSize: 12 }} value={filters.size} onChange={e => setFilters({...filters, size: e.target.value})} />
-              <input type="text" placeholder="GSM" className="apex-input" style={{ width: 68, padding: '6px 10px', fontSize: 12 }} value={filters.gsm} onChange={e => setFilters({...filters, gsm: e.target.value})} />
-              <input type="text" placeholder="BF" className="apex-input" style={{ width: 60, padding: '6px 10px', fontSize: 12 }} value={filters.bf} onChange={e => setFilters({...filters, bf: e.target.value})} />
-              <select className="apex-select" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filters.colour} onChange={e => setFilters({...filters, colour: e.target.value})}>
-                <option value="">All Colours</option><option value="Kraft">Kraft</option><option value="Golden">Golden</option><option value="Duplex">Duplex</option>
-              </select>
-              <select className="apex-select" style={{ width: 'auto', padding: '6px 10px', fontSize: 12, fontWeight: 600 }} value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})}>
-                <option value="All">All Statuses</option><option value="Available">Available only</option><option value="Used">Used / Empty</option>
-              </select>
-              {(filters.company || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.stockType !== 'All' || filters.clientId || filters.status !== 'All') && (
-                <button onClick={() => setFilters({company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All'})}
-                  className="apex-btn apex-btn-ghost apex-btn-sm" style={{ marginLeft: 'auto' }}>Clear filters</button>
-              )}
+              {/* Size (cm) */}
+              <div>
+                <select
+                  className="apex-select"
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.size ? 700 : 400, borderColor: filters.size ? '#2563eb' : '#cbd5e1' }}
+                  value={filters.size}
+                  onChange={e => setFilters(f => ({ ...f, size: e.target.value }))}
+                >
+                  <option value="">All Sizes (cm)</option>
+                  {uniqueSizes.map(s => (
+                    <option key={s} value={s}>{s} cm</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* GSM */}
+              <div>
+                <select
+                  className="apex-select"
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.gsm ? 700 : 400, borderColor: filters.gsm ? '#2563eb' : '#cbd5e1' }}
+                  value={filters.gsm}
+                  onChange={e => setFilters(f => ({ ...f, gsm: e.target.value }))}
+                >
+                  <option value="">All GSM</option>
+                  {uniqueGsms.map(g => (
+                    <option key={g} value={g}>{g} GSM</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* BF */}
+              <div>
+                <select
+                  className="apex-select"
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.bf ? 700 : 400, borderColor: filters.bf ? '#2563eb' : '#cbd5e1' }}
+                  value={filters.bf}
+                  onChange={e => setFilters(f => ({ ...f, bf: e.target.value }))}
+                >
+                  <option value="">All BF</option>
+                  {uniqueBfs.map(b => (
+                    <option key={b} value={b}>BF {b}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Colour / Shade */}
+              <div>
+                <select
+                  className="apex-select"
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.colour ? 700 : 400, borderColor: filters.colour ? '#2563eb' : '#cbd5e1' }}
+                  value={filters.colour}
+                  onChange={e => setFilters(f => ({ ...f, colour: e.target.value }))}
+                >
+                  <option value="">All Colours</option>
+                  <option value="Natural">Natural</option>
+                  <option value="Golden">Golden</option>
+                  <option value="Duplex">Duplex</option>
+                  <option value="White">White Top</option>
+                  <option value="Semi-Kraft">Semi-Kraft</option>
+                </select>
+              </div>
+
+              {/* Advanced Filters Toggle Button */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                  className="apex-btn"
+                  style={{
+                    width: '100%',
+                    padding: '7px 10px',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    background: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#eff6ff' : '#f8fafc',
+                    border: `1.5px solid ${(filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#2563eb' : '#cbd5e1'}`,
+                    color: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#1d4ed8' : '#334155',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6
+                  }}
+                >
+                  <span>⚙️ Date &amp; Rates</span>
+                  <span style={{ fontSize: 10 }}>{showAdvancedFilters ? '▲' : '▼'}</span>
+                </button>
+              </div>
             </div>
-            <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
-              Showing <strong style={{ color: 'var(--text-primary)' }}>{filteredInventory.filter(r => (r.balanceQty||0) > 0).length}</strong> active · <strong style={{ color: 'var(--text-primary)' }}>{filteredInventory.filter(r => (r.balanceQty||0) <= 0).length}</strong> empty of <strong style={{ color: 'var(--text-primary)' }}>{filteredInventory.length}</strong> total reels
+
+            {/* ROW 3: Expandable Advanced Filters (Inward Date Range, Rate Range, Invoice No, Vehicle No, Client) */}
+            {showAdvancedFilters && (
+              <div style={{ marginTop: 12, padding: '12px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'flex-end' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Inward Date From</label>
+                  <input
+                    type="date"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.startDate}
+                    onChange={e => setFilters(f => ({ ...f, startDate: e.target.value }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Inward Date To</label>
+                  <input
+                    type="date"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.endDate}
+                    onChange={e => setFilters(f => ({ ...f, endDate: e.target.value }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Min Rate (₹/kg)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="₹ Min"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.minRate}
+                    onChange={e => setFilters(f => ({ ...f, minRate: e.target.value }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Max Rate (₹/kg)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="₹ Max"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.maxRate}
+                    onChange={e => setFilters(f => ({ ...f, maxRate: e.target.value }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Invoice No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 1690"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.invoiceNo}
+                    onChange={e => setFilters(f => ({ ...f, invoiceNo: e.target.value }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Vehicle No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. MH15"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.vehicleNo}
+                    onChange={e => setFilters(f => ({ ...f, vehicleNo: e.target.value }))}
+                  />
+                </div>
+
+                {customers.length > 0 && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Job Work Client</label>
+                    <select
+                      className="apex-select"
+                      style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                      value={filters.clientId}
+                      onChange={e => setFilters(f => ({ ...f, clientId: e.target.value, stockType: e.target.value ? 'job_work' : f.stockType }))}
+                    >
+                      <option value="">— All Clients —</option>
+                      {customers.map(c => (
+                        <option key={c.id} value={c.id}>🤝 {c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ROW 4: Live Results Summary & Active Filter Tag Chips */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid #f1f5f9', fontSize: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: '#475569' }}>
+                  Showing <strong style={{ color: '#0f172a' }}>{filteredInventory.length}</strong> reels (<strong style={{ color: '#16a34a' }}>{filteredInventory.filter(r => (r.balanceQty || 0) > 0).length} active</strong>) · Total Stock: <strong style={{ color: '#0284c7' }}>{(filteredInventory.reduce((sum, r) => sum + (r.balanceQty || 0), 0) / 1000).toFixed(2)} MT</strong> · Value: <strong style={{ color: '#d97706' }}>₹{filteredInventory.reduce((sum, r) => sum + (r.value || 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
+                </span>
+
+                {/* Active Filter Chips */}
+                {filters.millName && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    Mill: {filters.millName}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, millName: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+                {filters.size && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    Size: {filters.size}cm
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, size: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+                {filters.gsm && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    GSM: {filters.gsm}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, gsm: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+                {filters.bf && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    BF: {filters.bf}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, bf: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+                {(filters.startDate || filters.endDate) && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    📅 {filters.startDate || 'Start'} → {filters.endDate || 'End'}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, startDate: '', endDate: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+              </div>
+
+              {(filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company) && (
+                <button
+                  type="button"
+                  onClick={() => setFilters(defaultFilters)}
+                  className="apex-btn apex-btn-ghost apex-btn-sm"
+                  style={{ color: '#ef4444', fontWeight: 700, fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                  <span>✕ Reset All Filters</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* ── Reel Table ── */}
-          <div className="apex-table-wrap">
+          {/* Render Active View Mode */}
+          {inventoryMode === 'grid' ? (
+            <>
+              <ExcelStockInventory
+                inventory={filteredInventory}
+                companies={companies}
+                role={role}
+                updateDoc={updateDoc}
+                getDocRef={getDocRef}
+                deleteDoc={deleteDoc}
+                addDoc={addDoc}
+                addLog={addLog}
+                lowStockThreshold={lowStockThreshold}
+                onPrintBarcode={(reel) => setPrintTagData({ type: 'reel', data: reel })}
+                onOpenCsvImport={onOpenCsvImport}
+              />
+              <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} addLog={addLog} />
+            </>
+          ) : (
+            <div className="apex-table-wrap">
             <table className="apex-table" style={{ minWidth: 1100 }}>
               <thead>
                 <tr>
@@ -10046,9 +10388,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </tbody>
             </table>
           </div>
+        )}
         </>
-        )
-
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
