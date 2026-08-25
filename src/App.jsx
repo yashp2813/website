@@ -4035,6 +4035,824 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
 };
 
 // ==========================================
+// UNIVERSAL CSV & EXCEL IMPORT CENTER
+// (Own Stock Inventory & Job Work Clients)
+// ==========================================
+function UniversalCsvImportModal({
+  isOpen,
+  onClose,
+  defaultMode = 'own_stock', // 'own_stock' | 'job_work_stock'
+  companies = [],
+  customers = [],
+  inventory = [],
+  activeUnitId = '',
+  getColRef,
+  getDocRef,
+  addLog,
+  onSuccess
+}) {
+  const [mode, setMode] = useState(defaultMode); // 'own_stock' | 'job_work_stock'
+  const [inputTab, setInputTab] = useState('file'); // 'file' | 'paste'
+  const [pasteText, setPasteText] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [parsedRows, setParsedRows] = useState([]);
+  const [rawHeaders, setRawHeaders] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progressCount, setProgressCount] = useState(0);
+  const [importSummary, setImportSummary] = useState(null);
+  const [targetUnitId, setTargetUnitId] = useState(activeUnitId || (companies[0]?.id || ''));
+
+  useEffect(() => {
+    if (isOpen) {
+      setMode(defaultMode);
+      setParsedRows([]);
+      setRawHeaders([]);
+      setFileName('');
+      setPasteText('');
+      setImportSummary(null);
+      setProgressCount(0);
+      if (activeUnitId) setTargetUnitId(activeUnitId);
+    }
+  }, [isOpen, defaultMode, activeUnitId]);
+
+  if (!isOpen) return null;
+
+  // --- CSV / TEXT PARSER ---
+  const parseCSVText = (text) => {
+    if (!text || !text.trim()) return { headers: [], rows: [] };
+    const cleaned = text.replace(/^\uFEFF/, ''); // strip BOM
+    const lines = cleaned.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return { headers: [], rows: [] };
+
+    // Detect delimiter (check commas, tabs, semicolons in header line)
+    const sample = lines[0];
+    const tabCount = (sample.match(/\t/g) || []).length;
+    const semiCount = (sample.match(/;/g) || []).length;
+    const commaCount = (sample.match(/,/g) || []).length;
+    let delimiter = ',';
+    if (tabCount > commaCount && tabCount > semiCount) delimiter = '\t';
+    else if (semiCount > commaCount && semiCount > tabCount) delimiter = ';';
+
+    const parseLine = (line) => {
+      const result = [];
+      let currentVal = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"' && line[i + 1] === '"') {
+          currentVal += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          result.push(currentVal.trim().replace(/^["']|["']$/g, ''));
+          currentVal = '';
+        } else {
+          currentVal += char;
+        }
+      }
+      result.push(currentVal.trim().replace(/^["']|["']$/g, ''));
+      return result;
+    };
+
+    const headers = parseLine(lines[0]);
+    const rows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const vals = parseLine(lines[i]);
+      if (vals.every(v => v === '')) continue;
+      const rowObj = {};
+      headers.forEach((h, idx) => {
+        if (h) rowObj[h] = vals[idx] !== undefined ? vals[idx] : '';
+      });
+      rows.push(rowObj);
+    }
+
+    return { headers, rows };
+  };
+
+  // Field extraction helper
+  const cleanKey = (k) => String(k || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const findVal = (row, ...aliases) => {
+    const cleanAliases = aliases.map(cleanKey);
+    for (const key of Object.keys(row)) {
+      const ck = cleanKey(key);
+      if (cleanAliases.includes(ck)) return String(row[key] || '').trim();
+    }
+    // Substring matching
+    for (const key of Object.keys(row)) {
+      const ck = cleanKey(key);
+      for (const a of cleanAliases) {
+        if (ck.includes(a) || a.includes(ck)) {
+          if (ck.length > 2 && a.length > 2) return String(row[key] || '').trim();
+        }
+      }
+    }
+    return '';
+  };
+
+  const parseNum = (val, fallback = 0) => {
+    if (val === null || val === undefined || val === '') return fallback;
+    const cleaned = String(val).replace(/,/g, '').replace(/[^\d.-]/g, '');
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? fallback : num;
+  };
+
+  const parseDateStr = (val) => {
+    if (!val || !String(val).trim()) return new Date().toISOString().split('T')[0];
+    const s = String(val).trim();
+    // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    const ddmmyyyy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+    if (ddmmyyyy) {
+      return `${ddmmyyyy[3]}-${ddmmyyyy[2].padStart(2, '0')}-${ddmmyyyy[1].padStart(2, '0')}`;
+    }
+    // YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().split('T')[0];
+    return new Date().toISOString().split('T')[0];
+  };
+
+  const parseSizeCm = (val) => {
+    if (!val) return '';
+    const s = String(val).trim();
+    if (s.includes('"') || s.toLowerCase().includes('inch')) {
+      const inches = parseNum(s);
+      if (inches > 0) return String(Math.round(inches * 2.54));
+    }
+    const num = parseNum(s);
+    return num > 0 ? String(num) : s;
+  };
+
+  const parseColour = (val) => {
+    if (!val) return 'Kraft';
+    const s = String(val).trim().toLowerCase();
+    if (s.includes('gold')) return 'Golden';
+    if (s.includes('dup') || s.includes('white')) return 'White Top';
+    if (s.includes('semi')) return 'Semi Kraft';
+    if (s.includes('kraft')) return 'Kraft';
+    return String(val).trim();
+  };
+
+  // Convert raw rows to normalized ERP objects
+  const processRawRows = (rawRows, currentMode) => {
+    let nextReelNum = inventory.length + 1;
+
+    return rawRows.map((r, idx) => {
+      const date = parseDateStr(findVal(r, 'date', 'inwarddate', 'receiptdate', 'invoicedate', 'dcdate'));
+      const size = parseSizeCm(findVal(r, 'size', 'sizecm', 'deckle', 'decklecm', 'width', 'sizeinch'));
+      const gsm = String(parseNum(findVal(r, 'gsm', 'grammage')) || '');
+      const bf = String(parseNum(findVal(r, 'bf', 'burstfactor')) || '18');
+      const colour = parseColour(findVal(r, 'colour', 'color', 'shade', 'paperquality', 'quality'));
+      const weight = parseNum(findVal(r, 'weight', 'receivedqty', 'netweight', 'qty', 'weightkg', 'quantity', 'netwt', 'weightinkg'));
+      const vehicleNo = findVal(r, 'vehicleno', 'truckno', 'vehicle', 'lorryno');
+      const invoiceNo = findVal(r, 'invoiceno', 'invoicenumber', 'billno', 'challanno', 'dcno', 'dcnumber', 'refno');
+      const rate = parseNum(findVal(r, 'rate', 'rateperkg', 'ratepkg', 'price', 'ratekg'));
+
+      if (currentMode === 'own_stock') {
+        const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
+        const rawReelNo = findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel');
+        const reelNo = rawReelNo || `RL-${String(nextReelNum + idx).padStart(5, '0')}`;
+        const supplierReelNo = findVal(r, 'supplierreelno', 'millreelno', 'supreelno') || rawReelNo || reelNo;
+
+        return {
+          type: 'own_stock',
+          date,
+          millName,
+          supplierReelNo,
+          reelNo,
+          size,
+          gsm,
+          bf,
+          colour,
+          receivedQty: weight,
+          balanceQty: weight,
+          initialIssuedQty: 0,
+          ratePerKg: rate,
+          invoiceNo,
+          vehicleNo,
+          stockType: 'regular',
+          category: 'Paper',
+          tallySynced: false
+        };
+      } else {
+        // Job Work Mode: check if client master or client paper reel
+        const clientName = findVal(r, 'clientname', 'client', 'customer', 'customername', 'partyname', 'jobworkparty', 'party', 'companyname') || 'Job Work Client';
+        const contactPerson = findVal(r, 'contactperson', 'contact', 'person', 'owner');
+        const phone = findVal(r, 'phone', 'mobile', 'contactno', 'tel');
+        const gstin = findVal(r, 'gstin', 'gstno', 'gstnumber', 'gst');
+        const address = findVal(r, 'address', 'billingaddress', 'factoryaddress', 'city', 'location');
+        const conversionRate = parseNum(findVal(r, 'conversionrate', 'jobworkrate', 'rate', 'jobworkratepkg'));
+
+        // If weight and size are present, it is a Job Work Client Paper Reel!
+        if (weight > 0 || size) {
+          const rawReelNo = findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel');
+          const reelNo = rawReelNo || `JW-${String(nextReelNum + idx).padStart(5, '0')}`;
+          const supplierReelNo = findVal(r, 'supplierreelno', 'millreelno', 'supreelno') || rawReelNo || reelNo;
+
+          return {
+            type: 'job_work_reel',
+            clientName,
+            date,
+            millName: findVal(r, 'millname', 'mill') || clientName,
+            supplierReelNo,
+            reelNo,
+            size,
+            gsm,
+            bf,
+            colour,
+            receivedQty: weight,
+            balanceQty: weight,
+            initialIssuedQty: 0,
+            ratePerKg: 0,
+            invoiceNo,
+            vehicleNo,
+            stockType: 'job_work',
+            category: 'Paper',
+            tallySynced: false
+          };
+        } else {
+          // It is a Job Work Client Master Directory Record
+          return {
+            type: 'job_work_client_master',
+            name: clientName,
+            code: clientName.substring(0, 4).toUpperCase() + '-JW',
+            clientType: 'Job Work Client',
+            contactPerson,
+            phone,
+            gstin,
+            billingAddress: address,
+            state: 'Maharashtra',
+            conversionRate: conversionRate || 0,
+            defaultJobWorkType: 'Full Box Conversion',
+            notes: 'Imported from CSV'
+          };
+        }
+      }
+    });
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target.result;
+      const { headers, rows } = parseCSVText(text);
+      if (rows.length === 0) {
+        alert("CSV file appears empty or formatted improperly.");
+        return;
+      }
+      setRawHeaders(headers);
+      const processed = processRawRows(rows, mode);
+      setParsedRows(processed);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleProcessPasteText = () => {
+    if (!pasteText.trim()) return alert("Please paste text from Excel or CSV first.");
+    const { headers, rows } = parseCSVText(pasteText);
+    if (rows.length === 0) return alert("Could not parse rows. Ensure columns are separated by tabs or commas.");
+    setRawHeaders(headers);
+    const processed = processRawRows(rows, mode);
+    setParsedRows(processed);
+    setFileName('Pasted Data');
+  };
+
+  const handleModeChange = (newMode) => {
+    setMode(newMode);
+    if (parsedRows.length > 0 && (inputTab === 'paste' ? pasteText : true)) {
+      // Re-process with new mode
+      if (inputTab === 'paste' && pasteText) {
+        const { rows } = parseCSVText(pasteText);
+        setParsedRows(processRawRows(rows, newMode));
+      }
+    }
+  };
+
+  // --- SAVE ALL ROWS DIRECTLY INTO DATABASE ---
+  const handleSaveToDatabase = async () => {
+    if (parsedRows.length === 0) return alert("No rows to import.");
+    setIsProcessing(true);
+    setProgressCount(0);
+
+    try {
+      let savedCount = 0;
+      let newClientsCreated = 0;
+      const clientCache = {};
+      customers.forEach(c => {
+        if (c.name) clientCache[c.name.toLowerCase().trim()] = c.id;
+      });
+
+      for (let i = 0; i < parsedRows.length; i++) {
+        const row = parsedRows[i];
+
+        if (row.type === 'own_stock') {
+          const payload = {
+            companyId: targetUnitId || '',
+            date: row.date,
+            millName: row.millName,
+            supplierReelNo: row.supplierReelNo,
+            reelNo: row.reelNo,
+            size: row.size,
+            gsm: row.gsm,
+            bf: row.bf,
+            colour: row.colour,
+            receivedQty: row.receivedQty,
+            balanceQty: row.balanceQty,
+            initialIssuedQty: 0,
+            ratePerKg: row.ratePerKg || 0,
+            invoiceNo: row.invoiceNo || '',
+            vehicleNo: row.vehicleNo || '',
+            stockType: 'regular',
+            category: 'Paper',
+            tallySynced: false,
+            createdAt: new Date().toISOString()
+          };
+          await addDoc(getColRef('inventory'), payload);
+          savedCount++;
+        } else if (row.type === 'job_work_reel') {
+          // Resolve or auto-create client in customers table
+          const normClient = String(row.clientName || 'Job Work Client').trim();
+          let customerId = clientCache[normClient.toLowerCase()];
+
+          if (!customerId) {
+            // Auto-create new Job Work Client
+            const newClientPayload = {
+              name: normClient,
+              code: normClient.substring(0, 4).toUpperCase() + '-JW',
+              clientType: 'Job Work Client',
+              unitId: targetUnitId || '',
+              state: 'Maharashtra',
+              billingAddress: '',
+              phone: '',
+              email: '',
+              contactPerson: '',
+              conversionRate: 0,
+              defaultJobWorkType: 'Full Box Conversion',
+              notes: 'Auto-created via Job Work CSV import'
+            };
+            const docRef = await addDoc(getColRef('customers'), newClientPayload);
+            customerId = docRef?.id || normClient;
+            clientCache[normClient.toLowerCase()] = customerId;
+            newClientsCreated++;
+          }
+
+          const payload = {
+            companyId: targetUnitId || '',
+            customerId: customerId,
+            clientName: normClient,
+            date: row.date,
+            millName: row.millName || normClient,
+            supplierReelNo: row.supplierReelNo,
+            reelNo: row.reelNo,
+            size: row.size,
+            gsm: row.gsm,
+            bf: row.bf,
+            colour: row.colour,
+            receivedQty: row.receivedQty,
+            balanceQty: row.balanceQty,
+            initialIssuedQty: 0,
+            ratePerKg: 0,
+            invoiceNo: row.invoiceNo || '',
+            vehicleNo: row.vehicleNo || '',
+            stockType: 'job_work',
+            category: 'Paper',
+            tallySynced: false,
+            createdAt: new Date().toISOString()
+          };
+          await addDoc(getColRef('inventory'), payload);
+          savedCount++;
+        } else if (row.type === 'job_work_client_master') {
+          const payload = {
+            name: row.name,
+            code: row.code,
+            clientType: 'Job Work Client',
+            unitId: targetUnitId || '',
+            state: row.state || 'Maharashtra',
+            billingAddress: row.billingAddress || '',
+            phone: row.phone || '',
+            email: row.email || '',
+            contactPerson: row.contactPerson || '',
+            gstin: row.gstin || '',
+            conversionRate: row.conversionRate || 0,
+            defaultJobWorkType: row.defaultJobWorkType || 'Full Box Conversion',
+            notes: row.notes || 'Imported via CSV'
+          };
+          await addDoc(getColRef('customers'), payload);
+          savedCount++;
+        }
+
+        setProgressCount(i + 1);
+      }
+
+      const totalKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+      const totalMt = (totalKg / 1000).toFixed(2);
+
+      if (mode === 'own_stock') {
+        if (addLog) addLog(`Imported ${savedCount} own stock paper reels (${totalMt} MT) directly from CSV`);
+      } else {
+        if (addLog) addLog(`Imported ${savedCount} job work items (${totalMt} MT, ${newClientsCreated} new clients registered) from CSV`);
+      }
+
+      setImportSummary({
+        totalSaved: savedCount,
+        newClientsCreated,
+        totalWeightMt: totalMt,
+        mode
+      });
+
+      if (onSuccess) onSuccess();
+    } catch (err) {
+      console.error("CSV import error:", err);
+      alert("An error occurred while saving records: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Sample CSV Templates
+  const downloadSampleTemplate = () => {
+    let csvContent = '';
+    let dlName = '';
+
+    if (mode === 'own_stock') {
+      csvContent = `Date,Mill Name,Reel No,Size (cm),GSM,BF,Colour,Received Qty (kg),Rate (Rs/kg),Invoice No,Vehicle No\n2026-08-25,Century Paper,RL-10492,105,150,18,Kraft,1250,38.50,INV-8821,MH-15-AB-1234\n2026-08-25,BILT Mill,RL-10493,110,180,22,Golden,1420,42.00,INV-8821,MH-15-AB-1234\n2026-08-25,Shree Paper,RL-10494,95,120,16,Kraft,980,36.00,INV-8822,MH-15-CD-5678`;
+      dlName = 'sample_own_stock_inventory.csv';
+    } else {
+      csvContent = `Client Name,Date,Reel No,Size (cm),GSM,BF,Colour,Received Qty (kg),Challan No,Vehicle No\nParamount Packaging,2026-08-25,JW-0041,105,150,18,Kraft,1250,DC-9901,MH-15-XY-9999\nParamount Packaging,2026-08-25,JW-0042,110,180,22,Golden,1420,DC-9901,MH-15-XY-9999\nDelta Corrugators,2026-08-25,JW-0043,95,140,18,Kraft,1100,DC-5512,MH-15-ZZ-1122`;
+      dlName = 'sample_job_work_clients_stock.csv';
+    }
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', dlName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const totalWeightKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+  const totalWeightMt = (totalWeightKg / 1000).toFixed(2);
+  const uniqueClients = Array.from(new Set(parsedRows.map(r => r.clientName || r.name).filter(Boolean)));
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(5px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 940, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
+        
+        {/* Header */}
+        <div style={{ padding: '18px 24px', borderBottom: '1.5px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 22 }}>📥</span> Direct CSV &amp; Excel Data Importer
+            </h2>
+            <p style={{ fontSize: 12, color: '#64748b', margin: '3px 0 0 0' }}>
+              Directly upload or paste your factory spreadsheet files into the ERP system
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer', padding: 4 }}>✕</button>
+        </div>
+
+        {/* Modal Body */}
+        <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>
+
+          {/* SUCCESS SCREEN */}
+          {importSummary ? (
+            <div style={{ textAlign: 'center', padding: '36px 20px' }}>
+              <div style={{ width: 64, height: 64, background: '#dcfce7', color: '#16a34a', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, margin: '0 auto 16px auto' }}>
+                ✓
+              </div>
+              <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>
+                Import Completed Successfully!
+              </h3>
+              <p style={{ fontSize: 14, color: '#475569', maxWidth: 480, margin: '0 auto 24px auto' }}>
+                Directly saved <strong>{importSummary.totalSaved} records</strong> ({importSummary.totalWeightMt} MT total weight) into the system database.
+                {importSummary.newClientsCreated > 0 && (
+                  <span style={{ display: 'block', marginTop: 6, color: '#4338ca', fontWeight: 700 }}>
+                    ✨ Auto-registered {importSummary.newClientsCreated} new Job Work Client(s) in your Client Directory!
+                  </span>
+                )}
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button onClick={onClose} className="apex-btn apex-btn-primary" style={{ background: '#16a34a', padding: '10px 28px', fontWeight: 800 }}>
+                  Done &amp; Return to ERP
+                </button>
+                <button onClick={() => { setImportSummary(null); setParsedRows([]); setPasteText(''); setFileName(''); }} className="apex-btn apex-btn-secondary" style={{ padding: '10px 20px', fontWeight: 700 }}>
+                  Import Another File
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Mode Selection Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+                
+                {/* Mode 1: Own Stock Inventory */}
+                <div
+                  onClick={() => handleModeChange('own_stock')}
+                  style={{
+                    padding: 16,
+                    borderRadius: 12,
+                    border: mode === 'own_stock' ? '2.5px solid #2563eb' : '1.5px solid #cbd5e1',
+                    background: mode === 'own_stock' ? '#eff6ff' : '#ffffff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span style={{ fontSize: 24 }}>📦</span>
+                    <div>
+                      <h4 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: mode === 'own_stock' ? '#1e40af' : '#0f172a' }}>
+                        1. Own Stock Inventory
+                      </h4>
+                      <span style={{ fontSize: 11, color: '#64748b' }}>Paper reels purchased by your company</span>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: '#475569', margin: 0 }}>
+                    Maps Reel No, Mill Name, Size, GSM, BF, Colour, Weight (kg), Rate &amp; Inward Date.
+                  </p>
+                  {mode === 'own_stock' && (
+                    <span style={{ position: 'absolute', top: 10, right: 10, background: '#2563eb', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10 }}>
+                      Selected
+                    </span>
+                  )}
+                </div>
+
+                {/* Mode 2: Job Work Clients */}
+                <div
+                  onClick={() => handleModeChange('job_work_stock')}
+                  style={{
+                    padding: 16,
+                    borderRadius: 12,
+                    border: mode === 'job_work_stock' ? '2.5px solid #6366f1' : '1.5px solid #cbd5e1',
+                    background: mode === 'job_work_stock' ? '#eef2ff' : '#ffffff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span style={{ fontSize: 24 }}>🤝</span>
+                    <div>
+                      <h4 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: mode === 'job_work_stock' ? '#3730a3' : '#0f172a' }}>
+                        2. Job Work Clients &amp; Paper Stock
+                      </h4>
+                      <span style={{ fontSize: 11, color: '#64748b' }}>Reels / client directory for Nashik conversion</span>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: '#475569', margin: 0 }}>
+                    Maps Client Name, Reel No, Size, GSM, BF, Net Weight (kg) &amp; DC/Challan reference.
+                  </p>
+                  {mode === 'job_work_stock' && (
+                    <span style={{ position: 'absolute', top: 10, right: 10, background: '#6366f1', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10 }}>
+                      Selected
+                    </span>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Target Manufacturing Unit & Sample Download */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10, background: '#f8fafc', padding: '10px 14px', borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>🏭 Target Factory Unit:</label>
+                  <select
+                    className="apex-select"
+                    value={targetUnitId}
+                    onChange={e => setTargetUnitId(e.target.value)}
+                    style={{ fontSize: 12.5, fontWeight: 700, padding: '4px 10px', minWidth: 180 }}
+                  >
+                    <option value="">All Units / Unassigned</option>
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={downloadSampleTemplate}
+                  style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 6, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, color: '#2563eb', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  📄 Download {mode === 'own_stock' ? 'Own Stock' : 'Job Work'} Sample CSV Template
+                </button>
+              </div>
+
+              {/* Input Method Tabs */}
+              <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={() => setInputTab('file')}
+                  style={{
+                    padding: '8px 18px',
+                    fontSize: 12.5,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    border: 'none',
+                    borderBottom: inputTab === 'file' ? '2.5px solid #2563eb' : '2.5px solid transparent',
+                    background: 'none',
+                    color: inputTab === 'file' ? '#2563eb' : '#64748b'
+                  }}
+                >
+                  📁 Upload CSV File
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInputTab('paste')}
+                  style={{
+                    padding: '8px 18px',
+                    fontSize: 12.5,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    border: 'none',
+                    borderBottom: inputTab === 'paste' ? '2.5px solid #2563eb' : '2.5px solid transparent',
+                    background: 'none',
+                    color: inputTab === 'paste' ? '#2563eb' : '#64748b'
+                  }}
+                >
+                  📋 Copy-Paste from Excel / Sheets
+                </button>
+              </div>
+
+              {/* TAB 1: FILE UPLOADER */}
+              {inputTab === 'file' && (
+                <div style={{ marginBottom: 20 }}>
+                  <label
+                    style={{
+                      border: '2px dashed #94a3b8',
+                      borderRadius: 12,
+                      padding: '28px 20px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      background: '#f8fafc',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    <span style={{ fontSize: 36, marginBottom: 8 }}>📄</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: '#0f172a' }}>
+                      {fileName ? `Selected: ${fileName}` : `Click to Select or Drop ${mode === 'own_stock' ? 'Own Stock' : 'Job Work'} CSV File`}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: '#64748b', marginTop: 4 }}>
+                      Supports .csv, .txt, or exported Excel spreadsheet tables
+                    </span>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv,text/plain"
+                      onChange={handleFileChange}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                </div>
+              )}
+
+              {/* TAB 2: PASTE SPREADSHEET */}
+              {inputTab === 'paste' && (
+                <div style={{ marginBottom: 20 }}>
+                  <textarea
+                    rows={6}
+                    className="apex-input"
+                    placeholder="Copy all cells from Microsoft Excel or Google Sheets (including header row) and paste here..."
+                    value={pasteText}
+                    onChange={e => setPasteText(e.target.value)}
+                    style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, padding: 10, background: '#f8fafc', border: '1px solid #cbd5e1' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      onClick={handleProcessPasteText}
+                      className="apex-btn apex-btn-secondary"
+                      style={{ fontWeight: 800, fontSize: 12 }}
+                    >
+                      ⚡ Parse Pasted Cells
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PARSED DATA PREVIEW & CONFIRMATION */}
+              {parsedRows.length > 0 && (
+                <div>
+                  {/* Summary Bar */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '10px 16px', borderRadius: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: '#166534' }}>
+                        ✅ {parsedRows.length} Records Detected
+                      </span>
+                      {totalWeightKg > 0 && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 6 }}>
+                          Weight: {totalWeightKg.toLocaleString()} KG ({totalWeightMt} MT)
+                        </span>
+                      )}
+                      {uniqueClients.length > 0 && mode === 'job_work_stock' && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#4338ca', background: '#e0e7ff', padding: '2px 8px', borderRadius: 6 }}>
+                          Clients: {uniqueClients.join(', ')}
+                        </span>
+                      )}
+                    </div>
+
+                    <span style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>
+                      Previewing first 10 rows below
+                    </span>
+                  </div>
+
+                  {/* Preview Table */}
+                  <div className="apex-table-wrap" style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: 8, marginBottom: 20 }}>
+                    <table className="apex-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                      <thead>
+                        <tr style={{ background: '#1e293b', color: '#fff' }}>
+                          <th style={{ padding: '6px 8px', textAlign: 'center' }}>#</th>
+                          <th style={{ padding: '6px 8px' }}>{mode === 'own_stock' ? 'Mill Name' : 'Client Name'}</th>
+                          <th style={{ padding: '6px 8px' }}>Reel No</th>
+                          <th style={{ padding: '6px 8px' }}>Size (cm)</th>
+                          <th style={{ padding: '6px 8px' }}>GSM</th>
+                          <th style={{ padding: '6px 8px' }}>BF</th>
+                          <th style={{ padding: '6px 8px' }}>Colour</th>
+                          <th style={{ padding: '6px 8px', textAlign: 'right' }}>Weight (KG)</th>
+                          <th style={{ padding: '6px 8px' }}>Doc / Ref</th>
+                          <th style={{ padding: '6px 8px' }}>Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {parsedRows.slice(0, 10).map((row, idx) => (
+                          <tr key={idx} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '6px 8px', textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
+                            <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>{row.millName || row.clientName || row.name || '-'}</td>
+                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{row.reelNo || '-'}</td>
+                            <td style={{ padding: '6px 8px' }}>{row.size || '-'}</td>
+                            <td style={{ padding: '6px 8px' }}>{row.gsm || '-'}</td>
+                            <td style={{ padding: '6px 8px' }}>{row.bf || '-'}</td>
+                            <td style={{ padding: '6px 8px' }}>{row.colour || '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#0284c7' }}>{row.receivedQty ? row.receivedQty.toLocaleString() : '-'}</td>
+                            <td style={{ padding: '6px 8px', fontSize: 11, color: '#64748b' }}>{row.invoiceNo || row.code || '-'}</td>
+                            <td style={{ padding: '6px 8px', fontSize: 11, color: '#64748b' }}>{row.date || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Action Commit Button */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                    <div>
+                      {isProcessing && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 18, height: 18, border: '2.5px solid #cbd5e1', borderTopColor: '#2563eb', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#2563eb' }}>
+                            Saving {progressCount} of {parsedRows.length} records to database...
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={onClose}
+                        className="apex-btn apex-btn-secondary"
+                        disabled={isProcessing}
+                        style={{ fontWeight: 700 }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveToDatabase}
+                        disabled={isProcessing}
+                        className="apex-btn apex-btn-primary"
+                        style={{
+                          background: mode === 'own_stock' ? '#2563eb' : '#4f46e5',
+                          padding: '10px 28px',
+                          fontWeight: 800,
+                          fontSize: 13,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8
+                        }}
+                      >
+                        <span>⚡</span> Confirm &amp; Save All {parsedRows.length} Rows into ERP
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
 // 3. MAIN APP COMPONENT
 // ==========================================
 
@@ -4671,7 +5489,7 @@ function ExcelPasteModal({ isOpen, onClose, onImportRows }) {
   );
 }
 
-function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, getDocRef, deleteDoc, addDoc, addLog, lowStockThreshold, onPrintBarcode }) {
+function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, getDocRef, deleteDoc, addDoc, addLog, lowStockThreshold, onPrintBarcode, onOpenCsvImport }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null); // { id, field }
   const [editValue, setEditValue] = useState('');
@@ -4887,8 +5705,11 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : setIsPasteOpen(true)} className="apex-btn" style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>📥</span> Import CSV / Excel File
+          </button>
           <button onClick={() => setIsPasteOpen(true)} className="apex-btn" style={{ background: '#16a34a', color: '#fff', fontWeight: 800, padding: '6px 14px' }}>
-            📋 Paste from Excel
+            📋 Paste Cells
           </button>
           {selectedIds.size > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#eff6ff', border: '1px solid #bfdbfe', padding: '4px 10px', borderRadius: 6 }}>
@@ -5178,6 +5999,7 @@ export default function App() {
   const [attachReelModalOpen, setAttachReelModalOpen] = useState(false);
   const [attachPrefillOrderId, setAttachPrefillOrderId] = useState('');
   const [completeJobModalOrder, setCompleteJobModalOrder] = useState(null);
+  const [csvImportModal, setCsvImportModal] = useState({ isOpen: false, mode: 'own_stock' });
 
   const [isGlobalMicDisabled, setIsGlobalMicDisabled] = useState(() => {
     return localStorage.getItem('apex_mic_disabled') === 'true';
@@ -6042,6 +6864,18 @@ export default function App() {
         allInventory={inventory}
         addLog={addLog}
       />
+      <UniversalCsvImportModal
+        isOpen={csvImportModal.isOpen}
+        onClose={() => setCsvImportModal({ isOpen: false, mode: 'own_stock' })}
+        defaultMode={csvImportModal.mode}
+        companies={companies}
+        customers={customers}
+        inventory={inventory}
+        activeUnitId={activeUnitId}
+        getColRef={getColRef}
+        getDocRef={getDocRef}
+        addLog={addLog}
+      />
       {voiceJobCardOrder && (
         <JobCardViewModal
           order={voiceJobCardOrder}
@@ -6092,10 +6926,10 @@ export default function App() {
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
-        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
+        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'own_stock' })} />}
         {activeTab === 'items'           && canAccess(currentErpUser.role,'items')           && <ItemsView items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} costings={costings} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} />}
-        {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} />}
+        {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'job_work_stock' })} />}
         {activeTab === 'companies'       && canAccess(currentErpUser.role,'companies')       && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} currentUserRole={currentErpUser?.role} currentUser={currentErpUser} />}
         {activeTab === 'logs'            && canAccess(currentErpUser.role,'logs')            && <LogsView logs={logs} currentUser={currentErpUser} orders={orders} inventory={inventory} />}
@@ -7812,7 +8646,7 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
 }
 
 // --- INVENTORY VIEW ---
-function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit }) {
+function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
   const allowedCompanyId = activeUnitId || 'all';
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
@@ -8421,42 +9255,15 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <input type="file" accept=".pdf,image/*" className="hidden" onChange={handleScanInvoice} disabled={isScanning} />
             </label>
 
-            <label className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition cursor-pointer">
-              Import CSV
-              <input type="file" accept=".csv" className="hidden" onChange={(e) => {
-                  if (typeof handleCSVImport === 'function') {
-                      handleCSVImport(e, 'inventory', getColRef, addLog, (row, getVal) => {
-                          const compName = getVal(row, 'Company name', 'Company', 'Client', 'Customer', 'Brand') || '';
-                          const comp = companies.find(c => c?.name?.toLowerCase().trim() === compName.toLowerCase().trim());
-                          const rowCompanyId = comp ? comp.id : (allowedCompanyId !== 'all' ? allowedCompanyId : '');
+            <button
+              type="button"
+              onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : null}
+              className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-bold text-sm transition shadow-sm"
+              title="Upload factory spreadsheet CSV for Own Stock or Job Work Clients"
+            >
+              📥 Import CSV / Excel
+            </button>
 
-                          let rawDate = getVal(row, 'Date', 'date', 'Date / Ref', 'Receipt Date');
-                          let formattedDate = new Date().toISOString().split('T')[0];
-                          if (rawDate) {
-                              const d = new Date(rawDate);
-                              if (!isNaN(d.getTime())) formattedDate = d.toISOString().split('T')[0];
-                              else formattedDate = rawDate; 
-                          }
-                          return {
-                              companyId: rowCompanyId, date: formattedDate,
-                              millName: getVal(row, 'Party Name', 'Mill Name') || '',
-                              invoiceNo: getVal(row, 'Invoice No', 'Invoice_No') || '',
-                              vehicleNo: getVal(row, 'Vehicle No', 'Vehicle_No') || '',
-                              reelNo: getVal(row, 'Reel No', 'Reel_No') || '',
-                              size: getVal(row, 'Size', 'size') || '',
-                              gsm: getVal(row, 'GSM', 'gsm') || '',
-                              bf: getVal(row, 'BF', 'bf') || '',
-                              colour: getVal(row, 'Colour', 'Color') || 'Kraft',
-                              receivedQty: getVal(row, 'Received Qty', 'Received_Qty') || '',
-                              initialIssuedQty: getVal(row, 'Issue Qty', 'Issued Qty') || '',
-                              ratePerKg: getVal(row, 'Rate/Kg', 'Rate per KG') || '',
-                              category: 'Paper',
-                              tallySynced: false
-                          };
-                      });
-                  }
-              }} />
-            </label>
             <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button>
           </div>
         )}
@@ -8881,6 +9688,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               addLog={addLog}
               lowStockThreshold={lowStockThreshold}
               onPrintBarcode={(reel) => setPrintTagData({ type: 'reel', data: reel })}
+              onOpenCsvImport={onOpenCsvImport}
             />
             <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} addLog={addLog} />
           </>
@@ -16823,7 +17631,8 @@ function CustomersView({
   getDocRef,
   activeUnitId = '',
   autoSetUnit,
-  setActiveTab
+  setActiveTab,
+  onOpenCsvImport
 }) {
   const isJobWorkClient = (c) => {
     if (!c) return false;
@@ -17134,6 +17943,7 @@ function CustomersView({
           getDocRef={getDocRef}
           addLog={addLog}
           setActiveTab={setActiveTab}
+          onOpenCsvImport={onOpenCsvImport}
         />
       )}
 
@@ -17237,6 +18047,15 @@ function CustomersView({
               <Trash2 style={{ width: 14, height: 14 }} /> Delete Selected ({selectedCustIds.size})
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => onOpenCsvImport ? onOpenCsvImport('job_work_stock') : null}
+            className="apex-btn apex-btn-secondary"
+            style={{ padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, borderColor: '#a5b4fc', color: '#4338ca', background: '#eef2ff' }}
+            title="Import Job Work Clients Directory or Client Paper Reels CSV"
+          >
+            <span>📥</span> Import Job Work CSV
+          </button>
           <button
             type="button"
             onClick={handleExport}
@@ -17737,7 +18556,8 @@ function ClientJobWorkPortalModal({
   getColRef,
   getDocRef,
   addLog,
-  setActiveTab
+  setActiveTab,
+  onOpenCsvImport
 }) {
   const [activeTab, setLocalActiveTab] = useState('reels'); // 'reels' | 'orders' | 'wip' | 'fg' | 'reconciliation'
   const [showInwardForm, setShowInwardForm] = useState(false);
@@ -18107,6 +18927,15 @@ function ClientJobWorkPortalModal({
                       🖨️ Print All Reel Barcodes ({activeReels.length})
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => onOpenCsvImport ? onOpenCsvImport('job_work_stock') : null}
+                    className="apex-btn apex-btn-secondary"
+                    style={{ fontSize: 12, padding: '6px 14px', fontWeight: 700, borderColor: '#a5b4fc', color: '#4338ca', background: '#eef2ff' }}
+                    title="Directly import a CSV file containing paper reels for this client"
+                  >
+                    <span>📥</span> Import Reels CSV
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowInwardForm(!showInwardForm)}
