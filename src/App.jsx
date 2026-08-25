@@ -9145,19 +9145,24 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
   const [itemMode, setItemMode] = useState('master'); // 'master' | 'custom'
   const [selectedItemId, setSelectedItemId] = useState('');
   
-  // Custom item fields
+  // Custom item fields - complete engineering precision identical to Box Database
   const [customItem, setCustomItem] = useState({
     name: '',
-    size: '',
+    itemType: 'Box',
+    size: '350x250x200',
     ply: '3',
-    paperGsm: '120',
-    paperBf: '16',
-    fluteType: 'Narrow / B Flute',
+    fluteType: 'B',
+    jointType: 'Stitching (35mm)',
+    paperGsm: '150',
+    paperBf: '18',
+    paperColour: 'Golden',
+    layers: generateDefaultLayers('3', 'B'),
     plannedUps: '1',
-    saveToItemMaster: true
+    saveToItemMaster: true,
+    showDetailedLayers: true
   });
 
-  // Job specs
+  // Job run specs
   const [jobSpecs, setJobSpecs] = useState({
     jobNo: `JOB-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth()+1).padStart(2,'0')}${String(new Date().getDate()).padStart(2,'0')}-${Math.floor(1000 + Math.random()*9000)}`,
     companyId: activeUnitId || (companies[0]?.id || ''),
@@ -9168,6 +9173,60 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
     deliveryDate: new Date().toISOString().split('T')[0],
     notes: 'Advance Production Run (Make to Stock)'
   });
+
+  // Sync layers whenever Ply or Flute changes
+  const handlePlyChange = (newPlyStr) => {
+    const newLayers = generateDefaultLayers(newPlyStr, customItem.fluteType);
+    setCustomItem(prev => ({
+      ...prev,
+      ply: String(newPlyStr),
+      layers: newLayers
+    }));
+  };
+
+  const handleFluteChange = (newFlute) => {
+    const newLayers = generateDefaultLayers(customItem.ply, newFlute);
+    setCustomItem(prev => ({
+      ...prev,
+      fluteType: newFlute,
+      layers: newLayers
+    }));
+  };
+
+  const handleLayerUpdate = (lIdx, field, val) => {
+    const updatedLayers = [...customItem.layers];
+    const target = { ...updatedLayers[lIdx], [field]: val };
+    if (field === 'type') target.colour = val;
+    updatedLayers[lIdx] = target;
+
+    let topG = customItem.paperGsm;
+    let topB = customItem.paperBf;
+    let topC = customItem.paperColour;
+    if (lIdx === 0) {
+      if (field === 'gsm') topG = val;
+      if (field === 'bf') topB = val;
+      if (field === 'type') topC = val;
+    }
+
+    setCustomItem(prev => ({
+      ...prev,
+      layers: updatedLayers,
+      paperGsm: topG,
+      paperBf: topB,
+      paperColour: topC
+    }));
+  };
+
+  // Real-time CAD Blank & Strength calculation
+  const currentCad = calculateCadBlank(
+    customItem.size,
+    customItem.ply,
+    customItem.fluteType,
+    customItem.itemType,
+    customItem.jointType,
+    customItem.layers,
+    parseFloat(customItem.paperGsm || 150)
+  );
 
   const handleItemSelect = (itmId) => {
     setSelectedItemId(itmId);
@@ -9206,15 +9265,24 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
       if (customItem.saveToItemMaster) {
         itemDataToSave = {
           name: finalItemName,
-          size: customItem.size || '300x200x150',
-          ply: parseInt(customItem.ply || 3),
-          paperGsm: customItem.paperGsm,
-          paperBf: customItem.paperBf,
-          fluteType: customItem.fluteType,
+          itemType: customItem.itemType || 'Box',
+          size: (customItem.size || '').trim(),
+          od: currentCad.odStr,
+          ply: String(customItem.ply || '3'),
+          fluteType: customItem.fluteType || 'B',
+          jointType: customItem.jointType || 'Stitching (35mm)',
+          deckleMm: currentCad.deckleMm > 0 ? String(currentCad.deckleMm) : '',
+          cutLengthMm: currentCad.cutLengthMm > 0 ? String(currentCad.cutLengthMm) : '',
+          creasingScores: currentCad.creasingScores || '',
+          weight: currentCad.theoreticalWeightGrams > 0 ? String(currentCad.theoreticalWeightGrams) : '',
+          paperGsm: String(customItem.paperGsm || customItem.layers[0]?.gsm || '150'),
+          paperBf: String(customItem.paperBf || customItem.layers[0]?.bf || '18'),
+          paperColour: customItem.paperColour || customItem.layers[0]?.type || 'Golden',
+          targetBs: currentCad.estimatedBs || '',
+          layers: customItem.layers,
           plannedUps: finalUps,
           companyId: jobSpecs.companyId || activeUnitId || '',
           customerId: jobSpecs.customerId || '',
-          itemType: 'Box',
           createdAt: new Date().toISOString()
         };
       }
@@ -9243,34 +9311,42 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
   if (!isOpen) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
-      <div style={{ background: '#0f172a', color: '#fff', borderRadius: 16, width: '100%', maxWidth: 660, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', border: '2px solid #38bdf8', maxHeight: '92vh', overflowY: 'auto' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.88)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
+      <div style={{ background: '#0f172a', color: '#fff', borderRadius: 16, width: '100%', maxWidth: 780, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.6)', border: '2px solid #38bdf8', maxHeight: '94vh', overflowY: 'auto' }}>
+        
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #334155', paddingBottom: 14, marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 26 }}>🛠️</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 28 }}>🛠️</span>
             <div>
-              <h3 style={{ fontSize: 18, fontWeight: 900, color: '#38bdf8', margin: 0 }}>Create Job (Without Order / Advance Run)</h3>
-              <p style={{ fontSize: 11, color: '#94a3b8', margin: '2px 0 0 0' }}>Creates a standalone Job Card on the floor with item specs so reels can be scanned &amp; issued.</p>
+              <h3 style={{ fontSize: 18, fontWeight: 900, color: '#38bdf8', margin: 0, letterSpacing: '-0.01em' }}>
+                Create Floor Job Card (CAD &amp; BOM Engine)
+              </h3>
+              <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '2px 0 0 0' }}>
+                Create a standalone production run with precise box dimensions, board layers &amp; automated CAD blank sizing.
+              </p>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#94a3b8' }}>✕</button>
+          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.08)', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8', width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Mode Selector */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          
+          {/* Mode Selector Tabs */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <button
               type="button"
               onClick={() => setItemMode('master')}
               style={{
-                padding: '10px',
+                padding: '10px 14px',
                 borderRadius: 8,
-                border: `1.5px solid ${itemMode === 'master' ? '#38bdf8' : '#475569'}`,
-                background: itemMode === 'master' ? 'rgba(56, 189, 248, 0.15)' : '#1e293b',
-                color: '#fff',
+                border: `2px solid ${itemMode === 'master' ? '#38bdf8' : '#334155'}`,
+                background: itemMode === 'master' ? 'rgba(56, 189, 248, 0.18)' : '#1e293b',
+                color: itemMode === 'master' ? '#38bdf8' : '#94a3b8',
                 fontWeight: 800,
-                fontSize: 12,
-                cursor: 'pointer'
+                fontSize: 12.5,
+                cursor: 'pointer',
+                transition: 'all 0.15s'
               }}
             >
               📦 Select from Box Database / Master
@@ -9279,146 +9355,300 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
               type="button"
               onClick={() => setItemMode('custom')}
               style={{
-                padding: '10px',
+                padding: '10px 14px',
                 borderRadius: 8,
-                border: `1.5px solid ${itemMode === 'custom' ? '#38bdf8' : '#475569'}`,
-                background: itemMode === 'custom' ? 'rgba(56, 189, 248, 0.15)' : '#1e293b',
-                color: '#fff',
+                border: `2px solid ${itemMode === 'custom' ? '#38bdf8' : '#334155'}`,
+                background: itemMode === 'custom' ? 'rgba(56, 189, 248, 0.18)' : '#1e293b',
+                color: itemMode === 'custom' ? '#38bdf8' : '#94a3b8',
                 fontWeight: 800,
-                fontSize: 12,
-                cursor: 'pointer'
+                fontSize: 12.5,
+                cursor: 'pointer',
+                transition: 'all 0.15s'
               }}
             >
-              ✏️ Enter New / Custom Item Specs
+              ✏️ Enter Precise Engineering Specs
             </button>
           </div>
 
-          {/* ITEM DETAILS BLOCK */}
-          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, padding: 14 }}>
-            <h4 style={{ fontSize: 11, fontWeight: 900, color: '#38bdf8', textTransform: 'uppercase', marginBottom: 10, letterSpacing: '.04em' }}>
-              1. Item Specifications
-            </h4>
+          {/* SECTION 1: ITEM SPECIFICATIONS */}
+          <div style={{ background: '#1e293b', border: '1.5px solid #334155', borderRadius: 12, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h4 style={{ fontSize: 12, fontWeight: 900, color: '#38bdf8', textTransform: 'uppercase', margin: 0, letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📦</span> 1. Item Specifications &amp; Substance Recipe
+              </h4>
+              {itemMode === 'custom' && (
+                <span style={{ fontSize: 11, background: '#0284c7', color: '#fff', padding: '2px 8px', borderRadius: 4, fontWeight: 700 }}>
+                  CAD Precision Active
+                </span>
+              )}
+            </div>
 
             {itemMode === 'master' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Select Box / Item *</label>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                    Select Box SKU from Master *
+                  </label>
                   <select
                     required
-                    style={{ width: '100%', padding: '9px 12px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 13, fontWeight: 700 }}
+                    style={{ width: '100%', padding: '10px 12px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 8, fontSize: 13, fontWeight: 700 }}
                     value={selectedItemId}
                     onChange={e => handleItemSelect(e.target.value)}
                   >
                     <option value="">— Choose Item from Master —</option>
                     {[...items].sort((a,b)=>(a.name||a.Item_Name||'').localeCompare(b.name||b.Item_Name||'')).map(i => (
                       <option key={i.id} value={i.id}>
-                        {i.name || i.Item_Name} ({i.size || i.Size_mm || 'Std'} · {i.ply || 3} Ply · {i.paperGsm || 120} GSM)
+                        {i.name || i.Item_Name} ({i.size || i.Size_mm || 'Std'} · {i.ply || 3} Ply · {i.fluteType || 'B'}-Flute · {i.paperGsm || 120} GSM)
                       </option>
                     ))}
                   </select>
                 </div>
 
                 {selectedMasterItem && (
-                  <div style={{ background: '#0f172a', padding: 10, borderRadius: 8, border: '1px solid #334155', fontSize: 11, color: '#94a3b8', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-                    <div>Size: <strong style={{ color: '#fff' }}>{selectedMasterItem.size || selectedMasterItem.Size_mm || '-'}</strong></div>
-                    <div>Ply: <strong style={{ color: '#fff' }}>{selectedMasterItem.ply || 3} Ply</strong></div>
-                    <div>GSM: <strong style={{ color: '#fff' }}>{selectedMasterItem.paperGsm || 120}G</strong></div>
-                    <div>Flute: <strong style={{ color: '#fff' }}>{selectedMasterItem.fluteType || 'B Flute'}</strong></div>
-                    <div>Ups: <strong style={{ color: '#4ade80' }}>{selectedMasterItem.plannedUps || 1}</strong></div>
+                  <div style={{ background: '#0f172a', padding: 14, borderRadius: 10, border: '1.5px solid #0284c7', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, fontSize: 11.5 }}>
+                    <div><span style={{ color: '#94a3b8' }}>Inner Dimensions:</span><br /><strong style={{ color: '#fff', fontFamily: 'monospace' }}>{selectedMasterItem.size || selectedMasterItem.Size_mm || '—'} mm</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Outer Dimensions:</span><br /><strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{selectedMasterItem.od || '—'} mm</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Board Structure:</span><br /><strong style={{ color: '#fff' }}>{selectedMasterItem.ply || 3}-Ply ({selectedMasterItem.fluteType || 'B'}-Flute)</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Cutting Deckle:</span><br /><strong style={{ color: '#4ade80', fontFamily: 'monospace' }}>{selectedMasterItem.deckleMm || '—'} mm</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Cut Sheet Length:</span><br /><strong style={{ color: '#4ade80', fontFamily: 'monospace' }}>{selectedMasterItem.cutLengthMm || '—'} mm</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Unit Weight:</span><br /><strong style={{ color: '#fbbf24' }}>{selectedMasterItem.weight || selectedMasterItem.Weight_g || '—'} g</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Burst Strength:</span><br /><strong style={{ color: '#a78bfa' }}>{selectedMasterItem.targetBs ? `${selectedMasterItem.targetBs} kg/cm²` : '—'}</strong></div>
+                    <div><span style={{ color: '#94a3b8' }}>Planned Ups:</span><br /><strong style={{ color: '#38bdf8' }}>{selectedMasterItem.plannedUps || 1} Up</strong></div>
                   </div>
                 )}
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div style={{ gridColumn: 'span 2' }}>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Item / Box Name *</label>
-                  <input
-                    type="text"
-                    required
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 13, fontWeight: 700 }}
-                    placeholder="e.g. 180ml Imperial Blue Box (478x290x173)"
-                    value={customItem.name}
-                    onChange={e => setCustomItem({...customItem, name: e.target.value})}
-                  />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                
+                {/* Row 1: Item Name & Category */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Item / Box SKU Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 13, fontWeight: 700 }}
+                      placeholder="e.g. 180ml Imperial Blue Box (478x290x173)"
+                      value={customItem.name}
+                      onChange={e => setCustomItem({ ...customItem, name: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Item Category
+                    </label>
+                    <select
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+                      value={customItem.itemType}
+                      onChange={e => setCustomItem({ ...customItem, itemType: e.target.value })}
+                    >
+                      <option value="Box">📦 Outer Box (RSC)</option>
+                      <option value="PPC">🧩 PPC Partition Matrix</option>
+                      <option value="Plate">📄 Divider Plate / Pad</option>
+                      <option value="Tray">📥 Tray / Die-Cut Lid</option>
+                      <option value="Sheet">📋 Plain Corrugated Sheet</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Dimensions (L x W x H mm)</label>
-                  <input
-                    type="text"
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
-                    placeholder="e.g. 478 x 290 x 173"
-                    value={customItem.size}
-                    onChange={e => setCustomItem({...customItem, size: e.target.value})}
-                  />
+
+                {/* Row 2: Dimensions, Ply, Flute, Joint */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Inner Size (L×W×H mm) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#38bdf8', border: '1px solid #475569', borderRadius: 6, fontSize: 12.5, fontWeight: 800, fontFamily: 'monospace' }}
+                      placeholder="350x250x200"
+                      value={customItem.size}
+                      onChange={e => setCustomItem({ ...customItem, size: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Ply Structure
+                    </label>
+                    <select
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+                      value={customItem.ply}
+                      onChange={e => handlePlyChange(e.target.value)}
+                    >
+                      <option value="3">3 Ply (Single Wall)</option>
+                      <option value="5">5 Ply (Double Wall)</option>
+                      <option value="7">7 Ply (Triple Wall)</option>
+                      <option value="2">2 Ply (Single Face)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Flute Type
+                    </label>
+                    <select
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+                      value={customItem.fluteType}
+                      onChange={e => handleFluteChange(e.target.value)}
+                    >
+                      <option value="B">B-Flute (Narrow · 1.35x)</option>
+                      <option value="C">C-Flute (Broad · 1.43x)</option>
+                      <option value="E">E-Flute (Micro · 1.27x)</option>
+                      <option value="BC">BC-Flute (Double Wall · 1.39x)</option>
+                      <option value="A">A-Flute (1.52x)</option>
+                      <option value="AB">AB-Flute (1.44x)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>
+                      Joint / Finishing
+                    </label>
+                    <select
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
+                      value={customItem.jointType}
+                      onChange={e => setCustomItem({ ...customItem, jointType: e.target.value })}
+                    >
+                      <option value="Stitching (35mm)">Stitching (35mm Lap)</option>
+                      <option value="Gluing (30mm)">Gluing (30mm Lap)</option>
+                      <option value="Unjointed / Interlock (0mm)">Unjointed / Interlock</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Ply Structure</label>
-                  <select
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
-                    value={customItem.ply}
-                    onChange={e => setCustomItem({...customItem, ply: e.target.value})}
-                  >
-                    <option value="3">3 Ply (Single Wall)</option>
-                    <option value="5">5 Ply (Double Wall)</option>
-                    <option value="7">7 Ply (Triple Wall)</option>
-                    <option value="2">2 Ply (Single Face Sheet)</option>
-                  </select>
+
+                {/* Layer-by-Layer Substance BOM Recipe (Exact Box Database Match) */}
+                <div style={{ background: '#0f172a', borderRadius: 8, border: '1px solid #334155', overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 12px', background: '#1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #334155' }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>🧬</span> Board Substance Recipe ({customItem.ply}-Ply {customItem.fluteType}-Flute)
+                    </span>
+                    <span style={{ fontSize: 10.5, color: '#38bdf8', fontWeight: 700 }}>
+                      Take-Up Factor: {FLUTE_FACTORS[customItem.fluteType] || 1.35}x
+                    </span>
+                  </div>
+
+                  <div style={{ padding: 8, overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: 11.5, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: '#94a3b8', borderBottom: '1px solid #334155' }}>
+                          <th style={{ padding: '4px 6px', textAlign: 'left' }}>Layer</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'left' }}>Paper Quality</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'center', width: 90 }}>GSM</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'center', width: 80 }}>BF</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'center', width: 70 }}>Take-Up</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customItem.layers.map((lyr, lIdx) => (
+                          <tr key={lIdx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: lyr.isFlute ? 'rgba(245, 158, 11, 0.05)' : 'transparent' }}>
+                            <td style={{ padding: '4px 6px', fontWeight: 700, color: lyr.isFlute ? '#f59e0b' : '#fff' }}>
+                              {lyr.isFlute ? '🌊 ' : '📦 '}{lyr.name}
+                            </td>
+                            <td style={{ padding: '4px 6px' }}>
+                              <select
+                                style={{ padding: '3px 6px', background: '#1e293b', color: '#fff', border: '1px solid #475569', borderRadius: 4, fontSize: 11 }}
+                                value={lyr.type || lyr.colour || 'Kraft'}
+                                onChange={e => handleLayerUpdate(lIdx, 'type', e.target.value)}
+                              >
+                                <option value="Golden">Golden Kraft</option>
+                                <option value="Kraft">Natural Kraft</option>
+                                <option value="Duplex">Duplex / White Top</option>
+                                <option value="Semi-Kraft">Semi-Kraft</option>
+                              </select>
+                            </td>
+                            <td style={{ padding: '4px 6px', textAlign: 'center' }}>
+                              <input
+                                type="number"
+                                style={{ width: 70, padding: '3px 6px', background: '#1e293b', color: '#4ade80', border: '1px solid #475569', borderRadius: 4, fontSize: 11, textAlign: 'center', fontWeight: 700 }}
+                                value={lyr.gsm}
+                                onChange={e => handleLayerUpdate(lIdx, 'gsm', e.target.value)}
+                              />
+                            </td>
+                            <td style={{ padding: '4px 6px', textAlign: 'center' }}>
+                              <input
+                                type="number"
+                                style={{ width: 60, padding: '3px 6px', background: '#1e293b', color: '#38bdf8', border: '1px solid #475569', borderRadius: 4, fontSize: 11, textAlign: 'center' }}
+                                value={lyr.bf}
+                                onChange={e => handleLayerUpdate(lIdx, 'bf', e.target.value)}
+                              />
+                            </td>
+                            <td style={{ padding: '4px 6px', textAlign: 'center', fontFamily: 'monospace', color: lyr.isFlute ? '#fbbf24' : '#64748b', fontWeight: 700 }}>
+                              {parseFloat(lyr.takeUp || 1.0).toFixed(2)}x
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Paper GSM &amp; BF</label>
-                  <input
-                    type="text"
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
-                    placeholder="120 GSM / 16 BF"
-                    value={customItem.paperGsm}
-                    onChange={e => setCustomItem({...customItem, paperGsm: e.target.value})}
-                  />
+
+                {/* CAD & STRENGTH BLUEPRINT SUMMARY CARD */}
+                <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1.5px solid #0284c7', borderRadius: 10, padding: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, fontSize: 11.5 }}>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>📐 Cutting Deckle:</span><br />
+                    <strong style={{ color: '#4ade80', fontSize: 13, fontFamily: 'monospace' }}>{currentCad.deckleMm || '—'} mm</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>📏 Cut Sheet Length:</span><br />
+                    <strong style={{ color: '#4ade80', fontSize: 13, fontFamily: 'monospace' }}>{currentCad.cutLengthMm || '—'} mm</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>📦 Outer Size (OD):</span><br />
+                    <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{currentCad.odStr || '—'} mm</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>⚖️ Total Board GSM:</span><br />
+                    <strong style={{ color: '#fff' }}>{currentCad.totalBoardGsm || '—'} g/m²</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>🏋️ Piece Weight:</span><br />
+                    <strong style={{ color: '#fbbf24', fontSize: 13 }}>{currentCad.theoreticalWeightGrams || '—'} g</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>💥 Burst Strength:</span><br />
+                    <strong style={{ color: '#a78bfa' }}>{currentCad.estimatedBs ? `${currentCad.estimatedBs} kg/cm²` : '—'}</strong>
+                  </div>
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Flute Type</label>
-                  <select
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
-                    value={customItem.fluteType}
-                    onChange={e => setCustomItem({...customItem, fluteType: e.target.value})}
-                  >
-                    <option value="Narrow / B Flute">Narrow / B Flute</option>
-                    <option value="Broad / C Flute">Broad / C Flute</option>
-                    <option value="E Flute">E Flute (Micro)</option>
-                    <option value="BC Double Wall">BC Double Wall</option>
-                  </select>
+
+                {/* Planned Ups & Save to Master Checkbox */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'center' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Planned Ups per Board</label>
+                    <select
+                      style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+                      value={customItem.plannedUps}
+                      onChange={e => setCustomItem({ ...customItem, plannedUps: e.target.value })}
+                    >
+                      <option value="1">1 Up (1 Box per Sheet)</option>
+                      <option value="2">2 Ups (2 Boxes per Sheet)</option>
+                      <option value="3">3 Ups</option>
+                      <option value="4">4 Ups (4 Boxes per Sheet)</option>
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 16 }}>
+                    <input
+                      type="checkbox"
+                      id="chkSaveItemDirect"
+                      checked={customItem.saveToItemMaster}
+                      onChange={e => setCustomItem({ ...customItem, saveToItemMaster: e.target.checked })}
+                      style={{ width: 17, height: 17, cursor: 'pointer' }}
+                    />
+                    <label htmlFor="chkSaveItemDirect" style={{ fontSize: 12, color: '#38bdf8', fontWeight: 700, cursor: 'pointer' }}>
+                      ✓ Save to Box Database for future use (Complete CAD &amp; BOM Specs)
+                    </label>
+                  </div>
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Planned Ups per Board</label>
-                  <input
-                    type="number"
-                    min="1"
-                    style={{ width: '100%', padding: '8px 10px', background: '#0f172a', color: '#fff', border: '1px solid #475569', borderRadius: 6, fontSize: 12 }}
-                    value={customItem.plannedUps}
-                    onChange={e => setCustomItem({...customItem, plannedUps: e.target.value})}
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 18 }}>
-                  <input
-                    type="checkbox"
-                    id="chkSaveItem"
-                    checked={customItem.saveToItemMaster}
-                    onChange={e => setCustomItem({...customItem, saveToItemMaster: e.target.checked})}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  <label htmlFor="chkSaveItem" style={{ fontSize: 11, color: '#cbd5e1', cursor: 'pointer' }}>
-                    Save to Box Database for future use
-                  </label>
-                </div>
+
               </div>
             )}
           </div>
 
-          {/* JOB RUN SPECIFICATIONS */}
-          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, padding: 14 }}>
-            <h4 style={{ fontSize: 11, fontWeight: 900, color: '#fbbf24', textTransform: 'uppercase', marginBottom: 10, letterSpacing: '.04em' }}>
-              2. Job Card Details &amp; Target Quantity
+          {/* SECTION 2: JOB RUN SPECIFICATIONS */}
+          <div style={{ background: '#1e293b', border: '1.5px solid #334155', borderRadius: 12, padding: 16 }}>
+            <h4 style={{ fontSize: 12, fontWeight: 900, color: '#fbbf24', textTransform: 'uppercase', marginBottom: 12, letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>⚡</span> 2. Job Card Details &amp; Target Quantity
             </h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
               <div>
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>Job Card Number</label>
                 <input
@@ -9472,22 +9702,22 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
               </div>
             </div>
 
-            <div style={{ marginTop: 10, padding: '8px 12px', background: '#0f172a', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, border: '1px solid #334155' }}>
+            <div style={{ marginTop: 12, padding: '10px 14px', background: '#0f172a', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, border: '1px solid #334155' }}>
               <span style={{ color: '#94a3b8' }}>Estimated Corrugator Sheets Needed:</span>
               <strong style={{ color: '#38bdf8', fontSize: 14, fontFamily: 'monospace' }}>
-                {targetSheets.toLocaleString()} Sheets <span style={{ fontSize: 11, color: '#94a3b8' }}>({currentUps} Ups)</span>
+                {targetSheets.toLocaleString()} Sheets <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 'normal' }}>({currentUps} Ups)</span>
               </strong>
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 10, paddingTop: 6 }}>
+          <div style={{ display: 'flex', gap: 12, paddingTop: 4 }}>
             <button
               type="submit"
-              style={{ flex: 1, justifyContent: 'center', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 900, padding: 12, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
+              style={{ flex: 1, justifyContent: 'center', background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 900, padding: 12, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
             >
               ⚡ Create Job Card &amp; Start Run
             </button>
-            <button type="button" onClick={onClose} style={{ padding: '10px 18px', background: '#334155', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>
+            <button type="button" onClick={onClose} style={{ padding: '10px 20px', background: '#334155', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>
               Cancel
             </button>
           </div>
