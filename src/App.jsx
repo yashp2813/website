@@ -4179,11 +4179,27 @@ function UniversalCsvImportModal({
   const parseDateStr = (val) => {
     if (!val || !String(val).trim()) return new Date().toISOString().split('T')[0];
     const s = String(val).trim();
-    // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-    const ddmmyyyy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
-    if (ddmmyyyy) {
-      return `${ddmmyyyy[3]}-${ddmmyyyy[2].padStart(2, '0')}-${ddmmyyyy[1].padStart(2, '0')}`;
+    
+    // DD-Mon-YY or DD-Mon-YYYY (e.g. 26-Aug-25, 7-Sep-25, 1-Oct-25, 11-Jan-26)
+    const monthMap = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
+    const ddmonyy = s.match(/^(\d{1,2})[\/\-\.]([a-zA-Z]{3,})[\/\-\.](\d{2,4})$/);
+    if (ddmonyy) {
+      const day = ddmonyy[1].padStart(2, "0");
+      const mStr = ddmonyy[2].toLowerCase().substring(0, 3);
+      const month = monthMap[mStr] || "01";
+      let yr = ddmonyy[3];
+      if (yr.length === 2) yr = "20" + yr;
+      return `${yr}-${month}-${day}`;
     }
+
+    // DD/MM/YYYY or DD-MM-YY or DD.MM.YYYY
+    const ddmmyyyy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+    if (ddmmyyyy) {
+      let yr = ddmmyyyy[3];
+      if (yr.length === 2) yr = "20" + yr;
+      return `${yr}-${ddmmyyyy[2].padStart(2, "0")}-${ddmmyyyy[1].padStart(2, "0")}`;
+    }
+
     // YYYY-MM-DD
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     const parsed = new Date(s);
@@ -4203,12 +4219,12 @@ function UniversalCsvImportModal({
   };
 
   const parseColour = (val) => {
-    if (!val) return 'Kraft';
+    if (!val) return 'Natural';
     const s = String(val).trim().toLowerCase();
     if (s.includes('gold')) return 'Golden';
     if (s.includes('dup') || s.includes('white')) return 'White Top';
     if (s.includes('semi')) return 'Semi Kraft';
-    if (s.includes('kraft')) return 'Kraft';
+    if (s.includes('nat') || s.includes('kraft')) return 'Natural';
     return String(val).trim();
   };
 
@@ -4221,17 +4237,19 @@ function UniversalCsvImportModal({
       const size = parseSizeCm(findVal(r, 'size', 'sizecm', 'deckle', 'decklecm', 'width', 'sizeinch'));
       const gsm = String(parseNum(findVal(r, 'gsm', 'grammage')) || '');
       const bf = String(parseNum(findVal(r, 'bf', 'burstfactor')) || '18');
-      const colour = parseColour(findVal(r, 'colour', 'color', 'shade', 'paperquality', 'quality'));
-      const weight = parseNum(findVal(r, 'weight', 'receivedqty', 'netweight', 'qty', 'weightkg', 'quantity', 'netwt', 'weightinkg'));
+      const colour = parseColour(findVal(r, 'colour', 'color', 'shade', 'paperquality', 'quality', 'type'));
+      const weight = parseNum(findVal(r, 'receivedqty', 'weight', 'netweight', 'qty', 'weightkg', 'quantity', 'netwt', 'weightinkg', 'recqty'));
+      const issuedQty = parseNum(findVal(r, 'issueqty', 'issuedqty', 'issued', 'consumed', 'consumedqty', 'usedqty', 'used', 'issue', 'issuedwt'));
+      const balanceQty = Math.max(0, weight - issuedQty);
       const vehicleNo = findVal(r, 'vehicleno', 'truckno', 'vehicle', 'lorryno');
       const invoiceNo = findVal(r, 'invoiceno', 'invoicenumber', 'billno', 'challanno', 'dcno', 'dcnumber', 'refno');
       const rate = parseNum(findVal(r, 'rate', 'rateperkg', 'ratepkg', 'price', 'ratekg'));
 
       if (currentMode === 'own_stock') {
         const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
-        const rawReelNo = findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel');
+        const rawReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel') || '').replace(/[`'"]/g, '').trim();
         const reelNo = rawReelNo || `RL-${String(nextReelNum + idx).padStart(5, '0')}`;
-        const supplierReelNo = findVal(r, 'supplierreelno', 'millreelno', 'supreelno') || rawReelNo || reelNo;
+        const supplierReelNo = rawReelNo || reelNo;
 
         return {
           type: 'own_stock',
@@ -4244,8 +4262,8 @@ function UniversalCsvImportModal({
           bf,
           colour,
           receivedQty: weight,
-          balanceQty: weight,
-          initialIssuedQty: 0,
+          balanceQty: balanceQty,
+          initialIssuedQty: issuedQty,
           ratePerKg: rate,
           invoiceNo,
           vehicleNo,
@@ -4264,9 +4282,9 @@ function UniversalCsvImportModal({
 
         // If weight and size are present, it is a Job Work Client Paper Reel!
         if (weight > 0 || size) {
-          const rawReelNo = findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel');
+          const rawReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel') || '').replace(/[`'"]/g, '').trim();
           const reelNo = rawReelNo || `JW-${String(nextReelNum + idx).padStart(5, '0')}`;
-          const supplierReelNo = findVal(r, 'supplierreelno', 'millreelno', 'supreelno') || rawReelNo || reelNo;
+          const supplierReelNo = rawReelNo || reelNo;
 
           return {
             type: 'job_work_reel',
@@ -4280,8 +4298,8 @@ function UniversalCsvImportModal({
             bf,
             colour,
             receivedQty: weight,
-            balanceQty: weight,
-            initialIssuedQty: 0,
+            balanceQty: balanceQty,
+            initialIssuedQty: issuedQty,
             ratePerKg: 0,
             invoiceNo,
             vehicleNo,
@@ -4379,8 +4397,8 @@ function UniversalCsvImportModal({
             bf: row.bf,
             colour: row.colour,
             receivedQty: row.receivedQty,
-            balanceQty: row.balanceQty,
-            initialIssuedQty: 0,
+            balanceQty: row.balanceQty !== undefined ? row.balanceQty : Math.max(0, row.receivedQty - (row.initialIssuedQty || 0)),
+            initialIssuedQty: row.initialIssuedQty || 0,
             ratePerKg: row.ratePerKg || 0,
             invoiceNo: row.invoiceNo || '',
             vehicleNo: row.vehicleNo || '',
@@ -4431,8 +4449,8 @@ function UniversalCsvImportModal({
             bf: row.bf,
             colour: row.colour,
             receivedQty: row.receivedQty,
-            balanceQty: row.balanceQty,
-            initialIssuedQty: 0,
+            balanceQty: row.balanceQty !== undefined ? row.balanceQty : Math.max(0, row.receivedQty - (row.initialIssuedQty || 0)),
+            initialIssuedQty: row.initialIssuedQty || 0,
             ratePerKg: 0,
             invoiceNo: row.invoiceNo || '',
             vehicleNo: row.vehicleNo || '',
@@ -4467,18 +4485,21 @@ function UniversalCsvImportModal({
       }
 
       const totalKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+      const totalBalanceKg = parsedRows.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
       const totalMt = (totalKg / 1000).toFixed(2);
+      const totalBalanceMt = (totalBalanceKg / 1000).toFixed(2);
 
       if (mode === 'own_stock') {
-        if (addLog) addLog(`Imported ${savedCount} own stock paper reels (${totalMt} MT) directly from CSV`);
+        if (addLog) addLog(`Imported ${savedCount} own stock paper reels (${totalMt} MT Inward / ${totalBalanceMt} MT Available) directly from CSV`);
       } else {
-        if (addLog) addLog(`Imported ${savedCount} job work items (${totalMt} MT, ${newClientsCreated} new clients registered) from CSV`);
+        if (addLog) addLog(`Imported ${savedCount} job work items (${totalMt} MT Inward / ${totalBalanceMt} MT Available, ${newClientsCreated} new clients registered) from CSV`);
       }
 
       setImportSummary({
         totalSaved: savedCount,
         newClientsCreated,
         totalWeightMt: totalMt,
+        totalBalanceMt,
         mode
       });
 
@@ -4497,10 +4518,10 @@ function UniversalCsvImportModal({
     let dlName = '';
 
     if (mode === 'own_stock') {
-      csvContent = `Date,Mill Name,Reel No,Size (cm),GSM,BF,Colour,Received Qty (kg),Rate (Rs/kg),Invoice No,Vehicle No\n2026-08-25,Century Paper,RL-10492,105,150,18,Kraft,1250,38.50,INV-8821,MH-15-AB-1234\n2026-08-25,BILT Mill,RL-10493,110,180,22,Golden,1420,42.00,INV-8821,MH-15-AB-1234\n2026-08-25,Shree Paper,RL-10494,95,120,16,Kraft,980,36.00,INV-8822,MH-15-CD-5678`;
+      csvContent = `Date,Party Name,Invoice No,Vehicle No,Reel No,Size,GSM,BF,Type,Received Qty,Issue Qty,Rate/Kg\n26-Aug-25,Swastik,GST/1690/25-26,MH15BJ9863,34265,146,120,16,Natural,773,773,29.25\n7-Sep-25,Swastik,GST/1869/25-26,MH15BJ9863,37638,146,120,16,Natural,720,,29.25`;
       dlName = 'sample_own_stock_inventory.csv';
     } else {
-      csvContent = `Client Name,Date,Reel No,Size (cm),GSM,BF,Colour,Received Qty (kg),Challan No,Vehicle No\nParamount Packaging,2026-08-25,JW-0041,105,150,18,Kraft,1250,DC-9901,MH-15-XY-9999\nParamount Packaging,2026-08-25,JW-0042,110,180,22,Golden,1420,DC-9901,MH-15-XY-9999\nDelta Corrugators,2026-08-25,JW-0043,95,140,18,Kraft,1100,DC-5512,MH-15-ZZ-1122`;
+      csvContent = `Party Name,Date,Invoice No,Vehicle No,Reel No,Size,GSM,BF,Type,Received Qty,Issue Qty\nParamount Packaging,26-Aug-25,DC-9901,MH15BJ9863,34265,146,120,16,Natural,773,773\nParamount Packaging,7-Sep-25,DC-9902,MH15BJ9863,37638,146,120,16,Natural,720,`;
       dlName = 'sample_job_work_clients_stock.csv';
     }
 
@@ -4515,7 +4536,11 @@ function UniversalCsvImportModal({
   };
 
   const totalWeightKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+  const totalBalanceKg = parsedRows.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+  const totalIssuedKg = parsedRows.reduce((sum, r) => sum + (r.initialIssuedQty || 0), 0);
   const totalWeightMt = (totalWeightKg / 1000).toFixed(2);
+  const totalBalanceMt = (totalBalanceKg / 1000).toFixed(2);
+  const totalIssuedMt = (totalIssuedKg / 1000).toFixed(2);
   const uniqueClients = Array.from(new Set(parsedRows.map(r => r.clientName || r.name).filter(Boolean)));
 
   return (
@@ -4548,7 +4573,7 @@ function UniversalCsvImportModal({
                 Import Completed Successfully!
               </h3>
               <p style={{ fontSize: 14, color: '#475569', maxWidth: 480, margin: '0 auto 24px auto' }}>
-                Directly saved <strong>{importSummary.totalSaved} records</strong> ({importSummary.totalWeightMt} MT total weight) into the system database.
+                Directly saved <strong>{importSummary.totalSaved} records</strong> ({importSummary.totalWeightMt} MT Received · <strong>{importSummary.totalBalanceMt} MT Available Stock</strong>) into the system database.
                 {importSummary.newClientsCreated > 0 && (
                   <span style={{ display: 'block', marginTop: 6, color: '#4338ca', fontWeight: 700 }}>
                     ✨ Auto-registered {importSummary.newClientsCreated} new Job Work Client(s) in your Client Directory!
@@ -4559,242 +4584,196 @@ function UniversalCsvImportModal({
                 <button onClick={onClose} className="apex-btn apex-btn-primary" style={{ background: '#16a34a', padding: '10px 28px', fontWeight: 800 }}>
                   Done &amp; Return to ERP
                 </button>
-                <button onClick={() => { setImportSummary(null); setParsedRows([]); setPasteText(''); setFileName(''); }} className="apex-btn apex-btn-secondary" style={{ padding: '10px 20px', fontWeight: 700 }}>
-                  Import Another File
-                </button>
               </div>
             </div>
           ) : (
             <>
-              {/* Mode Selection Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginBottom: 16 }}>
-                
-                {/* Mode 1: Own Stock Inventory */}
-                <div
+              {/* Mode Selection */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, background: '#f1f5f9', padding: 4, borderRadius: 8 }}>
+                <button
+                  type="button"
                   onClick={() => handleModeChange('own_stock')}
                   style={{
-                    padding: 16,
-                    borderRadius: 12,
-                    border: mode === 'own_stock' ? '2.5px solid #2563eb' : '1.5px solid #cbd5e1',
-                    background: mode === 'own_stock' ? '#eff6ff' : '#ffffff',
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    fontSize: 12.5,
+                    fontWeight: 800,
+                    border: 'none',
+                    background: mode === 'own_stock' ? '#1c1917' : 'transparent',
+                    color: mode === 'own_stock' ? '#fff' : '#64748b',
                     cursor: 'pointer',
-                    transition: 'all 0.15s',
-                    position: 'relative'
+                    transition: 'all .15s'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontSize: 24 }}>📦</span>
-                    <div>
-                      <h4 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: mode === 'own_stock' ? '#1e40af' : '#0f172a' }}>
-                        1. Own Stock Inventory
-                      </h4>
-                      <span style={{ fontSize: 11, color: '#64748b' }}>Paper reels purchased by your company</span>
-                    </div>
-                  </div>
-                  <p style={{ fontSize: 11.5, color: '#475569', margin: 0 }}>
-                    Maps Reel No, Mill Name, Size, GSM, BF, Colour, Weight (kg), Rate &amp; Inward Date.
-                  </p>
-                  {mode === 'own_stock' && (
-                    <span style={{ position: 'absolute', top: 10, right: 10, background: '#2563eb', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10 }}>
-                      Selected
-                    </span>
-                  )}
-                </div>
-
-                {/* Mode 2: Job Work Clients */}
-                <div
+                  🏭 Own Stock Paper Inventory
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleModeChange('job_work_stock')}
                   style={{
-                    padding: 16,
-                    borderRadius: 12,
-                    border: mode === 'job_work_stock' ? '2.5px solid #6366f1' : '1.5px solid #cbd5e1',
-                    background: mode === 'job_work_stock' ? '#eef2ff' : '#ffffff',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                    position: 'relative'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontSize: 24 }}>🤝</span>
-                    <div>
-                      <h4 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: mode === 'job_work_stock' ? '#3730a3' : '#0f172a' }}>
-                        2. Job Work Clients &amp; Paper Stock
-                      </h4>
-                      <span style={{ fontSize: 11, color: '#64748b' }}>Reels / client directory for Nashik conversion</span>
-                    </div>
-                  </div>
-                  <p style={{ fontSize: 11.5, color: '#475569', margin: 0 }}>
-                    Maps Client Name, Reel No, Size, GSM, BF, Net Weight (kg) &amp; DC/Challan reference.
-                  </p>
-                  {mode === 'job_work_stock' && (
-                    <span style={{ position: 'absolute', top: 10, right: 10, background: '#6366f1', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10 }}>
-                      Selected
-                    </span>
-                  )}
-                </div>
-
-              </div>
-
-              {/* Target Manufacturing Unit & Sample Download */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10, background: '#f8fafc', padding: '10px 14px', borderRadius: 10, border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>🏭 Target Factory Unit:</label>
-                  <select
-                    className="apex-select"
-                    value={targetUnitId}
-                    onChange={e => setTargetUnitId(e.target.value)}
-                    style={{ fontSize: 12.5, fontWeight: 700, padding: '4px 10px', minWidth: 180 }}
-                  >
-                    <option value="">All Units / Unassigned</option>
-                    {companies.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={downloadSampleTemplate}
-                  style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 6, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, color: '#2563eb', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-                >
-                  📄 Download {mode === 'own_stock' ? 'Own Stock' : 'Job Work'} Sample CSV Template
-                </button>
-              </div>
-
-              {/* Input Method Tabs */}
-              <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-                <button
-                  type="button"
-                  onClick={() => setInputTab('file')}
-                  style={{
-                    padding: '8px 18px',
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: 6,
                     fontSize: 12.5,
                     fontWeight: 800,
-                    cursor: 'pointer',
                     border: 'none',
-                    borderBottom: inputTab === 'file' ? '2.5px solid #2563eb' : '2.5px solid transparent',
-                    background: 'none',
-                    color: inputTab === 'file' ? '#2563eb' : '#64748b'
+                    background: mode === 'job_work_stock' ? '#6366f1' : 'transparent',
+                    color: mode === 'job_work_stock' ? '#fff' : '#64748b',
+                    cursor: 'pointer',
+                    transition: 'all .15s'
                   }}
                 >
-                  📁 Upload CSV File
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInputTab('paste')}
-                  style={{
-                    padding: '8px 18px',
-                    fontSize: 12.5,
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    border: 'none',
-                    borderBottom: inputTab === 'paste' ? '2.5px solid #2563eb' : '2.5px solid transparent',
-                    background: 'none',
-                    color: inputTab === 'paste' ? '#2563eb' : '#64748b'
-                  }}
-                >
-                  📋 Copy-Paste from Excel / Sheets
+                  🤝 Job Work / Client Stock &amp; Directory
                 </button>
               </div>
 
-              {/* TAB 1: FILE UPLOADER */}
-              {inputTab === 'file' && (
-                <div style={{ marginBottom: 20 }}>
-                  <label
+              {/* Target Unit Assignment */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Target Manufacturing Unit *</label>
+                  <p style={{ fontSize: 11, color: '#64748b', margin: 0 }}>Reels will be added to this factory's stock</p>
+                </div>
+                <select
+                  value={targetUnitId}
+                  onChange={e => setTargetUnitId(e.target.value)}
+                  className="apex-select"
+                  style={{ minWidth: 200, fontSize: 12, fontWeight: 700 }}
+                >
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.code || 'Unit'})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* File Upload / Paste Tabs */}
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
+                <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                  <button
+                    type="button"
+                    onClick={() => setInputTab('file')}
                     style={{
-                      border: '2px dashed #94a3b8',
-                      borderRadius: 12,
-                      padding: '28px 20px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                      background: '#f8fafc',
-                      transition: 'all 0.15s'
+                      padding: '10px 18px',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      border: 'none',
+                      borderBottom: inputTab === 'file' ? '2px solid #2563eb' : 'none',
+                      background: inputTab === 'file' ? '#fff' : 'transparent',
+                      color: inputTab === 'file' ? '#2563eb' : '#64748b',
+                      cursor: 'pointer'
                     }}
                   >
-                    <span style={{ fontSize: 36, marginBottom: 8 }}>📄</span>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: '#0f172a' }}>
-                      {fileName ? `Selected: ${fileName}` : `Click to Select or Drop ${mode === 'own_stock' ? 'Own Stock' : 'Job Work'} CSV File`}
-                    </span>
-                    <span style={{ fontSize: 11.5, color: '#64748b', marginTop: 4 }}>
-                      Supports .csv, .txt, or exported Excel spreadsheet tables
-                    </span>
-                    <input
-                      type="file"
-                      accept=".csv,text/csv,text/plain"
-                      onChange={handleFileChange}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
+                    📁 Upload File (.csv, .xlsx, .txt)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInputTab('paste')}
+                    style={{
+                      padding: '10px 18px',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      border: 'none',
+                      borderBottom: inputTab === 'paste' ? '2px solid #2563eb' : 'none',
+                      background: inputTab === 'paste' ? '#fff' : 'transparent',
+                      color: inputTab === 'paste' ? '#2563eb' : '#64748b',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    📋 Copy &amp; Paste from Excel / Sheets
+                  </button>
                 </div>
-              )}
 
-              {/* TAB 2: PASTE SPREADSHEET */}
-              {inputTab === 'paste' && (
-                <div style={{ marginBottom: 20 }}>
-                  <textarea
-                    rows={6}
-                    className="apex-input"
-                    placeholder="Copy all cells from Microsoft Excel or Google Sheets (including header row) and paste here..."
-                    value={pasteText}
-                    onChange={e => setPasteText(e.target.value)}
-                    style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, padding: 10, background: '#f8fafc', border: '1px solid #cbd5e1' }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                    <button
-                      type="button"
-                      onClick={handleProcessPasteText}
-                      className="apex-btn apex-btn-secondary"
-                      style={{ fontWeight: 800, fontSize: 12 }}
-                    >
-                      ⚡ Parse Pasted Cells
-                    </button>
-                  </div>
+                <div style={{ padding: 16 }}>
+                  {inputTab === 'file' ? (
+                    <div style={{ border: '2px dashed #cbd5e1', borderRadius: 8, padding: '24px 16px', textAlign: 'center', background: '#f8fafc' }}>
+                      <input
+                        type="file"
+                        accept=".csv,.txt,.tsv"
+                        id="csv-file-input"
+                        style={{ display: 'none' }}
+                        onChange={handleFileChange}
+                      />
+                      <label htmlFor="csv-file-input" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                        <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
+                        <p style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', margin: '0 0 4px 0' }}>
+                          {fileName ? `Selected: ${fileName}` : 'Click here to choose your CSV / Excel export file'}
+                        </p>
+                        <span style={{ fontSize: 11, color: '#64748b' }}>Supports CSV format exported from Tally, Excel, or Google Sheets</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div>
+                      <textarea
+                        rows={6}
+                        value={pasteText}
+                        onChange={e => setPasteText(e.target.value)}
+                        placeholder="Paste your copied rows directly from Excel or Google Sheets here (Ctrl+V)..."
+                        className="apex-input font-mono"
+                        style={{ width: '100%', fontSize: 11.5, lineHeight: 1.4 }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                        <button
+                          type="button"
+                          onClick={handleProcessPasteText}
+                          className="apex-btn apex-btn-primary"
+                          style={{ padding: '6px 16px', fontSize: 12, fontWeight: 800 }}
+                        >
+                          ⚡ Parse Pasted Table Data
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
-              {/* PARSED DATA PREVIEW & CONFIRMATION */}
+              {/* Data Preview Table */}
               {parsedRows.length > 0 && (
                 <div>
                   {/* Summary Bar */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '10px 16px', borderRadius: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 13, fontWeight: 800, color: '#166534' }}>
-                        ✅ {parsedRows.length} Records Detected
+                        ✅ {parsedRows.length} Reels Detected
                       </span>
                       {totalWeightKg > 0 && (
-                        <span style={{ fontSize: 12, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 6 }}>
-                          Weight: {totalWeightKg.toLocaleString()} KG ({totalWeightMt} MT)
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 6 }}>
+                          Received: {totalWeightKg.toLocaleString()} KG ({totalWeightMt} MT)
                         </span>
                       )}
-                      {uniqueClients.length > 0 && mode === 'job_work_stock' && (
-                        <span style={{ fontSize: 12, fontWeight: 700, color: '#4338ca', background: '#e0e7ff', padding: '2px 8px', borderRadius: 6 }}>
-                          Clients: {uniqueClients.join(', ')}
+                      {totalIssuedKg > 0 && (
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#b91c1c', background: '#fee2e2', padding: '2px 8px', borderRadius: 6 }}>
+                          Issued: {totalIssuedKg.toLocaleString()} KG ({totalIssuedMt} MT)
+                        </span>
+                      )}
+                      {totalBalanceKg > 0 && (
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: '#0f172a', background: '#fef08a', padding: '2px 8px', borderRadius: 6 }}>
+                          Live Stock Balance: {totalBalanceKg.toLocaleString()} KG ({totalBalanceMt} MT)
                         </span>
                       )}
                     </div>
 
                     <span style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>
-                      Previewing first 10 rows below
+                      Previewing first 10 rows
                     </span>
                   </div>
 
                   {/* Preview Table */}
-                  <div className="apex-table-wrap" style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: 8, marginBottom: 20 }}>
-                    <table className="apex-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <div className="apex-table-wrap" style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: 8, marginBottom: 20 }}>
+                    <table className="apex-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                       <thead>
                         <tr style={{ background: '#1e293b', color: '#fff' }}>
                           <th style={{ padding: '6px 8px', textAlign: 'center' }}>#</th>
-                          <th style={{ padding: '6px 8px' }}>{mode === 'own_stock' ? 'Mill Name' : 'Client Name'}</th>
+                          <th style={{ padding: '6px 8px' }}>{mode === 'own_stock' ? 'Party / Mill' : 'Client Name'}</th>
                           <th style={{ padding: '6px 8px' }}>Reel No</th>
-                          <th style={{ padding: '6px 8px' }}>Size (cm)</th>
+                          <th style={{ padding: '6px 8px' }}>Size</th>
                           <th style={{ padding: '6px 8px' }}>GSM</th>
                           <th style={{ padding: '6px 8px' }}>BF</th>
-                          <th style={{ padding: '6px 8px' }}>Colour</th>
-                          <th style={{ padding: '6px 8px', textAlign: 'right' }}>Weight (KG)</th>
-                          <th style={{ padding: '6px 8px' }}>Doc / Ref</th>
+                          <th style={{ padding: '6px 8px' }}>Type</th>
+                          <th style={{ padding: '6px 8px', textAlign: 'right' }}>Received (KG)</th>
+                          <th style={{ padding: '6px 8px', textAlign: 'right' }}>Issued (KG)</th>
+                          <th style={{ padding: '6px 8px', textAlign: 'right' }}>Balance (KG)</th>
+                          <th style={{ padding: '6px 8px' }}>Rate/Kg</th>
+                          <th style={{ padding: '6px 8px' }}>Invoice No</th>
                           <th style={{ padding: '6px 8px' }}>Date</th>
                         </tr>
                       </thead>
@@ -4808,9 +4787,14 @@ function UniversalCsvImportModal({
                             <td style={{ padding: '6px 8px' }}>{row.gsm || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.bf || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.colour || '-'}</td>
-                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#0284c7' }}>{row.receivedQty ? row.receivedQty.toLocaleString() : '-'}</td>
-                            <td style={{ padding: '6px 8px', fontSize: 11, color: '#64748b' }}>{row.invoiceNo || row.code || '-'}</td>
-                            <td style={{ padding: '6px 8px', fontSize: 11, color: '#64748b' }}>{row.date || '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#0284c7' }}>{row.receivedQty ? row.receivedQty.toLocaleString() : '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: row.initialIssuedQty > 0 ? '#ef4444' : '#94a3b8' }}>{row.initialIssuedQty ? row.initialIssuedQty.toLocaleString() : '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: row.balanceQty > 0 ? '#16a34a' : '#64748b' }}>
+                              {row.balanceQty > 0 ? `${row.balanceQty.toLocaleString()} kg` : <span style={{ color: '#ef4444', fontSize: 10, fontWeight: 700 }}>CONSUMED</span>}
+                            </td>
+                            <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{row.ratePerKg ? `₹${row.ratePerKg}` : '-'}</td>
+                            <td style={{ padding: '6px 8px', fontSize: 10.5, color: '#64748b' }}>{row.invoiceNo || row.code || '-'}</td>
+                            <td style={{ padding: '6px 8px', fontSize: 10.5, color: '#64748b' }}>{row.date || '-'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -4833,10 +4817,9 @@ function UniversalCsvImportModal({
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button
                         type="button"
-                        onClick={onClose}
+                        onClick={() => { setParsedRows([]); setPasteText(''); setFileName(''); }}
                         className="apex-btn apex-btn-secondary"
                         disabled={isProcessing}
-                        style={{ fontWeight: 700 }}
                       >
                         Cancel
                       </button>
