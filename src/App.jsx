@@ -2503,6 +2503,28 @@ export function GlobalVoiceAssistant({
   );
 }
 
+// --- GLOBAL CLIENT TYPE NORMALIZATION HELPERS ---
+function isJobWorkClient(c) {
+  if (!c) return false;
+  const t = String(c.clientType || c.type || '').trim().toLowerCase();
+  return t === 'job work client' || t === 'job_work' || t === 'job work' || t === 'jobwork' || t === 'jw' || t === 'conversion' || t === 'toll conversion' || t === '';
+}
+
+function normalizeClientType(type) {
+  if (!type) return 'Job Work Client';
+  const s = String(type).trim().toLowerCase();
+  if (s === 'job_work' || s === 'job work' || s === 'jobwork' || s === 'jw' || s.includes('job') || s.includes('conversion') || s.includes('toll')) {
+    return 'Job Work Client';
+  }
+  if (s === 'direct_client' || s === 'direct' || s.includes('direct') || s.includes('buyer')) {
+    return 'Direct Client';
+  }
+  if (s.includes('trader') || s.includes('broker')) {
+    return 'Trader / Broker';
+  }
+  return type;
+}
+
 // --- PRINTABLE BARCODE LABEL MODAL ---
 // Ultra-Fast O(1) Cached System Reel ID Formatter (Series RL-00001, RL-00002, ...)
 let _lastInventoryRef = null;
@@ -8555,7 +8577,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 value="job_work"
                 checked={commonData.stockType === 'job_work'}
                 onChange={() => {
-                  const firstCust = customers.find(c => (c.clientType || 'Job Work Client') === 'Job Work Client') || customers[0];
+                  const firstCust = customers.find(c => isJobWorkClient(c)) || customers[0];
                   setCommonData({
                     ...commonData,
                     stockType: 'job_work',
@@ -12734,7 +12756,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                   value="job_work"
                   checked={orderHeader.orderType === 'job_work'}
                   onChange={() => {
-                    const firstJw = customers.find(c => (c.clientType || 'Job Work Client') === 'Job Work Client') || customers[0];
+                    const firstJw = customers.find(c => isJobWorkClient(c)) || customers[0];
                     setOrderHeader({
                       ...orderHeader,
                       orderType: 'job_work',
@@ -12769,7 +12791,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                   <option value="">{orderHeader.orderType === 'job_work' ? '-- Choose Job Work Client * --' : '-- Choose Customer (Optional) --'}</option>
                   {[...customers].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.clientType === 'Job Work Client' ? '🤝 ' : ''}{c.name} {c.code ? `(${c.code})` : ''}
+                      {isJobWorkClient(c) ? '🤝 ' : ''}{c.name} {c.code ? `(${c.code})` : ''}
                     </option>
                   ))}
                 </select>
@@ -16559,6 +16581,27 @@ function CustomersView({
   autoSetUnit,
   setActiveTab
 }) {
+  const isJobWorkClient = (c) => {
+    if (!c) return false;
+    const t = String(c.clientType || c.type || '').trim().toLowerCase();
+    return t === 'job work client' || t === 'job_work' || t === 'job work' || t === 'jobwork' || t === 'jw' || t === 'conversion' || t === 'toll conversion' || t === '';
+  };
+
+  const normalizeClientType = (type) => {
+    if (!type) return 'Job Work Client';
+    const s = String(type).trim().toLowerCase();
+    if (s === 'job_work' || s === 'job work' || s === 'jobwork' || s === 'jw' || s.includes('job') || s.includes('conversion') || s.includes('toll')) {
+      return 'Job Work Client';
+    }
+    if (s === 'direct_client' || s === 'direct' || s.includes('direct') || s.includes('buyer')) {
+      return 'Direct Client';
+    }
+    if (s.includes('trader') || s.includes('broker')) {
+      return 'Trader / Broker';
+    }
+    return type;
+  };
+
   const nashikUnitId = getNashikCompanyId(companies);
   const blank = {
     name: '',
@@ -16602,7 +16645,7 @@ function CustomersView({
       name: c.name || '',
       code: c.code || '',
       unitId: c.unitId || nashikUnitId || activeUnitId || (companies[0]?.id || ''),
-      clientType: c.clientType || 'Job Work Client',
+      clientType: normalizeClientType(c.clientType),
       gstin: c.gstin || '',
       billingAddress: c.billingAddress || '',
       state: c.state || '',
@@ -16805,7 +16848,10 @@ function CustomersView({
   // Filtered Client List
   const filtered = customers.filter(c => {
     if (filterUnit && c.unitId && c.unitId !== 'all' && c.unitId !== filterUnit) return false;
-    if (clientTypeFilter !== 'All' && (c.clientType || 'Job Work Client') !== clientTypeFilter) return false;
+    if (clientTypeFilter !== 'All') {
+      const norm = normalizeClientType(c.clientType);
+      if (norm !== clientTypeFilter) return false;
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const name = (c.name || '').toLowerCase();
@@ -16822,8 +16868,8 @@ function CustomersView({
   });
 
   // Global KPI Aggregates
-  const totalJobWorkClients = customers.filter(c => (c.clientType || 'Job Work Client') === 'Job Work Client').length;
-  const totalDirectBuyers = customers.filter(c => c.clientType === 'Direct Client').length;
+  const totalJobWorkClients = customers.filter(c => isJobWorkClient(c)).length;
+  const totalDirectBuyers = customers.filter(c => normalizeClientType(c.clientType) === 'Direct Client').length;
   const totalJobWorkPaperKg = customers.reduce((sum, c) => sum + getClientStats(c).stockKg, 0);
   const totalActiveJWJobs = customers.reduce((sum, c) => sum + getClientStats(c).activeOrdersCount, 0);
 
@@ -17267,7 +17313,8 @@ function CustomersView({
               const unitDisplayName = unitObj ? unitObj.name : (c.unitName || 'All Units');
               const isSelected = selectedCustIds.has(c.id);
               const stats = getClientStats(c);
-              const isJobWork = (c.clientType || 'Job Work Client') === 'Job Work Client';
+              const isJobWork = isJobWorkClient(c);
+              const displayType = normalizeClientType(c.clientType);
 
               return (
                 <tr key={c.id} style={{ background: isSelected ? '#fef2f2' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc') }}>
@@ -17301,7 +17348,7 @@ function CustomersView({
                       color: isJobWork ? '#6d28d9' : '#166534',
                       border: `1px solid ${isJobWork ? '#ddd6fe' : '#bbf7d0'}`
                     }}>
-                      {c.clientType || 'Job Work Client'}
+                      {displayType}
                     </span>
                   </td>
                   <td>
