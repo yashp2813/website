@@ -22521,6 +22521,18 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
   const [filterSearch, setFilterSearch] = useState('');
   const [draggedWip, setDraggedWip] = useState(null);
   const [dragOverStage, setDragOverStage] = useState(null);
+  const [selectedMobileStage, setSelectedMobileStage] = useState('all');
+  const [isMobileScreen, setIsMobileScreen] = useState(() => {
+    return typeof window !== 'undefined' && (window.innerWidth <= 768 || (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024));
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileScreen(typeof window !== 'undefined' && (window.innerWidth <= 768 || (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024)));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Local state to ensure drag and drop registers immediately
   const [localWipList, setLocalWipList] = useState(() => {
@@ -22727,12 +22739,16 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
     if (addLog) addLog(`Advanced ${actualAdvanceQty} pcs of "${wipItem.itemName}" to stage: ${targetStage}`);
   };
 
+  const displayStages = (isMobileScreen && selectedMobileStage !== 'all') 
+    ? STAGES.filter(s => s === selectedMobileStage) 
+    : STAGES;
+
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', paddingBottom: 48 }}>
       {/* REAL COST OF EVERY BOX REVELATION MODAL */}
       {completedJobRealCost && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.3)', border: '2px solid #2563eb' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 14 }}>
+          <div style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: '18px 20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.3)', border: '2px solid #2563eb' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 24 }}>💎</span>
@@ -22744,7 +22760,7 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               <button onClick={() => setCompletedJobRealCost(null)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>✕</button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 16 }}>
               <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>THEORETICAL PAPER NEEDED</div>
                 <div style={{ fontSize: 20, fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{completedJobRealCost.theoreticalKg} <span style={{ fontSize: 11 }}>kg</span></div>
@@ -22755,7 +22771,7 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               </div>
             </div>
 
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 800, color: '#991b1b' }}>INVISIBLE TRIMMING &amp; PROCESS WASTE</div>
                 <div style={{ fontSize: 12, color: '#b91c1c' }}>Revealed from actual reel consumption vs recipe</div>
@@ -22766,7 +22782,7 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20, textAlign: 'center' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 10, marginBottom: 20, textAlign: 'center' }}>
               <div style={{ background: '#f1f5f9', borderRadius: 8, padding: 10 }}>
                 <div style={{ fontSize: 10, fontWeight: 800, color: '#475569' }}>REAL COST / BOX</div>
                 <div style={{ fontSize: 18, fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>₹{completedJobRealCost.realCostPerBox}</div>
@@ -22787,21 +22803,23 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
           </div>
         </div>
       )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+
+      {/* Page Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <GanttChart style={{ width: 24, height: 24, color: '#ea580c' }} /> Live Work-In-Progress (WIP) Kanban Board
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <GanttChart style={{ width: 22, height: 22, color: '#ea580c' }} /> Live WIP Kanban Board
           </h2>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-            ✋ Drag within a column to prioritize · Drag across columns to advance stage · Synced with Production Planning Sheet
+          <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
+            {isMobileScreen ? 'Tap Advance to move batch or swipe across stages' : '✋ Drag within a column to prioritize · Drag across columns to advance stage'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', width: isMobileScreen ? '100%' : 'auto' }}>
           <input
             type="text"
-            placeholder="Search by order or item name..."
+            placeholder="Search WIP orders..."
             className="apex-input"
-            style={{ width: 260 }}
+            style={{ width: isMobileScreen ? '100%' : 240, flex: isMobileScreen ? 1 : 'none' }}
             value={filterSearch}
             onChange={e => setFilterSearch(e.target.value)}
           />
@@ -22812,15 +22830,50 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               style={{ fontWeight: 800, padding: '6px 12px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
               title="Clear all WIP items from board"
             >
-              🧹 Clear All WIP ({localWipList.length})
+              🧹 Clear ({localWipList.length})
             </button>
           )}
         </div>
       </div>
 
-      {/* 5 STAGES KANBAN BOARD */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
-        {STAGES.map((stage, idx) => {
+      {/* Mobile Stage Filter Tabs Pill Bar */}
+      {isMobileScreen && (
+        <div className="wip-stage-pill-bar">
+          <button
+            type="button"
+            className={`wip-stage-pill-btn ${selectedMobileStage === 'all' ? 'active' : ''}`}
+            onClick={() => setSelectedMobileStage('all')}
+          >
+            <span>All Stages</span>
+            <span className="wip-stage-pill-badge">{filteredWips.length}</span>
+          </button>
+          {STAGES.map(st => {
+            const count = filteredWips.filter(w => (w.currentStage || 'Corrugation') === st || (st === 'Bundling/Ready' && w.currentStage === 'Bundling')).length;
+            return (
+              <button
+                key={st}
+                type="button"
+                className={`wip-stage-pill-btn ${selectedMobileStage === st ? 'active' : ''}`}
+                onClick={() => setSelectedMobileStage(st)}
+              >
+                <span>{st}</span>
+                <span className="wip-stage-pill-badge">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 5 STAGES KANBAN BOARD (Responsive Grid on Desktop / Smooth Swipeable or Focused View on Mobile) */}
+      <div style={
+        isMobileScreen
+          ? (selectedMobileStage === 'all'
+              ? { display: 'flex', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollSnapType: 'x mandatory', gap: 12, paddingBottom: 14 }
+              : { display: 'block', width: '100%' })
+          : { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }
+      }>
+        {displayStages.map((stage) => {
+          const idx = STAGES.indexOf(stage);
           const stageWips = filteredWips.filter(w => (w.currentStage || 'Corrugation') === stage || (stage === 'Bundling/Ready' && w.currentStage === 'Bundling'));
           const stagePcs = stageWips.reduce((s, w) => s + parseFloat(w.qty || 0), 0);
           const isTargetOver = dragOverStage === stage;
@@ -22829,7 +22882,15 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
             <div
               key={stage}
               className={`apex-card transition-all ${isTargetOver ? 'bg-orange-50/80 border-2 border-dashed border-orange-500 scale-[1.01]' : ''}`}
-              style={{ padding: 12, background: isTargetOver ? '#fff7ed' : '#fff', border: isTargetOver ? '2px dashed #ea580c' : '1px solid var(--border)', minHeight: 480 }}
+              style={{
+                padding: 12,
+                background: isTargetOver ? '#fff7ed' : '#fff',
+                border: isTargetOver ? '2px dashed #ea580c' : '1px solid var(--border)',
+                minHeight: isMobileScreen ? 340 : 480,
+                ...(isMobileScreen && selectedMobileStage === 'all'
+                  ? { flex: '0 0 85vw', maxWidth: 340, minWidth: 280, scrollSnapAlign: 'start' }
+                  : {})
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 setDragOverStage(stage);
@@ -22851,10 +22912,10 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               {/* Stage Column Header */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, borderBottom: '2px solid #ea580c', paddingBottom: 6 }}>
                 <div>
-                  <h3 style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', color: '#ea580c' }}>{stage}</h3>
-                  <p style={{ fontSize: 10, color: 'var(--text-muted)' }}>{stagePcs.toLocaleString()} pcs</p>
+                  <h3 style={{ fontSize: 12.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', color: '#ea580c' }}>{stage}</h3>
+                  <p style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{stagePcs.toLocaleString()} pcs in stage</p>
                 </div>
-                <span style={{ fontSize: 10, fontWeight: 800, background: '#ea580c', color: '#fff', width: 20, height: 20, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 11, fontWeight: 800, background: '#ea580c', color: '#fff', minWidth: 22, height: 22, padding: '0 6px', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {stageWips.length}
                 </span>
               </div>
@@ -22862,8 +22923,8 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
               {/* Stage Cards Container */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {stageWips.length === 0 && (
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '36px 0', border: '1px dashed #cbd5e1', borderRadius: 8 }}>
-                    Drag jobs here to move to {stage}
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '32px 10px', border: '1px dashed #cbd5e1', borderRadius: 8 }}>
+                    {isMobileScreen ? `No items in ${stage}` : `Drag jobs here to move to ${stage}`}
                   </div>
                 )}
                 {stageWips.map((wip, wIdx) => {
@@ -22905,34 +22966,34 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
                         setDragOverStage(null);
                       }}
                       className={`cursor-grab active:cursor-grabbing transition-all ${isBeingDragged ? 'opacity-30' : ''}`}
-                      style={{ background: '#fafafa', border: '1px solid #cbd5e1', borderRadius: 8, padding: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
+                      style={{ background: '#fafafa', border: '1px solid #cbd5e1', borderRadius: 8, padding: 11, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
                     >
-                      {/* Card Header: Drag handle, Rank, Unit, Delete & Up/Down Buttons */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      {/* Card Header: Rank, Unit, Delete & Up/Down Buttons */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                           <span style={{ fontSize: 12, color: '#94a3b8', cursor: 'grab' }}>⋮⋮</span>
-                          <span style={{ fontSize: 9, fontWeight: 900, background: '#ea580c', color: '#fff', padding: '1px 5px', borderRadius: 4 }}>
+                          <span style={{ fontSize: 9.5, fontWeight: 900, background: '#ea580c', color: '#fff', padding: '1px 5px', borderRadius: 4 }}>
                             #{wIdx + 1}
                           </span>
-                          <span style={{ fontSize: 9, fontWeight: 800, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', padding: '1px 6px', borderRadius: 4 }}>
+                          <span style={{ fontSize: 9.5, fontWeight: 800, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', padding: '1px 6px', borderRadius: 4 }}>
                             {unitName}
                           </span>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, -1)} disabled={wIdx === 0} title="Move Up in Stage" style={{ opacity: wIdx === 0 ? 0.3 : 1, padding: '1px 4px', background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 3, fontSize: 9, fontWeight: 800, cursor: 'pointer' }}>▲</button>
-                          <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, 1)} disabled={wIdx === stageWips.length - 1} title="Move Down in Stage" style={{ opacity: wIdx === stageWips.length - 1 ? 0.3 : 1, padding: '1px 4px', background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 3, fontSize: 9, fontWeight: 800, cursor: 'pointer' }}>▼</button>
+                          <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, -1)} disabled={wIdx === 0} title="Move Up in Stage" style={{ opacity: wIdx === 0 ? 0.3 : 1, padding: '2px 6px', minHeight: 24, background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>▲</button>
+                          <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, 1)} disabled={wIdx === stageWips.length - 1} title="Move Down in Stage" style={{ opacity: wIdx === stageWips.length - 1 ? 0.3 : 1, padding: '2px 6px', minHeight: 24, background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>▼</button>
                           <button
                             onClick={() => handleDeleteWipCard(wip)}
                             title={`Delete WIP card "${wip.itemName}"`}
-                            style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', borderRadius: 3, padding: '1px 5px', fontSize: 9, cursor: 'pointer', fontWeight: 800 }}
+                            style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', borderRadius: 4, padding: '2px 6px', minHeight: 24, fontSize: 10, cursor: 'pointer', fontWeight: 800 }}
                           >
                             ✕
                           </button>
                         </div>
                       </div>
 
-                      <h4 style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', marginBottom: 2 }}>{wip.itemName}</h4>
+                      <h4 style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', marginBottom: 3, wordBreak: 'break-word', lineHeight: 1.3 }}>{wip.itemName}</h4>
                       {ord?.orderType === 'job_work' && (
                         <div style={{ marginBottom: 4 }}>
                           <span style={{ fontSize: 9.5, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, display: 'inline-block' }}>
@@ -22940,42 +23001,57 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
                           </span>
                         </div>
                       )}
-                      <p style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>Order Target: {wip.orderQty || ord?.orderQty || 52000} pcs</p>
+                      <p style={{ fontSize: 10.5, color: '#64748b', marginBottom: 6 }}>Order Target: {wip.orderQty || ord?.orderQty || 52000} pcs</p>
 
                       <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10.5 }}>
                           <span style={{ color: '#64748b', fontWeight: 700 }}>BATCH QTY</span>
-                          <strong style={{ fontSize: 11, fontWeight: 900, color: '#0f172a' }}>{parseFloat(wip.qty || 0).toLocaleString()} pcs</strong>
+                          <strong style={{ fontSize: 12, fontWeight: 900, color: '#0f172a' }}>{parseFloat(wip.qty || 0).toLocaleString()} pcs</strong>
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 9, color: '#64748b', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 9.5, color: '#64748b', marginBottom: 8, flexWrap: 'wrap', gap: 4 }}>
                         {(() => {
                           const tAgo = String(wip.timeAgo || '10m ago').toLowerCase();
                           if (tAgo.includes('h') && parseInt(tAgo) >= 4) {
-                            return <span style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5', padding: '1px 6px', borderRadius: 8, fontWeight: 800 }}>🔴 Idle &gt; 4h (Bottleneck)</span>;
+                            return <span style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5', padding: '2px 6px', borderRadius: 8, fontWeight: 800 }}>🔴 Idle &gt; 4h (Bottleneck)</span>;
                           }
                           if (tAgo.includes('h') && parseInt(tAgo) >= 2) {
-                            return <span style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', padding: '1px 6px', borderRadius: 8, fontWeight: 800 }}>🟡 In Progress ({wip.timeAgo})</span>;
+                            return <span style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', padding: '2px 6px', borderRadius: 8, fontWeight: 800 }}>🟡 In Progress ({wip.timeAgo})</span>;
                           }
-                          return <span style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', padding: '1px 6px', borderRadius: 8, fontWeight: 800 }}>🟢 Moving ({wip.timeAgo || 'Fresh'})</span>;
+                          return <span style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', padding: '2px 6px', borderRadius: 8, fontWeight: 800 }}>🟢 Moving ({wip.timeAgo || 'Fresh'})</span>;
                         })()}
                         <span>Stage: <strong>{stage}</strong></span>
                       </div>
 
                       {/* Action Buttons with Quantity Prompt */}
-                      <div style={{ display: 'flex', gap: 4, borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+                      <div style={{ display: 'flex', gap: 6, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
                         {idx > 0 && (
-                          <button onClick={() => moveWipStage(wip, STAGES[idx - 1])} className="apex-btn apex-btn-secondary" style={{ padding: '3px 6px', fontSize: 10 }}>
+                          <button
+                            type="button"
+                            onClick={() => moveWipStage(wip, STAGES[idx - 1])}
+                            className="apex-btn apex-btn-secondary"
+                            style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, minHeight: 32 }}
+                          >
                             &larr; Back
                           </button>
                         )}
                         {idx < STAGES.length - 1 ? (
-                          <button onClick={() => moveWipStage(wip, STAGES[idx + 1])} className="apex-btn apex-btn-primary" style={{ padding: '3px 6px', fontSize: 10, flex: 1, justifyContent: 'center', background: '#1c1917' }}>
+                          <button
+                            type="button"
+                            onClick={() => moveWipStage(wip, STAGES[idx + 1])}
+                            className="apex-btn apex-btn-primary"
+                            style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#1c1917', minHeight: 32 }}
+                          >
                             Advance &rarr;
                           </button>
                         ) : (
-                          <button onClick={() => moveWipStage(wip, 'Finished Goods')} className="apex-btn apex-btn-primary" style={{ padding: '3px 6px', fontSize: 10, flex: 1, justifyContent: 'center', background: '#16a34a' }}>
+                          <button
+                            type="button"
+                            onClick={() => moveWipStage(wip, 'Finished Goods')}
+                            className="apex-btn apex-btn-primary"
+                            style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#16a34a', minHeight: 32 }}
+                          >
                             📦 Ready in FG
                           </button>
                         )}

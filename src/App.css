@@ -1176,6 +1176,49 @@
   padding-top: 8px;
 }
 
+/* WIP Stage Tabs for Mobile */
+.wip-stage-pill-bar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px 8px 2px;
+  margin-bottom: 14px;
+  -webkit-overflow-scrolling: touch;
+}
+.wip-stage-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all .15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.wip-stage-pill-btn.active {
+  background: #ea580c;
+  color: #ffffff;
+  border-color: #c2410c;
+  box-shadow: 0 2px 8px rgba(234, 88, 12, 0.35);
+}
+.wip-stage-pill-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.08);
+}
+.wip-stage-pill-btn.active .wip-stage-pill-badge {
+  background: rgba(255,255,255,0.25);
+  color: #ffffff;
+}
+
 /* ══════════════════════════════════════════════════
    SLIDE-IN PANEL
 ══════════════════════════════════════════════════ */
