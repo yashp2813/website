@@ -2589,9 +2589,10 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     const saved = localStorage.getItem('novajet_top_margin');
     return saved !== null ? parseFloat(saved) : 11.5;
   });
+  // Default left margin set to 2.0mm to prevent rightward shift caused by printer hardware grab margins
   const [leftMarginMm, setLeftMarginMm] = useState(() => {
     const saved = localStorage.getItem('novajet_left_margin');
-    return saved !== null ? parseFloat(saved) : 4.0;
+    return saved !== null ? parseFloat(saved) : 2.0;
   });
   const [rowGapMm, setRowGapMm] = useState(() => {
     const saved = localStorage.getItem('novajet_row_gap');
@@ -2623,24 +2624,33 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const applyPreset = (preset) => {
     if (preset === 'novajet_12l') {
       saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 4.0, setLeftMarginMm);
+      saveSetting('novajet_left_margin', 2.0, setLeftMarginMm);
       saveSetting('novajet_row_gap', 2.0, setRowGapMm);
       saveSetting('novajet_col_gap', 2.0, setColGapMm);
       saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
       saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
       saveSetting('novajet_print_scale', 100, setPrintScalePct);
-    } else if (preset === 'novajet_safari_boost') {
-      // 106.5% compensation for macOS Safari automatic printable area margin shrinkage
+    } else if (preset === 'novajet_left_shift') {
+      // Compensate for printers shifting too far to the right
       saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 4.0, setLeftMarginMm);
+      saveSetting('novajet_left_margin', 0.5, setLeftMarginMm);
       saveSetting('novajet_row_gap', 2.0, setRowGapMm);
       saveSetting('novajet_col_gap', 2.0, setColGapMm);
       saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
       saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
-      saveSetting('novajet_print_scale', 106.5, setPrintScalePct);
+      saveSetting('novajet_print_scale', 104, setPrintScalePct);
+    } else if (preset === 'novajet_safari_boost') {
+      // Scale compensation with calibrated left margin
+      saveSetting('novajet_top_margin', 11.5, setTopMarginMm);
+      saveSetting('novajet_left_margin', 1.5, setLeftMarginMm);
+      saveSetting('novajet_row_gap', 2.0, setRowGapMm);
+      saveSetting('novajet_col_gap', 2.0, setColGapMm);
+      saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
+      saveSetting('novajet_label_height', 44.0, setLabelHeightMm);
+      saveSetting('novajet_print_scale', 105, setPrintScalePct);
     } else if (preset === 'novajet_zerogap') {
       saveSetting('novajet_top_margin', 16.5, setTopMarginMm);
-      saveSetting('novajet_left_margin', 5.0, setLeftMarginMm);
+      saveSetting('novajet_left_margin', 3.0, setLeftMarginMm);
       saveSetting('novajet_row_gap', 0.0, setRowGapMm);
       saveSetting('novajet_col_gap', 0.0, setColGapMm);
       saveSetting('novajet_label_width', 100.0, setLabelWidthMm);
@@ -2648,7 +2658,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       saveSetting('novajet_print_scale', 100, setPrintScalePct);
     } else if (preset === 'avery_12') {
       saveSetting('novajet_top_margin', 15.0, setTopMarginMm);
-      saveSetting('novajet_left_margin', 4.5, setLeftMarginMm);
+      saveSetting('novajet_left_margin', 3.0, setLeftMarginMm);
       saveSetting('novajet_row_gap', 2.5, setRowGapMm);
       saveSetting('novajet_col_gap', 2.5, setColGapMm);
       saveSetting('novajet_label_width', 99.1, setLabelWidthMm);
@@ -2670,21 +2680,21 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
     alert(`🎯 Auto-Calibrated! Print Scale set to ${rounded}%. All sticker positions and dimensions are now expanded by ${(rounded - 100).toFixed(1)}% to match your physical sheet.`);
   };
 
-  // Quick nudges
+  // Quick nudges (Margins are absolute and not multiplied by scale factor)
   const nudgeTop = (delta) => saveSetting('novajet_top_margin', Math.max(0, parseFloat((topMarginMm + delta).toFixed(1))), setTopMarginMm);
   const nudgeLeft = (delta) => saveSetting('novajet_left_margin', Math.max(0, parseFloat((leftMarginMm + delta).toFixed(1))), setLeftMarginMm);
   const nudgeRowGap = (delta) => saveSetting('novajet_row_gap', Math.max(0, parseFloat((rowGapMm + delta).toFixed(1))), setRowGapMm);
   const nudgeColGap = (delta) => saveSetting('novajet_col_gap', Math.max(0, parseFloat((colGapMm + delta).toFixed(1))), setColGapMm);
   const nudgeScale = (delta) => saveSetting('novajet_print_scale', Math.max(80, Math.min(130, parseFloat((printScalePct + delta).toFixed(1)))), setPrintScalePct);
 
-  // Directly calculate effective millimeter dimensions into CSS Grid to bypass any browser transform-scale ignore
+  // Directly calculate effective millimeter dimensions into CSS Grid
   const scale = (printScalePct || 100) / 100;
   const effW = parseFloat((labelWidthMm * scale).toFixed(2));
   const effH = parseFloat((labelHeightMm * scale).toFixed(2));
   const effRowGap = parseFloat((rowGapMm * scale).toFixed(2));
   const effColGap = parseFloat((colGapMm * scale).toFixed(2));
-  const effTop = parseFloat((topMarginMm * scale).toFixed(2));
-  const effLeft = parseFloat((leftMarginMm * scale).toFixed(2));
+  const effTop = parseFloat(topMarginMm.toFixed(2));
+  const effLeft = parseFloat(leftMarginMm.toFixed(2));
 
   // Handle single item or array of items
   const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
@@ -2758,7 +2768,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
       '11011110110','11110110110','10101111000','10100011110','10001011110',
       '10111101000','10111100010','11110101000','11110100010','10111011110',
       '10111101110','11101011110','11110101110','11010000100','11010010000',
-      '11010011100','1100011101011'
+      '11010011100','110001101011'
     ];
     const START_B = 104;
     const STOP = 106;
@@ -2799,7 +2809,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
           <div class="test-crosshair">+</div>
           <div class="test-bottom">
             <span>Row ${Math.floor(i / 2) + 1}, Col ${(i % 2) + 1}</span>
-            <span>Gaps: V ${effRowGap}mm • H ${effColGap}mm</span>
+            <span>Side: ${effLeft}mm • Gap: ${effColGap}mm</span>
           </div>
         </div>
       `).join('');
@@ -2818,7 +2828,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
           </div>
           <div class="ruler-text">
             📏 <strong>CALIBRATION RULER (1:1):</strong> Place a physical ruler along the bar above. Measure the 0 to 100mm line:
-            If it measures 96mm, your printer scale is 96%. In ERP, enter <strong>96.0</strong> into the Auto-Calibrate box and click <strong>Auto-Calibrate</strong> to fix it instantly!
+            If the print is shifted towards the right, click <strong>"⬅️ 2mm Left"</strong> or <strong>"👈 Left-Shift Fix"</strong> in ERP to center it!
           </div>
         </div>
         <div class="sheet-page">${testCells}</div>
@@ -3096,12 +3106,12 @@ ${bodyContent}
                   </span>
                   {printScalePct !== 100 && (
                     <span className="bg-emerald-100 text-emerald-900 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full">
-                      Scale: {printScalePct}% (Direct Grid Scaling)
+                      Scale: {printScalePct}%
                     </span>
                   )}
                 </h3>
                 <p className="text-xs text-stone-500 font-medium">
-                  Physical dimensions: 100×44mm • Top {effTop}mm, Side {effLeft}mm, Row Gap {effRowGap}mm, Col Gap {effColGap}mm.
+                  Physical dimensions: 100×44mm • Top {effTop}mm, Side Margin {effLeft}mm, Row Gap {effRowGap}mm, Col Gap {effColGap}mm.
                 </p>
               </div>
             </div>
@@ -3152,24 +3162,54 @@ ${bodyContent}
             </div>
           </div>
 
-          {/* 1-Click Automatic Ruler Calibration Tool Banner */}
+          {/* 1-Click Automatic Ruler Calibration & Left-Shift Fix Banner */}
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-3 flex items-center justify-between flex-wrap gap-3 shadow-xs">
             <div className="flex items-center gap-2.5">
               <span className="text-xl">📐</span>
               <div>
                 <div className="font-extrabold text-blue-950 text-xs flex items-center gap-2">
-                  Auto-Calibrate from Ruler Measurement
-                  <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">One-Click Fix</span>
+                  Auto-Calibrate &amp; Quick Shift Controls
+                  <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Fast Fix</span>
                 </div>
                 <p className="text-[11px] text-blue-800">
-                  Measure 1 printed sticker on your paper with a ruler, enter the measured width, and click <strong>Auto-Calibrate</strong>:
+                  If print is shifted to the right, click <strong>⬅️ 2mm Left</strong>. If size is slightly small, enter ruler width and click <strong>Auto-Calibrate</strong>:
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1.5 bg-white border border-blue-300 px-2.5 py-1 rounded-lg">
-                <label className="text-xs font-bold text-stone-700">Printed Width on Paper:</label>
+              {/* Quick Left-Shift Buttons for Instant Centering */}
+              <div className="flex items-center gap-1 bg-white border border-blue-300 px-2 py-1 rounded-lg">
+                <span className="text-[10px] font-black text-blue-900 mr-1 uppercase">Shift Left:</span>
+                <button
+                  type="button"
+                  onClick={() => nudgeLeft(-2.0)}
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-black shadow-xs transition"
+                  title="Shift entire grid 2mm to the Left"
+                >
+                  ⬅️ 2mm Left
+                </button>
+                <button
+                  type="button"
+                  onClick={() => nudgeLeft(-1.0)}
+                  className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-950 rounded text-xs font-bold transition"
+                  title="Shift entire grid 1mm to the Left"
+                >
+                  ⬅️ 1mm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => nudgeLeft(1.0)}
+                  className="px-2 py-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded text-xs font-bold transition"
+                  title="Shift entire grid 1mm to the Right"
+                >
+                  1mm ➡️
+                </button>
+              </div>
+
+              {/* Measured width auto-calibrator */}
+              <div className="flex items-center gap-1.5 bg-white border border-blue-300 px-2 py-1 rounded-lg">
+                <label className="text-xs font-bold text-stone-700">Ruler Width:</label>
                 <input
                   type="number"
                   step="0.5"
@@ -3177,27 +3217,25 @@ ${bodyContent}
                   max="140"
                   value={measuredWidthMm}
                   onChange={e => setMeasuredWidthMm(e.target.value)}
-                  className="w-16 text-center border rounded bg-blue-50/50 py-0.5 font-black text-xs text-blue-900"
-                  placeholder="e.g. 96.0"
+                  className="w-14 text-center border rounded bg-blue-50/50 py-0.5 font-black text-xs text-blue-900"
+                  placeholder="96.0"
                 />
                 <span className="text-xs font-bold text-stone-500">mm</span>
+                <button
+                  type="button"
+                  onClick={handleAutoCalibrate}
+                  className="px-2.5 py-0.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold rounded shadow-xs transition"
+                >
+                  ✨ Scale
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={handleAutoCalibrate}
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer"
-              >
-                ✨ Auto-Calibrate Scale &amp; Gaps
-              </button>
 
               {/* Quick Scale Presets */}
               <div className="flex items-center gap-1 bg-white border border-blue-200 px-2 py-1 rounded-lg text-xs font-bold text-stone-700">
-                <span className="text-[10px] text-stone-400 font-extrabold mr-1">QUICK:</span>
+                <span className="text-[10px] text-stone-400 font-extrabold mr-1">SCALE:</span>
                 <button type="button" onClick={() => saveSetting('novajet_print_scale', 100, setPrintScalePct)} className={`px-1.5 py-0.5 rounded text-[11px] ${printScalePct === 100 ? 'bg-blue-600 text-white' : 'hover:bg-stone-100'}`}>100%</button>
                 <button type="button" onClick={() => saveSetting('novajet_print_scale', 104, setPrintScalePct)} className={`px-1.5 py-0.5 rounded text-[11px] ${printScalePct === 104 ? 'bg-blue-600 text-white' : 'hover:bg-stone-100'}`}>104%</button>
                 <button type="button" onClick={() => saveSetting('novajet_print_scale', 106.5, setPrintScalePct)} className={`px-1.5 py-0.5 rounded text-[11px] ${printScalePct === 106.5 ? 'bg-blue-600 text-white' : 'hover:bg-stone-100'}`}>106.5%</button>
-                <button type="button" onClick={() => saveSetting('novajet_print_scale', 108, setPrintScalePct)} className={`px-1.5 py-0.5 rounded text-[11px] ${printScalePct === 108 ? 'bg-blue-600 text-white' : 'hover:bg-stone-100'}`}>108%</button>
               </div>
             </div>
           </div>
@@ -3259,8 +3297,9 @@ ${bodyContent}
                     onChange={e => applyPreset(e.target.value)}
                     defaultValue="novajet_12l"
                   >
-                    <option value="novajet_12l">NovaJet 12L Standard (100×44mm • 2mm Gaps • 100% Scale)</option>
-                    <option value="novajet_safari_boost">⚡ Mac / Safari Shrunk Print Fix (106.5% Direct Scale)</option>
+                    <option value="novajet_12l">NovaJet 12L Standard (100×44mm • Side: 2.0mm)</option>
+                    <option value="novajet_left_shift">👈 Left-Shift Fix (Side: 0.5mm • 104% Scale)</option>
+                    <option value="novajet_safari_boost">⚡ Mac / Safari Shrunk Print Fix (Side: 1.5mm • 105% Scale)</option>
                     <option value="novajet_zerogap">NovaJet 12L (0mm Gaps • Flush)</option>
                     <option value="avery_12">Avery / Desmat (2.5mm Gaps • 99.1×42.3)</option>
                   </select>
@@ -3304,19 +3343,19 @@ ${bodyContent}
                   <button type="button" onClick={() => nudgeTop(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift down +0.5mm">⬇️</button>
                   <button type="button" onClick={() => nudgeTop(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50 mr-2" title="Shift up -0.5mm">⬆️</button>
 
-                  <label className="text-[11px] font-bold">Side:</label>
+                  <label className="text-[11px] font-bold text-blue-800">Side (Left):</label>
                   <input
                     type="number"
                     step="0.5"
                     min="0"
                     max="20"
-                    className="w-13 text-center border rounded bg-white py-0.5 font-bold text-xs"
+                    className="w-13 text-center border border-blue-300 rounded bg-white py-0.5 font-black text-xs text-blue-900"
                     value={leftMarginMm}
                     onChange={e => saveSetting('novajet_left_margin', parseFloat(e.target.value) || 0, setLeftMarginMm)}
                   />
                   <span className="text-[10px] text-stone-500 mr-1">mm</span>
-                  <button type="button" onClick={() => nudgeLeft(0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift right +0.5mm">➡️</button>
-                  <button type="button" onClick={() => nudgeLeft(-0.5)} className="px-1 py-0.5 bg-white border rounded text-[10px] hover:bg-stone-50" title="Shift left -0.5mm">⬅️</button>
+                  <button type="button" onClick={() => nudgeLeft(-0.5)} className="px-1.5 py-0.5 bg-blue-50 border border-blue-200 rounded text-[10px] font-bold hover:bg-blue-100" title="Shift Left 0.5mm">⬅️</button>
+                  <button type="button" onClick={() => nudgeLeft(0.5)} className="px-1.5 py-0.5 bg-stone-50 border rounded text-[10px] hover:bg-stone-100 mr-1" title="Shift Right 0.5mm">➡️</button>
                 </div>
 
                 {/* Gaps */}
@@ -3385,9 +3424,9 @@ ${bodyContent}
           {/* Printer Setup Checklist Notice */}
           <div className="bg-amber-50 border border-amber-300 rounded-lg p-2.5 flex items-center justify-between gap-3 text-xs text-amber-900">
             <div className="flex items-start gap-2">
-              <span className="text-base">⚠️</span>
+              <span className="text-base">💡</span>
               <div>
-                <strong>Safari / Mac Print Dialog Setup:</strong> Click <strong>Show Details</strong> ➔ set <strong>Scale: 100% (Actual Size)</strong> and <strong>Margins: None</strong>. If your printer still prints slightly smaller, use the <strong>Auto-Calibrate</strong> tool above!
+                <strong>Quick Alignment Tip:</strong> If the print is too far to the right, click <strong>⬅️ 2mm Left</strong> in the blue banner above to shift the entire grid left!
               </div>
             </div>
           </div>
@@ -3404,7 +3443,7 @@ ${bodyContent}
                   📋 Sheet Layout: <strong>{effectiveItems.length} label(s)</strong> placed starting at <strong>Slot #{startOffset + 1}</strong> • Total Pages: <strong>{Math.ceil(totalSlots.length / 12)} A4 Sheet(s)</strong>
                 </span>
                 <span className="text-stone-600 text-[11px] font-mono">
-                  Effective Size: {effW}×{effH}mm • Gaps: V {effRowGap}mm, H {effColGap}mm • Scale: {printScalePct}%
+                  Effective Size: {effW}×{effH}mm • Side Margin: {effLeft}mm • Gaps: V {effRowGap}mm, H {effColGap}mm • Scale: {printScalePct}%
                 </span>
               </div>
 
@@ -3418,7 +3457,8 @@ ${bodyContent}
                   columnGap: `${effColGap}mm`,
                   rowGap: `${effRowGap}mm`,
                   width: `${(2 * effW) + effColGap}mm`,
-                  margin: '0 auto',
+                  marginLeft: `${effLeft}mm`,
+                  marginRight: 'auto',
                   boxSizing: 'border-box',
                   justifyContent: 'start',
                   alignContent: 'start'
