@@ -485,6 +485,10 @@ export function GlobalVoiceAssistant({
   const [isMicDisabled, setIsMicDisabled] = useState(() => {
     return localStorage.getItem('apex_mic_disabled') === 'true';
   });
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const recognitionRef = useRef(null);
   const toastTimeoutRef = useRef(null);
   const safetyTimeoutRef = useRef(null);
@@ -2028,9 +2032,6 @@ export function GlobalVoiceAssistant({
 
   if (!isSupported) return null;
 
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
   const widgetContent = (
     <div className="floating-voice-widget" style={isMobileMode ? { display: 'flex', alignItems: 'center', gap: 6 } : { position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 10 }}>
       {isListening && !isMobileMode && (
@@ -2140,11 +2141,15 @@ export function GlobalVoiceAssistant({
     </div>
   );
 
+  const portalTarget = isMobileMode && mounted && typeof document !== 'undefined'
+    ? document.getElementById('mobile-voice-portal-target')
+    : null;
+
   return (
     <>
-      {isMobileMode && mounted && document.getElementById('mobile-voice-portal-target') 
-        ? createPortal(widgetContent, document.getElementById('mobile-voice-portal-target'))
-        : (!isMobileMode ? widgetContent : null)}
+      {isMobileMode 
+        ? (portalTarget ? createPortal(widgetContent, portalTarget) : null)
+        : widgetContent}
 
       {/* Floating HUD Command Notification Toast */}
       {feedbackToast && (
@@ -6018,6 +6023,17 @@ export default function App() {
   const [completeJobModalOrder, setCompleteJobModalOrder] = useState(null);
   const [csvImportModal, setCsvImportModal] = useState({ isOpen: false, mode: 'own_stock' });
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isPhone, setIsPhone] = useState(() => {
+    return typeof window !== 'undefined' && (window.innerWidth <= 768 || (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024));
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsPhone(typeof window !== 'undefined' && (window.innerWidth <= 768 || (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024)));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const [isGlobalMicDisabled, setIsGlobalMicDisabled] = useState(() => {
     return localStorage.getItem('apex_mic_disabled') === 'true';
