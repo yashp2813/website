@@ -4230,9 +4230,16 @@ function UniversalCsvImportModal({
 
   // Convert raw rows to normalized ERP objects
   const processRawRows = (rawRows, currentMode) => {
-    let nextReelNum = inventory.length + 1;
+    const existingMax = (inventory || []).reduce((max, cur) => {
+      const fid = formatSystemReelId(cur, inventory);
+      const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
+      return !isNaN(n) && n > max ? n : max;
+    }, 0);
+
+    const prefix = currentMode === 'job_work_stock' ? 'RL-JW' : 'RL';
 
     return rawRows.map((r, idx) => {
+      const autoUniqueId = `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
       const date = parseDateStr(findVal(r, 'date', 'inwarddate', 'receiptdate', 'invoicedate', 'dcdate'));
       const size = parseSizeCm(findVal(r, 'size', 'sizecm', 'deckle', 'decklecm', 'width', 'sizeinch'));
       const gsm = String(parseNum(findVal(r, 'gsm', 'grammage')) || '');
@@ -4247,16 +4254,18 @@ function UniversalCsvImportModal({
 
       if (currentMode === 'own_stock') {
         const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
-        const rawReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel') || '').replace(/[`'"]/g, '').trim();
-        const reelNo = rawReelNo || `RL-${String(nextReelNum + idx).padStart(5, '0')}`;
-        const supplierReelNo = rawReelNo || reelNo;
+        const rawSupplierReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel', 'supplierreelno') || '').replace(/[`'"]/g, '').trim();
+        const supplierReelNo = rawSupplierReelNo || autoUniqueId;
+        const uniqueReelId = autoUniqueId;
 
         return {
           type: 'own_stock',
           date,
           millName,
           supplierReelNo,
-          reelNo,
+          uniqueReelId,
+          systemReelId: uniqueReelId,
+          reelNo: supplierReelNo,
           size,
           gsm,
           bf,
@@ -4282,9 +4291,9 @@ function UniversalCsvImportModal({
 
         // If weight and size are present, it is a Job Work Client Paper Reel!
         if (weight > 0 || size) {
-          const rawReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel') || '').replace(/[`'"]/g, '').trim();
-          const reelNo = rawReelNo || `JW-${String(nextReelNum + idx).padStart(5, '0')}`;
-          const supplierReelNo = rawReelNo || reelNo;
+          const rawSupplierReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel', 'supplierreelno') || '').replace(/[`'"]/g, '').trim();
+          const supplierReelNo = rawSupplierReelNo || autoUniqueId;
+          const uniqueReelId = autoUniqueId;
 
           return {
             type: 'job_work_reel',
@@ -4292,7 +4301,9 @@ function UniversalCsvImportModal({
             date,
             millName: findVal(r, 'millname', 'mill') || clientName,
             supplierReelNo,
-            reelNo,
+            uniqueReelId,
+            systemReelId: uniqueReelId,
+            reelNo: supplierReelNo,
             size,
             gsm,
             bf,
@@ -4391,7 +4402,9 @@ function UniversalCsvImportModal({
             date: row.date,
             millName: row.millName,
             supplierReelNo: row.supplierReelNo,
-            reelNo: row.reelNo,
+            uniqueReelId: row.uniqueReelId,
+            systemReelId: row.uniqueReelId,
+            reelNo: row.supplierReelNo || row.uniqueReelId,
             size: row.size,
             gsm: row.gsm,
             bf: row.bf,
@@ -4443,7 +4456,9 @@ function UniversalCsvImportModal({
             date: row.date,
             millName: row.millName || normClient,
             supplierReelNo: row.supplierReelNo,
-            reelNo: row.reelNo,
+            uniqueReelId: row.uniqueReelId,
+            systemReelId: row.uniqueReelId,
+            reelNo: row.supplierReelNo || row.uniqueReelId,
             size: row.size,
             gsm: row.gsm,
             bf: row.bf,
@@ -4764,7 +4779,8 @@ function UniversalCsvImportModal({
                         <tr style={{ background: '#1e293b', color: '#fff' }}>
                           <th style={{ padding: '6px 8px', textAlign: 'center' }}>#</th>
                           <th style={{ padding: '6px 8px' }}>{mode === 'own_stock' ? 'Party / Mill' : 'Client Name'}</th>
-                          <th style={{ padding: '6px 8px' }}>Reel No</th>
+                          <th style={{ padding: '6px 8px' }}>System ID</th>
+                          <th style={{ padding: '6px 8px' }}>Supplier Reel No</th>
                           <th style={{ padding: '6px 8px' }}>Size</th>
                           <th style={{ padding: '6px 8px' }}>GSM</th>
                           <th style={{ padding: '6px 8px' }}>BF</th>
@@ -4782,7 +4798,8 @@ function UniversalCsvImportModal({
                           <tr key={idx} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                             <td style={{ padding: '6px 8px', textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
                             <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>{row.millName || row.clientName || row.name || '-'}</td>
-                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{row.reelNo || '-'}</td>
+                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 800, color: '#2563eb' }}>{row.uniqueReelId || '-'}</td>
+                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{row.supplierReelNo || row.reelNo || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.size || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.gsm || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.bf || '-'}</td>
