@@ -2599,7 +2599,7 @@ function formatSystemReelId(r, allInventory = []) {
   return `RL-${String(cleanNum).padStart(5, '0')}`;
 }
 
-function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [] }) {
+function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [], addLog }) {
   const [printMode, setPrintMode] = useState('a4_grid'); // 'a4_grid' | 'single'
   const [copiesPerItem, setCopiesPerItem] = useState(1); // Default 1 sticker per reel
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
@@ -3024,17 +3024,30 @@ ${bodyContent}
 </html>`;
   };
 
+  const logPrintActivity = () => {
+    if (addLog) {
+      const count = effectiveItems.length;
+      const labelTypeStr = type === 'reel' ? 'reel' : (type === 'box' ? 'box / finished goods' : (type === 'client_reel' ? 'job work client reel' : 'inventory item'));
+      addLog(`Printed ${count} ${labelTypeStr} barcode label${count > 1 ? 's' : ''}`);
+    }
+  };
+
   const handlePrint = () => {
+    logPrintActivity();
     const html = getFullPrintHtml(false);
     printDocumentHtml(html);
   };
 
   const handlePrintTestPattern = () => {
+    if (addLog) {
+      addLog(`Printed NovaJet 12L calibration ruler test pattern sheet`);
+    }
     const html = getFullPrintHtml(true);
     printDocumentHtml(html);
   };
 
   const handleOpenDedicatedPrintWindow = () => {
+    logPrintActivity();
     const html = getFullPrintHtml(false);
     const win = window.open('', '_blank');
     if (win) {
@@ -4589,7 +4602,7 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
         })()}
 
       </div>
-      <PrintBarcodeLabelModal isOpen={!!printModalData} onClose={() => setPrintModalData(null)} type={printModalData?.type} data={printModalData?.data} />
+      <PrintBarcodeLabelModal isOpen={!!printModalData} onClose={() => setPrintModalData(null)} type={printModalData?.type} data={printModalData?.data} addLog={addLog} />
     </div>
   );
 }
@@ -6027,6 +6040,7 @@ export default function App() {
         type={printTagData?.type}
         data={printTagData?.data}
         allInventory={inventory}
+        addLog={addLog}
       />
       {voiceJobCardOrder && (
         <JobCardViewModal
@@ -8868,7 +8882,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               lowStockThreshold={lowStockThreshold}
               onPrintBarcode={(reel) => setPrintTagData({ type: 'reel', data: reel })}
             />
-            <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} />
+            <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} addLog={addLog} />
           </>
         ) : (
         <>
@@ -18586,6 +18600,7 @@ function ClientJobWorkPortalModal({
         type={printTagData?.type}
         data={printTagData?.data}
         allInventory={inventory}
+        addLog={addLog}
       />
     </div>
   );
@@ -22555,93 +22570,523 @@ function CompaniesView({ companies = [], addLog, getColRef, getDocRef }) {
 }
 
 // ==========================================
-// USERS VIEW
+// USERS VIEW (Password Visibility & Management)
 // ==========================================
 function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, currentUserId }) {
   const [form, setForm] = useState({ name: '', role: 'operator', password: '', companyId: '' });
+  const [showAddPassword, setShowAddPassword] = useState(false);
+  const [visiblePasswords, setVisiblePasswords] = useState({}); // { [userId]: boolean }
+  const [showAllPasswords, setShowAllPasswords] = useState(false);
+  const [copiedUserId, setCopiedUserId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Modal states for password change & user edit
+  const [changePasswordUser, setChangePasswordUser] = useState(null);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [showModalNewPassword, setShowModalNewPassword] = useState(true);
+
+  const [editingUser, setEditingUser] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', role: 'operator', password: '', companyId: '' });
+  const [showEditPassword, setShowEditPassword] = useState(false);
+
+  const togglePasswordVisibility = (userId) => {
+    setVisiblePasswords(prev => ({ ...prev, [userId]: !prev[userId] }));
+  };
+
+  const handleToggleShowAll = () => {
+    const nextState = !showAllPasswords;
+    setShowAllPasswords(nextState);
+    const updated = {};
+    users.forEach(u => { updated[u.id] = nextState; });
+    setVisiblePasswords(updated);
+  };
+
+  const handleCopyPassword = (u) => {
+    if (!u.password) return;
+    navigator.clipboard.writeText(u.password);
+    setCopiedUserId(u.id);
+    setTimeout(() => setCopiedUserId(null), 2000);
+  };
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
-    if (!form.name.trim() || !form.password.trim()) return alert("Name & password required");
-    await addDoc(getColRef('erp_users'), form);
-    if (addLog) addLog(`Created user: ${form.name} (${form.role})`);
+    if (!form.name.trim() || !form.password.trim()) return alert("Name & password are required");
+    await addDoc(getColRef('erp_users'), {
+      name: form.name.trim(),
+      role: form.role,
+      password: form.password.trim(),
+      companyId: form.companyId || '',
+      lastAccess: null
+    });
+    if (addLog) addLog(`Created user: ${form.name.trim()} (${form.role})`);
     setForm({ name: '', role: 'operator', password: '', companyId: '' });
   };
 
   const handleDeleteUser = async (id, name) => {
     if (id === currentUserId) return alert("You cannot delete your own account");
-    if (window.confirm(`Delete user ${name}?`)) {
+    if (window.confirm(`Delete user "${name}"? This action cannot be undone.`)) {
       await deleteDoc(getDocRef('erp_users', id));
       if (addLog) addLog(`Deleted user: ${name}`);
     }
   };
 
+  const openChangePasswordModal = (u) => {
+    setChangePasswordUser(u);
+    setNewPasswordInput('');
+    setShowModalNewPassword(true);
+  };
+
+  const handleSaveNewPassword = async (e) => {
+    e.preventDefault();
+    if (!changePasswordUser) return;
+    if (!newPasswordInput.trim()) return alert("Please enter a new password.");
+    
+    await updateDoc(getDocRef('erp_users', changePasswordUser.id), {
+      password: newPasswordInput.trim()
+    });
+
+    if (addLog) addLog(`Changed password for user: ${changePasswordUser.name}`);
+    alert(`Password for user "${changePasswordUser.name}" has been updated successfully!`);
+    setChangePasswordUser(null);
+    setNewPasswordInput('');
+  };
+
+  const openEditUserModal = (u) => {
+    setEditingUser(u);
+    setEditForm({
+      name: u.name || '',
+      role: u.role || 'operator',
+      password: u.password || '',
+      companyId: u.companyId || ''
+    });
+    setShowEditPassword(false);
+  };
+
+  const handleSaveEditUser = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    if (!editForm.name.trim() || !editForm.password.trim()) return alert("Name & password are required.");
+
+    await updateDoc(getDocRef('erp_users', editingUser.id), {
+      name: editForm.name.trim(),
+      role: editForm.role,
+      password: editForm.password.trim(),
+      companyId: editForm.companyId || ''
+    });
+
+    if (addLog) addLog(`Updated user profile: ${editForm.name.trim()} (${editForm.role})`);
+    alert(`User "${editForm.name}" updated successfully!`);
+    setEditingUser(null);
+  };
+
+  const generateRandomPassword = (setter) => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$';
+    let res = '';
+    for (let i = 0; i < 8; i++) res += chars.charAt(Math.floor(Math.random() * chars.length));
+    setter(res);
+  };
+
+  const filteredUsers = users.filter(u => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const uName = (u.name || '').toLowerCase();
+    const uRole = (u.role || '').toLowerCase();
+    const cName = (companies.find(c => c.id === u.companyId)?.name || '').toLowerCase();
+    return uName.includes(q) || uRole.includes(q) || cName.includes(q);
+  });
+
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', paddingBottom: 48 }}>
-      <div className="apex-page-header" style={{ marginBottom: 16 }}>
-        <div><h2 style={{ fontSize: 22, fontWeight: 800 }}>User Management</h2><p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Staff access &amp; role permissions</p></div>
+    <div style={{ maxWidth: 1000, margin: '0 auto', paddingBottom: 48 }}>
+      
+      {/* Page Header */}
+      <div className="apex-page-header" style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 style={{ fontSize: 22, fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>👥</span> User &amp; Access Management
+          </h2>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+            Manage staff accounts, assign unit permissions, view passwords &amp; update login credentials.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={handleToggleShowAll}
+            className="apex-btn apex-btn-secondary"
+            style={{ fontSize: 12, fontWeight: 800, padding: '7px 14px', display: 'flex', alignItems: 'center', gap: 6, background: showAllPasswords ? '#fef3c7' : '#fff', color: showAllPasswords ? '#92400e' : '#334155', border: showAllPasswords ? '1.5px solid #f59e0b' : '1px solid #cbd5e1' }}
+          >
+            {showAllPasswords ? '🔒 Hide All Passwords' : '👁️ Reveal All Passwords'}
+          </button>
+        </div>
       </div>
 
-      <div className="apex-card" style={{ padding: 20, marginBottom: 20, background: '#f8fafc', border: '1.5px solid #cbd5e1' }}>
-        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>➕ Add System User</h3>
-        <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Full Name *</label><input required className="apex-input" placeholder="Operator Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Role</label>
+      {/* Add User Card */}
+      <div className="apex-card" style={{ padding: 20, marginBottom: 24, background: '#f8fafc', border: '1.5px solid #cbd5e1', borderRadius: 12 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a' }}>
+          <span>➕</span> Add New System User
+        </h3>
+        <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Full Name *</label>
+            <input required className="apex-input" placeholder="e.g. Rahul Sharma" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Role &amp; Privilege</label>
             <select className="apex-select" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
-              <option value="operator">Operator (Production / Scan)</option>
-              <option value="manager">Plant Manager</option>
-              <option value="admin">Administrator (Full Access)</option>
+              <option value="operator">Operator (Production / WIP Scanner)</option>
+              <option value="manager">Plant Manager (Orders &amp; Dispatch)</option>
+              <option value="admin">Administrator (Full System Access)</option>
             </select>
           </div>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned Unit</label>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Assigned Factory Unit</label>
             <select className="apex-select" value={form.companyId} onChange={e => setForm({...form, companyId: e.target.value})}>
-              <option value="">All Units</option>
+              <option value="">All Units (Universal Access)</option>
               {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Password *</label><input required type="password" className="apex-input" placeholder="Password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} /></div>
-          <div style={{ gridColumn: 'span 4', display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-            <button type="submit" className="apex-btn apex-btn-primary" style={{ padding: '8px 24px', fontWeight: 800, background: '#2563eb' }}>➕ Create User</button>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Password *</label>
+              <button
+                type="button"
+                onClick={() => generateRandomPassword(p => setForm(f => ({ ...f, password: p })))}
+                style={{ background: 'none', border: 'none', fontSize: 10.5, color: '#2563eb', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+              >
+                🎲 Auto-Gen
+              </button>
+            </div>
+            <div style={{ position: 'relative' }}>
+              <input
+                required
+                type={showAddPassword ? 'text' : 'password'}
+                className="apex-input"
+                placeholder="Set user password"
+                value={form.password}
+                onChange={e => setForm({...form, password: e.target.value})}
+                style={{ paddingRight: 32 }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowAddPassword(!showAddPassword)}
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#64748b', padding: 0 }}
+                title={showAddPassword ? 'Hide password' : 'Show password'}
+              >
+                {showAddPassword ? '🔒' : '👁️'}
+              </button>
+            </div>
+          </div>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+            <button type="submit" className="apex-btn apex-btn-primary" style={{ padding: '8px 24px', fontWeight: 800, background: '#2563eb', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>➕</span> Register User
+            </button>
           </div>
         </form>
       </div>
 
-      <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 8 }}>
-        <table className="apex-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+      {/* Search & Filter Bar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, maxWidth: 360 }}>
+          <input
+            type="text"
+            className="apex-input"
+            placeholder="🔍 Search users by name, role or unit..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ fontSize: 12.5 }}
+          />
+        </div>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+          Showing <strong>{filteredUsers.length}</strong> user account{filteredUsers.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      {/* Users Directory Table */}
+      <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 10, overflowX: 'auto', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+        <table className="apex-table" style={{ width: '100%', minWidth: 780, borderCollapse: 'collapse', fontSize: 12.5 }}>
           <thead>
             <tr style={{ background: '#1e293b', color: '#fff' }}>
-              <th style={{ width: 40, textAlign: 'center', padding: 8 }}>#</th>
-              <th>User Name</th>
-              <th>Role</th>
-              <th>Assigned Unit</th>
-              <th style={{ textAlign: 'right', paddingRight: 14 }}>Actions</th>
+              <th style={{ width: 44, textAlign: 'center', padding: '10px 8px' }}>#</th>
+              <th style={{ padding: '10px 12px' }}>User Name</th>
+              <th style={{ padding: '10px 12px' }}>Role</th>
+              <th style={{ padding: '10px 12px' }}>Assigned Unit</th>
+              <th style={{ padding: '10px 12px', minWidth: 220 }}>🔑 Password (Login Secret)</th>
+              <th style={{ textAlign: 'right', padding: '10px 16px', minWidth: 160 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {users.map((u, idx) => {
-              const comp = companies.find(c => c.id === u.companyId)?.name || 'All Units';
-              return (
-                <tr key={u.id} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                  <td style={{ textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
-                  <td>
-                    <strong style={{ color: '#0f172a' }}>{u.name}</strong>
-                    {u.id === currentUserId && <span style={{ marginLeft: 6, fontSize: 10, background: '#e0f2fe', color: '#0369a1', padding: '1px 6px', borderRadius: 10, fontWeight: 800 }}>You</span>}
-                  </td>
-                  <td>
-                    <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10, background: u.role === 'admin' ? '#1e293b' : '#f1f5f9', color: u.role === 'admin' ? '#fff' : '#334155' }}>
-                      {u.role ? u.role.toUpperCase() : 'OPERATOR'}
-                    </span>
-                  </td>
-                  <td>{comp}</td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingRight: 14 }}>
-                    <button onClick={() => handleDeleteUser(u.id, u.name)} disabled={u.id === currentUserId} className="apex-btn apex-btn-sm" style={{ padding: '3px 6px', fontSize: 11, color: '#ef4444', background: '#fef2f2', opacity: u.id === currentUserId ? 0.3 : 1 }}>✕ Delete</button>
-                  </td>
-                </tr>
-              );
-            })}
+            {filteredUsers.length === 0 ? (
+              <tr>
+                <td colSpan="6" style={{ textAlign: 'center', padding: 32, color: '#94a3b8', fontStyle: 'italic' }}>
+                  No users found matching your search.
+                </td>
+              </tr>
+            ) : (
+              filteredUsers.map((u, idx) => {
+                const comp = companies.find(c => c.id === u.companyId)?.name || 'All Units';
+                const isPasswordVisible = !!visiblePasswords[u.id] || showAllPasswords;
+                const isCopied = copiedUserId === u.id;
+
+                return (
+                  <tr key={u.id} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                    <td style={{ textAlign: 'center', color: '#94a3b8', fontWeight: 700 }}>{idx + 1}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <strong style={{ color: '#0f172a', fontSize: 13.5 }}>{u.name}</strong>
+                      {u.id === currentUserId && (
+                        <span style={{ marginLeft: 8, fontSize: 10, background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: 10, fontWeight: 800 }}>
+                          Current Session
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        fontSize: 10.5,
+                        fontWeight: 800,
+                        padding: '3px 9px',
+                        borderRadius: 10,
+                        background: u.role === 'admin' ? '#1e293b' : (u.role === 'manager' ? '#0284c7' : '#f1f5f9'),
+                        color: u.role === 'admin' || u.role === 'manager' ? '#fff' : '#334155'
+                      }}>
+                        {u.role ? u.role.toUpperCase() : 'OPERATOR'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#475569', fontWeight: 600 }}>{comp}</td>
+                    
+                    {/* Password Display Column with View & Copy */}
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {isPasswordVisible ? (
+                          <span style={{
+                            fontFamily: 'monospace',
+                            fontWeight: 800,
+                            background: '#fef3c7',
+                            color: '#92400e',
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            fontSize: 13,
+                            border: '1px solid #fde68a',
+                            letterSpacing: '0.04em'
+                          }}>
+                            {u.password || '(not set)'}
+                          </span>
+                        ) : (
+                          <span style={{ fontFamily: 'monospace', color: '#94a3b8', fontSize: 14, letterSpacing: '0.15em' }}>
+                            ••••••••
+                          </span>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility(u.id)}
+                          className="apex-btn apex-btn-secondary apex-btn-sm"
+                          style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700 }}
+                          title={isPasswordVisible ? 'Hide password' : 'View password'}
+                        >
+                          {isPasswordVisible ? '🔒 Hide' : '👁️ View'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCopyPassword(u)}
+                          className="apex-btn apex-btn-secondary apex-btn-sm"
+                          style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700, color: isCopied ? '#16a34a' : '#475569' }}
+                          title="Copy password to clipboard"
+                        >
+                          {isCopied ? '✓ Copied' : '📋 Copy'}
+                        </button>
+                      </div>
+                    </td>
+
+                    {/* Actions Column */}
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap', padding: '10px 16px' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          onClick={() => openChangePasswordModal(u)}
+                          className="apex-btn apex-btn-secondary apex-btn-sm"
+                          style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700, color: '#0284c7', background: '#f0f9ff', borderColor: '#bae6fd' }}
+                          title="Change user password"
+                        >
+                          🔑 Password
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openEditUserModal(u)}
+                          className="apex-btn apex-btn-secondary apex-btn-sm"
+                          style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700 }}
+                          title="Edit user details"
+                        >
+                          ✏️ Edit
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUser(u.id, u.name)}
+                          disabled={u.id === currentUserId}
+                          className="apex-btn apex-btn-sm"
+                          style={{ padding: '4px 8px', fontSize: 11.5, color: '#ef4444', background: '#fef2f2', border: '1px solid #fecaca', opacity: u.id === currentUserId ? 0.3 : 1 }}
+                          title={u.id === currentUserId ? 'You cannot delete your own account' : 'Delete user'}
+                        >
+                          ✕ Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
+
+      {/* Dedicated Change Password Modal */}
+      {changePasswordUser && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 22 }}>🔑</span>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: '#0f172a' }}>Change Password</h3>
+              </div>
+              <button onClick={() => setChangePasswordUser(null)} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSaveNewPassword}>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: '#64748b', marginBottom: 4 }}>User</label>
+                <div style={{ padding: '8px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0', fontWeight: 800, color: '#0f172a', fontSize: 13.5 }}>
+                  {changePasswordUser.name} <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>({changePasswordUser.role ? changePasswordUser.role.toUpperCase() : 'OPERATOR'})</span>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: '#64748b', marginBottom: 4 }}>Current Password</label>
+                <div style={{ padding: '6px 12px', background: '#fef3c7', borderRadius: 8, border: '1px solid #fde68a', fontFamily: 'monospace', fontWeight: 800, color: '#92400e', fontSize: 13 }}>
+                  {changePasswordUser.password || '(not set)'}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 700, color: '#0f172a' }}>New Password *</label>
+                  <button
+                    type="button"
+                    onClick={() => generateRandomPassword(setNewPasswordInput)}
+                    style={{ background: 'none', border: 'none', fontSize: 11, color: '#2563eb', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                  >
+                    🎲 Auto-Gen
+                  </button>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    required
+                    type={showModalNewPassword ? 'text' : 'password'}
+                    className="apex-input"
+                    placeholder="Enter new password"
+                    value={newPasswordInput}
+                    onChange={e => setNewPasswordInput(e.target.value)}
+                    style={{ paddingRight: 36, fontSize: 13, fontWeight: 700 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowModalNewPassword(!showModalNewPassword)}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#64748b' }}
+                  >
+                    {showModalNewPassword ? '🔒' : '👁️'}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setChangePasswordUser(null)} className="apex-btn apex-btn-secondary" style={{ fontWeight: 700 }}>
+                  Cancel
+                </button>
+                <button type="submit" className="apex-btn apex-btn-primary" style={{ background: '#2563eb', fontWeight: 800 }}>
+                  Save Password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Details Modal */}
+      {editingUser && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, padding: 24, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 22 }}>✏️</span>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: '#0f172a' }}>Edit User Account</h3>
+              </div>
+              <button onClick={() => setEditingUser(null)} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSaveEditUser} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Full Name *</label>
+                <input required className="apex-input" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Role</label>
+                <select className="apex-select" value={editForm.role} onChange={e => setEditForm({...editForm, role: e.target.value})}>
+                  <option value="operator">Operator (Production / Scan)</option>
+                  <option value="manager">Plant Manager</option>
+                  <option value="admin">Administrator (Full Access)</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Assigned Factory Unit</label>
+                <select className="apex-select" value={editForm.companyId} onChange={e => setEditForm({...editForm, companyId: e.target.value})}>
+                  <option value="">All Units</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)' }}>Password *</label>
+                  <button
+                    type="button"
+                    onClick={() => generateRandomPassword(p => setEditForm(f => ({ ...f, password: p })))}
+                    style={{ background: 'none', border: 'none', fontSize: 10.5, color: '#2563eb', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                  >
+                    🎲 Auto-Gen
+                  </button>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    required
+                    type={showEditPassword ? 'text' : 'password'}
+                    className="apex-input"
+                    value={editForm.password}
+                    onChange={e => setEditForm({...editForm, password: e.target.value})}
+                    style={{ paddingRight: 36 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#64748b' }}
+                  >
+                    {showEditPassword ? '🔒' : '👁️'}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
+                <button type="button" onClick={() => setEditingUser(null)} className="apex-btn apex-btn-secondary" style={{ fontWeight: 700 }}>
+                  Cancel
+                </button>
+                <button type="submit" className="apex-btn apex-btn-primary" style={{ background: '#2563eb', fontWeight: 800 }}>
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
