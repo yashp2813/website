@@ -4079,6 +4079,9 @@ function UniversalCsvImportModal({
   const [progressCount, setProgressCount] = useState(0);
   const [importSummary, setImportSummary] = useState(null);
   const [targetUnitId, setTargetUnitId] = useState(activeUnitId || (companies[0]?.id || ''));
+  const [selectedJobWorkClient, setSelectedJobWorkClient] = useState('__auto__');
+  const [customClientName, setCustomClientName] = useState('');
+  const rawRowsRef = useRef([]);
 
   useEffect(() => {
     if (isOpen) {
@@ -4089,6 +4092,9 @@ function UniversalCsvImportModal({
       setPasteText('');
       setImportSummary(null);
       setProgressCount(0);
+      setSelectedJobWorkClient('__auto__');
+      setCustomClientName('');
+      rawRowsRef.current = [];
       if (activeUnitId) setTargetUnitId(activeUnitId);
     }
   }, [isOpen, defaultMode, activeUnitId]);
@@ -4229,7 +4235,7 @@ function UniversalCsvImportModal({
   };
 
   // Convert raw rows to normalized ERP objects
-  const processRawRows = (rawRows, currentMode) => {
+  const processRawRows = (rawRows, currentMode, clientOverride = selectedJobWorkClient, customName = customClientName) => {
     const existingMax = (inventory || []).reduce((max, cur) => {
       const fid = formatSystemReelId(cur, inventory);
       const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
@@ -4281,8 +4287,26 @@ function UniversalCsvImportModal({
           tallySynced: false
         };
       } else {
-        // Job Work Mode: check if client master or client paper reel
-        const clientName = findVal(r, 'clientname', 'client', 'customer', 'customername', 'partyname', 'jobworkparty', 'party', 'companyname') || 'Job Work Client';
+        // Job Work Mode:
+        let clientName = '';
+        if (clientOverride && clientOverride !== '__auto__') {
+          if (clientOverride === '__custom__') {
+            clientName = (customName || '').trim() || 'Job Work Client';
+          } else {
+            const foundCust = customers.find(c => c.id === clientOverride || c.name === clientOverride);
+            clientName = foundCust ? foundCust.name : clientOverride;
+          }
+        } else {
+          // Auto-detect from CSV
+          const explicitClient = findVal(r, 'clientname', 'client', 'customer', 'customername', 'jobworkparty', 'partyname', 'party');
+          clientName = explicitClient || 'Job Work Client';
+        }
+
+        // Mill Name: if an explicit mill column exists, use it. Otherwise, if party column exists, use it.
+        const explicitMill = findVal(r, 'millname', 'mill', 'papermill', 'supplier', 'vendor');
+        const partyVal = findVal(r, 'partyname', 'party');
+        const millName = explicitMill || partyVal || clientName;
+
         const contactPerson = findVal(r, 'contactperson', 'contact', 'person', 'owner');
         const phone = findVal(r, 'phone', 'mobile', 'contactno', 'tel');
         const gstin = findVal(r, 'gstin', 'gstno', 'gstnumber', 'gst');
@@ -4299,7 +4323,7 @@ function UniversalCsvImportModal({
             type: 'job_work_reel',
             clientName,
             date,
-            millName: findVal(r, 'millname', 'mill') || clientName,
+            millName: millName,
             supplierReelNo,
             uniqueReelId,
             systemReelId: uniqueReelId,
@@ -4352,6 +4376,7 @@ function UniversalCsvImportModal({
         return;
       }
       setRawHeaders(headers);
+      rawRowsRef.current = rows;
       const processed = processRawRows(rows, mode);
       setParsedRows(processed);
     };
@@ -4363,6 +4388,7 @@ function UniversalCsvImportModal({
     const { headers, rows } = parseCSVText(pasteText);
     if (rows.length === 0) return alert("Could not parse rows. Ensure columns are separated by tabs or commas.");
     setRawHeaders(headers);
+    rawRowsRef.current = rows;
     const processed = processRawRows(rows, mode);
     setParsedRows(processed);
     setFileName('Pasted Data');
@@ -4370,12 +4396,8 @@ function UniversalCsvImportModal({
 
   const handleModeChange = (newMode) => {
     setMode(newMode);
-    if (parsedRows.length > 0 && (inputTab === 'paste' ? pasteText : true)) {
-      // Re-process with new mode
-      if (inputTab === 'paste' && pasteText) {
-        const { rows } = parseCSVText(pasteText);
-        setParsedRows(processRawRows(rows, newMode));
-      }
+    if (rawRowsRef.current && rawRowsRef.current.length > 0) {
+      setParsedRows(processRawRows(rawRowsRef.current, newMode));
     }
   };
 
@@ -4661,6 +4683,53 @@ function UniversalCsvImportModal({
                 </select>
               </div>
 
+              {/* Job Work Client Assignment */}
+              {mode === 'job_work_stock' && (
+                <div style={{ background: '#f5f3ff', border: '1.5px solid #ddd6fe', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 800, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '.05em' }}>🤝 Assign Job Work Client *</label>
+                    <p style={{ fontSize: 11, color: '#7c3aed', margin: 0 }}>Select the client who owns this paper (or auto-detect from CSV columns)</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select
+                      value={selectedJobWorkClient}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setSelectedJobWorkClient(val);
+                        if (rawRowsRef.current && rawRowsRef.current.length > 0) {
+                          setParsedRows(processRawRows(rawRowsRef.current, mode, val, customClientName));
+                        }
+                      }}
+                      className="apex-select"
+                      style={{ minWidth: 220, fontSize: 12, fontWeight: 700, borderColor: '#c4b5fd' }}
+                    >
+                      <option value="__auto__">✨ Auto-detect from CSV 'Client Name'</option>
+                      {customers.map(c => (
+                        <option key={c.id} value={c.name}>🤝 {c.name}</option>
+                      ))}
+                      <option value="__custom__">➕ Type Client Name...</option>
+                    </select>
+
+                    {selectedJobWorkClient === '__custom__' && (
+                      <input
+                        type="text"
+                        placeholder="Enter Client Name (e.g. Godavari)"
+                        className="apex-input"
+                        style={{ width: 190, fontSize: 12, padding: '6px 10px', fontWeight: 700, borderColor: '#8b5cf6' }}
+                        value={customClientName}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setCustomClientName(val);
+                          if (rawRowsRef.current && rawRowsRef.current.length > 0) {
+                            setParsedRows(processRawRows(rawRowsRef.current, mode, '__custom__', val));
+                          }
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* File Upload / Paste Tabs */}
               <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
                 <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
@@ -4778,7 +4847,14 @@ function UniversalCsvImportModal({
                       <thead>
                         <tr style={{ background: '#1e293b', color: '#fff' }}>
                           <th style={{ padding: '6px 8px', textAlign: 'center' }}>#</th>
-                          <th style={{ padding: '6px 8px' }}>{mode === 'own_stock' ? 'Party / Mill' : 'Client Name'}</th>
+                          {mode === 'job_work_stock' ? (
+                            <>
+                              <th style={{ padding: '6px 8px' }}>Job Work Client</th>
+                              <th style={{ padding: '6px 8px' }}>Mill / Supplier</th>
+                            </>
+                          ) : (
+                            <th style={{ padding: '6px 8px' }}>Party / Mill</th>
+                          )}
                           <th style={{ padding: '6px 8px' }}>System ID</th>
                           <th style={{ padding: '6px 8px' }}>Supplier Reel No</th>
                           <th style={{ padding: '6px 8px' }}>Size</th>
@@ -4788,7 +4864,7 @@ function UniversalCsvImportModal({
                           <th style={{ padding: '6px 8px', textAlign: 'right' }}>Received (KG)</th>
                           <th style={{ padding: '6px 8px', textAlign: 'right' }}>Issued (KG)</th>
                           <th style={{ padding: '6px 8px', textAlign: 'right' }}>Balance (KG)</th>
-                          <th style={{ padding: '6px 8px' }}>Rate/Kg</th>
+                          {mode === 'own_stock' && <th style={{ padding: '6px 8px' }}>Rate/Kg</th>}
                           <th style={{ padding: '6px 8px' }}>Invoice No</th>
                           <th style={{ padding: '6px 8px' }}>Date</th>
                         </tr>
@@ -4797,7 +4873,20 @@ function UniversalCsvImportModal({
                         {parsedRows.slice(0, 10).map((row, idx) => (
                           <tr key={idx} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                             <td style={{ padding: '6px 8px', textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
-                            <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>{row.millName || row.clientName || row.name || '-'}</td>
+                            {mode === 'job_work_stock' ? (
+                              <>
+                                <td style={{ padding: '6px 8px', fontWeight: 800, color: '#6d28d9' }}>
+                                  🤝 {row.clientName || 'Job Work Client'}
+                                </td>
+                                <td style={{ padding: '6px 8px', fontWeight: 600, color: '#0f172a' }}>
+                                  {row.millName || '-'}
+                                </td>
+                              </>
+                            ) : (
+                              <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>
+                                {row.millName || row.name || '-'}
+                              </td>
+                            )}
                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 800, color: '#2563eb' }}>{row.uniqueReelId || '-'}</td>
                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{row.supplierReelNo || row.reelNo || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.size || '-'}</td>
@@ -4809,7 +4898,7 @@ function UniversalCsvImportModal({
                             <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: row.balanceQty > 0 ? '#16a34a' : '#64748b' }}>
                               {row.balanceQty > 0 ? `${row.balanceQty.toLocaleString()} kg` : <span style={{ color: '#ef4444', fontSize: 10, fontWeight: 700 }}>CONSUMED</span>}
                             </td>
-                            <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{row.ratePerKg ? `₹${row.ratePerKg}` : '-'}</td>
+                            {mode === 'own_stock' && <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{row.ratePerKg ? `₹${row.ratePerKg}` : '-'}</td>}
                             <td style={{ padding: '6px 8px', fontSize: 10.5, color: '#64748b' }}>{row.invoiceNo || row.code || '-'}</td>
                             <td style={{ padding: '6px 8px', fontSize: 10.5, color: '#64748b' }}>{row.date || '-'}</td>
                           </tr>
