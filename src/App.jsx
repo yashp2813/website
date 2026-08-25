@@ -6097,7 +6097,7 @@ export default function App() {
         {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} />}
         {activeTab === 'companies'       && canAccess(currentErpUser.role,'companies')       && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
-        {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} />}
+        {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} currentUserRole={currentErpUser?.role} currentUser={currentErpUser} />}
         {activeTab === 'logs'            && canAccess(currentErpUser.role,'logs')            && <LogsView logs={logs} currentUser={currentErpUser} orders={orders} inventory={inventory} />}
       </main>
     </div>
@@ -22570,9 +22570,11 @@ function CompaniesView({ companies = [], addLog, getColRef, getDocRef }) {
 }
 
 // ==========================================
-// USERS VIEW (Password Visibility & Management)
+// USERS VIEW (Admin-Only Password & Access Management)
 // ==========================================
-function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, currentUserId }) {
+function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, currentUserId, currentUserRole, currentUser }) {
+  const isAdmin = (currentUserRole === 'admin' || currentUser?.role === 'admin');
+
   const [form, setForm] = useState({ name: '', role: 'operator', password: '', companyId: '' });
   const [showAddPassword, setShowAddPassword] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({}); // { [userId]: boolean }
@@ -22590,10 +22592,12 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   const [showEditPassword, setShowEditPassword] = useState(false);
 
   const togglePasswordVisibility = (userId) => {
+    if (!isAdmin && userId !== currentUserId) return;
     setVisiblePasswords(prev => ({ ...prev, [userId]: !prev[userId] }));
   };
 
   const handleToggleShowAll = () => {
+    if (!isAdmin) return;
     const nextState = !showAllPasswords;
     setShowAllPasswords(nextState);
     const updated = {};
@@ -22602,6 +22606,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   };
 
   const handleCopyPassword = (u) => {
+    if (!isAdmin && u.id !== currentUserId) return;
     if (!u.password) return;
     navigator.clipboard.writeText(u.password);
     setCopiedUserId(u.id);
@@ -22610,6 +22615,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
+    if (!isAdmin) return alert("Unauthorized: Only administrators can add new users.");
     if (!form.name.trim() || !form.password.trim()) return alert("Name & password are required");
     await addDoc(getColRef('erp_users'), {
       name: form.name.trim(),
@@ -22623,6 +22629,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   };
 
   const handleDeleteUser = async (id, name) => {
+    if (!isAdmin) return alert("Unauthorized: Only administrators can delete users.");
     if (id === currentUserId) return alert("You cannot delete your own account");
     if (window.confirm(`Delete user "${name}"? This action cannot be undone.`)) {
       await deleteDoc(getDocRef('erp_users', id));
@@ -22631,6 +22638,9 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   };
 
   const openChangePasswordModal = (u) => {
+    if (!isAdmin && u.id !== currentUserId) {
+      return alert("Unauthorized: Only administrators can view or change passwords for other users.");
+    }
     setChangePasswordUser(u);
     setNewPasswordInput('');
     setShowModalNewPassword(true);
@@ -22639,6 +22649,9 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   const handleSaveNewPassword = async (e) => {
     e.preventDefault();
     if (!changePasswordUser) return;
+    if (!isAdmin && changePasswordUser.id !== currentUserId) {
+      return alert("Unauthorized: Only administrators can modify passwords for other users.");
+    }
     if (!newPasswordInput.trim()) return alert("Please enter a new password.");
     
     await updateDoc(getDocRef('erp_users', changePasswordUser.id), {
@@ -22652,6 +22665,9 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   };
 
   const openEditUserModal = (u) => {
+    if (!isAdmin && u.id !== currentUserId) {
+      return alert("Unauthorized: Only administrators can edit other user profiles.");
+    }
     setEditingUser(u);
     setEditForm({
       name: u.name || '',
@@ -22665,13 +22681,16 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
   const handleSaveEditUser = async (e) => {
     e.preventDefault();
     if (!editingUser) return;
+    if (!isAdmin && editingUser.id !== currentUserId) {
+      return alert("Unauthorized: Only administrators can edit other users.");
+    }
     if (!editForm.name.trim() || !editForm.password.trim()) return alert("Name & password are required.");
 
     await updateDoc(getDocRef('erp_users', editingUser.id), {
       name: editForm.name.trim(),
-      role: editForm.role,
+      role: isAdmin ? editForm.role : (editingUser.role || 'operator'),
       password: editForm.password.trim(),
-      companyId: editForm.companyId || ''
+      companyId: isAdmin ? (editForm.companyId || '') : (editingUser.companyId || '')
     });
 
     if (addLog) addLog(`Updated user profile: ${editForm.name.trim()} (${editForm.role})`);
@@ -22705,85 +22724,106 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
             <span>👥</span> User &amp; Access Management
           </h2>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-            Manage staff accounts, assign unit permissions, view passwords &amp; update login credentials.
+            Manage staff accounts, assign factory units, and control authentication credentials.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button
-            type="button"
-            onClick={handleToggleShowAll}
-            className="apex-btn apex-btn-secondary"
-            style={{ fontSize: 12, fontWeight: 800, padding: '7px 14px', display: 'flex', alignItems: 'center', gap: 6, background: showAllPasswords ? '#fef3c7' : '#fff', color: showAllPasswords ? '#92400e' : '#334155', border: showAllPasswords ? '1.5px solid #f59e0b' : '1px solid #cbd5e1' }}
-          >
-            {showAllPasswords ? '🔒 Hide All Passwords' : '👁️ Reveal All Passwords'}
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={handleToggleShowAll}
+              className="apex-btn apex-btn-secondary"
+              style={{ fontSize: 12, fontWeight: 800, padding: '7px 14px', display: 'flex', alignItems: 'center', gap: 6, background: showAllPasswords ? '#fef3c7' : '#fff', color: showAllPasswords ? '#92400e' : '#334155', border: showAllPasswords ? '1.5px solid #f59e0b' : '1px solid #cbd5e1' }}
+            >
+              {showAllPasswords ? '🔒 Hide All Passwords' : '👁️ Reveal All Passwords (Admin)'}
+            </button>
+          ) : (
+            <span style={{ fontSize: 11, background: '#f1f5f9', color: '#64748b', padding: '6px 12px', borderRadius: 8, fontWeight: 700, border: '1px solid #cbd5e1' }}>
+              🔒 Passwords Admin-Protected
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Add User Card */}
-      <div className="apex-card" style={{ padding: 20, marginBottom: 24, background: '#f8fafc', border: '1.5px solid #cbd5e1', borderRadius: 12 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a' }}>
-          <span>➕</span> Add New System User
-        </h3>
-        <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Full Name *</label>
-            <input required className="apex-input" placeholder="e.g. Rahul Sharma" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Role &amp; Privilege</label>
-            <select className="apex-select" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
-              <option value="operator">Operator (Production / WIP Scanner)</option>
-              <option value="manager">Plant Manager (Orders &amp; Dispatch)</option>
-              <option value="admin">Administrator (Full System Access)</option>
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Assigned Factory Unit</label>
-            <select className="apex-select" value={form.companyId} onChange={e => setForm({...form, companyId: e.target.value})}>
-              <option value="">All Units (Universal Access)</option>
-              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Password *</label>
-              <button
-                type="button"
-                onClick={() => generateRandomPassword(p => setForm(f => ({ ...f, password: p })))}
-                style={{ background: 'none', border: 'none', fontSize: 10.5, color: '#2563eb', fontWeight: 800, cursor: 'pointer', padding: 0 }}
-              >
-                🎲 Auto-Gen
+      {/* Admin Privilege Banner */}
+      {isAdmin ? (
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#166534' }}>
+          <span>🛡️</span>
+          <span><strong>Administrator Privilege:</strong> You can view, copy, and change passwords for all user accounts across all units.</span>
+        </div>
+      ) : (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#991b1b' }}>
+          <span>🔒</span>
+          <span><strong>Access Restricted:</strong> Passwords for other user accounts can only be accessed and modified by Administrators.</span>
+        </div>
+      )}
+
+      {/* Add User Card (Admin Only) */}
+      {isAdmin && (
+        <div className="apex-card" style={{ padding: 20, marginBottom: 24, background: '#f8fafc', border: '1.5px solid #cbd5e1', borderRadius: 12 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a' }}>
+            <span>➕</span> Add New System User
+          </h3>
+          <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Full Name *</label>
+              <input required className="apex-input" placeholder="e.g. Rahul Sharma" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Role &amp; Privilege</label>
+              <select className="apex-select" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
+                <option value="operator">Operator (Production / WIP Scanner)</option>
+                <option value="manager">Plant Manager (Orders &amp; Dispatch)</option>
+                <option value="admin">Administrator (Full System Access)</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Assigned Factory Unit</label>
+              <select className="apex-select" value={form.companyId} onChange={e => setForm({...form, companyId: e.target.value})}>
+                <option value="">All Units (Universal Access)</option>
+                {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Password *</label>
+                <button
+                  type="button"
+                  onClick={() => generateRandomPassword(p => setForm(f => ({ ...f, password: p })))}
+                  style={{ background: 'none', border: 'none', fontSize: 10.5, color: '#2563eb', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                >
+                  🎲 Auto-Gen
+                </button>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input
+                  required
+                  type={showAddPassword ? 'text' : 'password'}
+                  className="apex-input"
+                  placeholder="Set user password"
+                  value={form.password}
+                  onChange={e => setForm({...form, password: e.target.value})}
+                  style={{ paddingRight: 32 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAddPassword(!showAddPassword)}
+                  style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#64748b', padding: 0 }}
+                  title={showAddPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showAddPassword ? '🔒' : '👁️'}
+                </button>
+              </div>
+            </div>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button type="submit" className="apex-btn apex-btn-primary" style={{ padding: '8px 24px', fontWeight: 800, background: '#2563eb', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>➕</span> Register User
               </button>
             </div>
-            <div style={{ position: 'relative' }}>
-              <input
-                required
-                type={showAddPassword ? 'text' : 'password'}
-                className="apex-input"
-                placeholder="Set user password"
-                value={form.password}
-                onChange={e => setForm({...form, password: e.target.value})}
-                style={{ paddingRight: 32 }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowAddPassword(!showAddPassword)}
-                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#64748b', padding: 0 }}
-                title={showAddPassword ? 'Hide password' : 'Show password'}
-              >
-                {showAddPassword ? '🔒' : '👁️'}
-              </button>
-            </div>
-          </div>
-          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-            <button type="submit" className="apex-btn apex-btn-primary" style={{ padding: '8px 24px', fontWeight: 800, background: '#2563eb', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>➕</span> Register User
-            </button>
-          </div>
-        </form>
-      </div>
+          </form>
+        </div>
+      )}
 
       {/* Search & Filter Bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
@@ -22811,7 +22851,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
               <th style={{ padding: '10px 12px' }}>User Name</th>
               <th style={{ padding: '10px 12px' }}>Role</th>
               <th style={{ padding: '10px 12px' }}>Assigned Unit</th>
-              <th style={{ padding: '10px 12px', minWidth: 220 }}>🔑 Password (Login Secret)</th>
+              <th style={{ padding: '10px 12px', minWidth: 220 }}>🔑 Password (Admin Access)</th>
               <th style={{ textAlign: 'right', padding: '10px 16px', minWidth: 160 }}>Actions</th>
             </tr>
           </thead>
@@ -22825,7 +22865,8 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
             ) : (
               filteredUsers.map((u, idx) => {
                 const comp = companies.find(c => c.id === u.companyId)?.name || 'All Units';
-                const isPasswordVisible = !!visiblePasswords[u.id] || showAllPasswords;
+                const canAccessPassword = isAdmin || (u.id === currentUserId);
+                const isPasswordVisible = canAccessPassword && (!!visiblePasswords[u.id] || (isAdmin && showAllPasswords));
                 const isCopied = copiedUserId === u.id;
 
                 return (
@@ -22853,84 +22894,96 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
                     </td>
                     <td style={{ padding: '10px 12px', color: '#475569', fontWeight: 600 }}>{comp}</td>
                     
-                    {/* Password Display Column with View & Copy */}
+                    {/* Password Display Column with Admin-Only Access */}
                     <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {isPasswordVisible ? (
-                          <span style={{
-                            fontFamily: 'monospace',
-                            fontWeight: 800,
-                            background: '#fef3c7',
-                            color: '#92400e',
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            fontSize: 13,
-                            border: '1px solid #fde68a',
-                            letterSpacing: '0.04em'
-                          }}>
-                            {u.password || '(not set)'}
-                          </span>
-                        ) : (
-                          <span style={{ fontFamily: 'monospace', color: '#94a3b8', fontSize: 14, letterSpacing: '0.15em' }}>
-                            ••••••••
-                          </span>
-                        )}
+                      {canAccessPassword ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {isPasswordVisible ? (
+                            <span style={{
+                              fontFamily: 'monospace',
+                              fontWeight: 800,
+                              background: '#fef3c7',
+                              color: '#92400e',
+                              padding: '3px 8px',
+                              borderRadius: 6,
+                              fontSize: 13,
+                              border: '1px solid #fde68a',
+                              letterSpacing: '0.04em'
+                            }}>
+                              {u.password || '(not set)'}
+                            </span>
+                          ) : (
+                            <span style={{ fontFamily: 'monospace', color: '#94a3b8', fontSize: 14, letterSpacing: '0.15em' }}>
+                              ••••••••
+                            </span>
+                          )}
 
-                        <button
-                          type="button"
-                          onClick={() => togglePasswordVisibility(u.id)}
-                          className="apex-btn apex-btn-secondary apex-btn-sm"
-                          style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700 }}
-                          title={isPasswordVisible ? 'Hide password' : 'View password'}
-                        >
-                          {isPasswordVisible ? '🔒 Hide' : '👁️ View'}
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePasswordVisibility(u.id)}
+                            className="apex-btn apex-btn-secondary apex-btn-sm"
+                            style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700 }}
+                            title={isPasswordVisible ? 'Hide password' : 'View password'}
+                          >
+                            {isPasswordVisible ? '🔒 Hide' : '👁️ View'}
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() => handleCopyPassword(u)}
-                          className="apex-btn apex-btn-secondary apex-btn-sm"
-                          style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700, color: isCopied ? '#16a34a' : '#475569' }}
-                          title="Copy password to clipboard"
-                        >
-                          {isCopied ? '✓ Copied' : '📋 Copy'}
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPassword(u)}
+                            className="apex-btn apex-btn-secondary apex-btn-sm"
+                            style={{ padding: '2px 6px', fontSize: 11, fontWeight: 700, color: isCopied ? '#16a34a' : '#475569' }}
+                            title="Copy password to clipboard"
+                          >
+                            {isCopied ? '✓ Copied' : '📋 Copy'}
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ color: '#94a3b8', fontSize: 11, fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span>🔒</span> Admin Access Only
+                        </span>
+                      )}
                     </td>
 
                     {/* Actions Column */}
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap', padding: '10px 16px' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          onClick={() => openChangePasswordModal(u)}
-                          className="apex-btn apex-btn-secondary apex-btn-sm"
-                          style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700, color: '#0284c7', background: '#f0f9ff', borderColor: '#bae6fd' }}
-                          title="Change user password"
-                        >
-                          🔑 Password
-                        </button>
+                        {(isAdmin || u.id === currentUserId) && (
+                          <button
+                            type="button"
+                            onClick={() => openChangePasswordModal(u)}
+                            className="apex-btn apex-btn-secondary apex-btn-sm"
+                            style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700, color: '#0284c7', background: '#f0f9ff', borderColor: '#bae6fd' }}
+                            title="Change password"
+                          >
+                            🔑 Password
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() => openEditUserModal(u)}
-                          className="apex-btn apex-btn-secondary apex-btn-sm"
-                          style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700 }}
-                          title="Edit user details"
-                        >
-                          ✏️ Edit
-                        </button>
+                        {(isAdmin || u.id === currentUserId) && (
+                          <button
+                            type="button"
+                            onClick={() => openEditUserModal(u)}
+                            className="apex-btn apex-btn-secondary apex-btn-sm"
+                            style={{ padding: '4px 8px', fontSize: 11.5, fontWeight: 700 }}
+                            title="Edit user details"
+                          >
+                            ✏️ Edit
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteUser(u.id, u.name)}
-                          disabled={u.id === currentUserId}
-                          className="apex-btn apex-btn-sm"
-                          style={{ padding: '4px 8px', fontSize: 11.5, color: '#ef4444', background: '#fef2f2', border: '1px solid #fecaca', opacity: u.id === currentUserId ? 0.3 : 1 }}
-                          title={u.id === currentUserId ? 'You cannot delete your own account' : 'Delete user'}
-                        >
-                          ✕ Delete
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUser(u.id, u.name)}
+                            disabled={u.id === currentUserId}
+                            className="apex-btn apex-btn-sm"
+                            style={{ padding: '4px 8px', fontSize: 11.5, color: '#ef4444', background: '#fef2f2', border: '1px solid #fecaca', opacity: u.id === currentUserId ? 0.3 : 1 }}
+                            title={u.id === currentUserId ? 'You cannot delete your own account' : 'Delete user'}
+                          >
+                            ✕ Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -23031,7 +23084,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Role</label>
-                <select className="apex-select" value={editForm.role} onChange={e => setEditForm({...editForm, role: e.target.value})}>
+                <select className="apex-select" value={editForm.role} onChange={e => setEditForm({...editForm, role: e.target.value})} disabled={!isAdmin}>
                   <option value="operator">Operator (Production / Scan)</option>
                   <option value="manager">Plant Manager</option>
                   <option value="admin">Administrator (Full Access)</option>
@@ -23039,7 +23092,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Assigned Factory Unit</label>
-                <select className="apex-select" value={editForm.companyId} onChange={e => setEditForm({...editForm, companyId: e.target.value})}>
+                <select className="apex-select" value={editForm.companyId} onChange={e => setEditForm({...editForm, companyId: e.target.value})} disabled={!isAdmin}>
                   <option value="">All Units</option>
                   {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
