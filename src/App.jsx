@@ -7060,7 +7060,7 @@ export default function App() {
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'own_stock' })} />}
         {activeTab === 'items'           && canAccess(currentErpUser.role,'items')           && <ItemsView items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} costings={costings} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
-        {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} />}
+        {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} dailyReports={dailyReports} addDoc={addDoc} updateDoc={updateDoc} deleteDoc={deleteDoc} />}
         {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'job_work_stock' })} />}
         {activeTab === 'companies'       && canAccess(currentErpUser.role,'companies')       && <CompaniesView companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} />}
         {activeTab === 'users'           && canAccess(currentErpUser.role,'users')           && <UsersView users={erpUsers} companies={companies} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUserId={currentErpUser.id} currentUserRole={currentErpUser?.role} currentUser={currentErpUser} />}
@@ -24158,7 +24158,7 @@ function UsersView({ users = [], companies = [], addLog, getColRef, getDocRef, c
 // ==========================================
 // DAILY EXECUTIVE PRODUCTION/DISPATCH PLAN/CONSUMPTION REPORT
 // ==========================================
-function ReportsView({ inventory = [], orders = [], production = [], wipStages = [], wastageLogs = [], companies = [], customers = [], vendors = [], purchaseOrders = [], items = [], transactions = [], activeUnitId, addLog, currentUser, getColRef, getDocRef }) {
+function ReportsView({ inventory = [], orders = [], production = [], wipStages = [], wastageLogs = [], companies = [], customers = [], vendors = [], purchaseOrders = [], items = [], transactions = [], activeUnitId, addLog, currentUser, getColRef, getDocRef, dailyReports = [], addDoc, updateDoc, deleteDoc }) {
   const todayStr = new Date().toISOString().split('T')[0];
   const [reportDate, setReportDate] = useState(todayStr);
   const [activeViewMode, setActiveViewMode] = useState('sheet'); // 'sheet' | 'archive'
@@ -24174,6 +24174,36 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
       return [];
     }
   });
+
+  // Sync archive index from cloud database dailyReports
+  useEffect(() => {
+    if (Array.isArray(dailyReports) && dailyReports.length > 0) {
+      const dbIndex = dailyReports.map(r => {
+        const parsedSec = typeof r.sectionsData === 'string' ? safeJsonParse(r.sectionsData, {}) : (r.sections || {});
+        const kraftVal = parseFloat(parsedSec.consumption?.[0]?.qtyKg || 0);
+        const totalC = (parsedSec.consumption || []).reduce((sum, c) => sum + parseFloat(c.total || 0), 0);
+        const convVal = kraftVal > 0 ? (totalC / kraftVal).toFixed(2) : '-';
+        const totalW = (parseInt(r.operators || 0)) + (parseInt(r.helpers || 0)) + (parseInt(r.ladies || 0));
+
+        return {
+          id: r.id || `report_${r.date}`,
+          date: r.date,
+          dateFormatted: new Date(r.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+          totalWorkers: totalW || 22,
+          autoBoardRuns: (parsedSec.autoBoard || []).filter(row => row.itemName).length,
+          totalDispatched: (parsedSec.dispatch || []).reduce((sum, d) => sum + (parseInt(d.actualQty || 0)), 0),
+          kraftQty: kraftVal.toFixed(1),
+          totalCost: totalC.toFixed(2),
+          convPerKg: convVal,
+          savedAt: r.updatedAt || r.createdAt || r.date,
+          savedBy: r.savedBy || 'Admin'
+        };
+      }).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      setSavedReportsIndex(dbIndex);
+      try { localStorage.setItem('erp_daily_reports_master_index', JSON.stringify(dbIndex)); } catch(e) {}
+    }
+  }, [dailyReports]);
 
   // Workers Attendance state for current reportDate
   const [workers, setWorkers] = useState({ operator: 8, helpers: 12, ladies: 2 });
@@ -24328,8 +24358,29 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
 
   const [sections, setSections] = useState(() => buildSyncedSections(todayStr));
 
-  // Load report data whenever reportDate changes (Check saved archive first, else live sync)
+  // Load report data whenever reportDate changes (Check Turso DB first, then local snapshot, else live sync)
   useEffect(() => {
+    // 1. Check cloud DB dailyReports first
+    const dbReport = (dailyReports || []).find(r => r.date === reportDate);
+    if (dbReport) {
+      const parsedSec = typeof dbReport.sectionsData === 'string' ? safeJsonParse(dbReport.sectionsData, null) : (dbReport.sections || null);
+      if (parsedSec) {
+        setSections(parsedSec);
+        setWorkers({
+          operator: dbReport.operators || 8,
+          helpers: dbReport.helpers || 12,
+          ladies: dbReport.ladies || 2
+        });
+        setIsSavedVersionLoaded(true);
+        setSavedMeta({
+          savedAt: dbReport.updatedAt || dbReport.createdAt,
+          savedBy: dbReport.savedBy || 'System'
+        });
+        return;
+      }
+    }
+
+    // 2. Check saved local snapshot fallback
     const savedKey = `erp_daily_report_snapshot_${reportDate}`;
     try {
       const savedStr = localStorage.getItem(savedKey);
@@ -24350,7 +24401,7 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     setSections(buildSyncedSections(reportDate));
     setIsSavedVersionLoaded(false);
     setSavedMeta(null);
-  }, [reportDate, production, orders, wipStages, wastageLogs]);
+  }, [reportDate, dailyReports, production, orders, wipStages, wastageLogs]);
 
   const handleCellChange = (secKey, rIdx, field, val) => {
     const updated = { ...sections };
@@ -24406,7 +24457,7 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
       savedBy: userName
     };
 
-    // 1. Save snapshot
+    // 1. Save local snapshot
     const savedKey = `erp_daily_report_snapshot_${reportDate}`;
     localStorage.setItem(savedKey, JSON.stringify(snapshot));
 
@@ -24441,12 +24492,28 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     setIsSavedVersionLoaded(true);
     setSavedMeta({ savedAt: nowIso, savedBy: userName });
 
-    // Optional DB push
+    // 3. Save to Turso Cloud DB (daily_reports table)
     try {
-      if (typeof addDoc === 'function' && getColRef) {
-        await addDoc(getColRef('daily_reports'), snapshot);
+      const existing = (dailyReports || []).find(r => r.date === reportDate);
+      const dbPayload = {
+        date: reportDate,
+        companyId: activeUnitId || '',
+        operators: parseInt(workers.operator || 0),
+        helpers: parseInt(workers.helpers || 0),
+        ladies: parseInt(workers.ladies || 0),
+        sectionsData: JSON.stringify(sections),
+        remarks: `Kraft: ${kraftQty.toFixed(1)}kg | Total: ₹${totalCost.toFixed(2)} | Conv: ₹${convPerKgStr}/kg | Saved by ${userName}`,
+        createdAt: existing?.createdAt || nowIso,
+        updatedAt: nowIso
+      };
+      if (existing && updateDoc && getDocRef) {
+        await updateDoc(getDocRef('daily_reports', existing.id), dbPayload);
+      } else if (addDoc && getColRef) {
+        await addDoc(getColRef('daily_reports'), dbPayload);
       }
-    } catch(e) {}
+    } catch(e) {
+      console.warn('Could not save daily report to cloud DB:', e);
+    }
 
     if (addLog) addLog(`Saved executive daily report for ${reportDate}`);
 
