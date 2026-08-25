@@ -4254,7 +4254,7 @@ function UniversalCsvImportModal({
 
       if (currentMode === 'own_stock') {
         const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
-        const rawSupplierReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel', 'supplierreelno') || '').replace(/[`'"]/g, '').trim();
+        const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
         const supplierReelNo = rawSupplierReelNo || autoUniqueId;
         const uniqueReelId = autoUniqueId;
 
@@ -4291,7 +4291,7 @@ function UniversalCsvImportModal({
 
         // If weight and size are present, it is a Job Work Client Paper Reel!
         if (weight > 0 || size) {
-          const rawSupplierReelNo = (findVal(r, 'reelno', 'reelnumber', 'reel#', 'rollno', 'barcode', 'serialno', 'srno', 'reel', 'supplierreelno') || '').replace(/[`'"]/g, '').trim();
+          const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
           const supplierReelNo = rawSupplierReelNo || autoUniqueId;
           const uniqueReelId = autoUniqueId;
 
