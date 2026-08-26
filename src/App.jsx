@@ -2623,6 +2623,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const [startOffset, setStartOffset] = useState(0); // 0-indexed start slot (0 = Top-Left Slot 1)
   const [fillSingleSheet, setFillSingleSheet] = useState(false); // If single item, optionally fill full 12 slots
   const [measuredWidthMm, setMeasuredWidthMm] = useState('96.0'); // For 1-click auto-calibrator
+  const [labelSortBy, setLabelSortBy] = useState('size_asc'); // 'size_asc' | 'size_desc' | 'gsm_asc' | 'bf_asc' | 'date_asc' | 'date_desc' | 'reelno_asc' | 'as_is'
 
   // Exact physical dimensions for TechNova NovaJet 12L:
   // Top: 9.0mm, Left: 4.0mm, Sticker: 100.0mm × 44.0mm, Row Gap (V): 3.0mm, Col Gap (H): 2.0mm
@@ -2735,8 +2736,24 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
   const effTop = parseFloat(topMarginMm.toFixed(2));
   const effLeft = parseFloat(leftMarginMm.toFixed(2));
 
-  // Handle single item or array of items
-  const baseItems = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
+  // Handle single item or array of items with on-the-fly sorting
+  const sortedBaseItems = useMemo(() => {
+    const raw = Array.isArray(data) ? data.filter(Boolean) : (data ? [data] : []);
+    if (raw.length <= 1 || labelSortBy === 'as_is') return raw;
+    return [...raw].sort((a, b) => {
+      if (labelSortBy === 'size_asc') return (parseFloat(a.size) || 0) - (parseFloat(b.size) || 0);
+      if (labelSortBy === 'size_desc') return (parseFloat(b.size) || 0) - (parseFloat(a.size) || 0);
+      if (labelSortBy === 'gsm_asc') return (parseFloat(a.gsm) || 0) - (parseFloat(b.gsm) || 0);
+      if (labelSortBy === 'gsm_desc') return (parseFloat(b.gsm) || 0) - (parseFloat(a.gsm) || 0);
+      if (labelSortBy === 'bf_asc') return (parseFloat(a.bf) || 0) - (parseFloat(b.bf) || 0);
+      if (labelSortBy === 'date_asc') return (new Date(a.date || 0).getTime()) - (new Date(b.date || 0).getTime());
+      if (labelSortBy === 'date_desc') return (new Date(b.date || 0).getTime()) - (new Date(a.date || 0).getTime());
+      if (labelSortBy === 'reelno_asc') return String(a.reelNo || '').localeCompare(String(b.reelNo || ''));
+      return 0;
+    });
+  }, [data, labelSortBy]);
+
+  const baseItems = sortedBaseItems;
 
   // Build the list of active items to print
   const effectiveItems = [];
@@ -3186,6 +3203,28 @@ ${bodyContent}
                   📦 Large Card / Thermal
                 </button>
               </div>
+
+              {/* Batch Label Sorting Order */}
+              {Array.isArray(data) && data.length > 1 && (
+                <div className="flex items-center gap-1.5 bg-stone-100 border border-stone-300 px-2.5 py-1 rounded-lg text-xs font-bold">
+                  <span className="text-stone-600 font-extrabold">🔀 Sort Labels:</span>
+                  <select
+                    value={labelSortBy}
+                    onChange={e => setLabelSortBy(e.target.value)}
+                    className="bg-white border border-stone-300 rounded px-2 py-1 text-xs font-bold text-stone-900 cursor-pointer shadow-2xs"
+                  >
+                    <option value="size_asc">📐 Size: Low → High (Ascending)</option>
+                    <option value="size_desc">📐 Size: High → Low (Descending)</option>
+                    <option value="gsm_asc">⚖️ GSM: Low → High</option>
+                    <option value="gsm_desc">⚖️ GSM: High → Low</option>
+                    <option value="bf_asc">💪 BF: Low → High</option>
+                    <option value="date_asc">📅 Date: Oldest First</option>
+                    <option value="date_desc">📅 Date: Newest First</option>
+                    <option value="reelno_asc">🏷️ Reel No (A → Z)</option>
+                    <option value="as_is">📋 Selection / Table Order</option>
+                  </select>
+                </div>
+              )}
 
               <button
                 type="button"
