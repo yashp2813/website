@@ -5743,9 +5743,14 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   }, [inventory, sortConfig]);
 
   const requestSort = (key) => {
-    let direction = 'asc';
-    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-    setSortConfig({ key, direction });
+    if (sortConfig.key !== key) {
+      setSortConfig({ key, direction: 'asc' });
+    } else if (sortConfig.direction === 'asc') {
+      setSortConfig({ key, direction: 'desc' });
+    } else {
+      // 3rd click resets back to default (Date newest first)
+      setSortConfig({ key: 'date', direction: 'desc' });
+    }
   };
 
   const { totalCount, activeCount, sumReceived, sumBalance, sumValue, avgGsm, avgBf, freshMt, agingMt } = useMemo(() => {
@@ -8983,9 +8988,14 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
 
   const requestSort = (key) => {
-    let direction = 'asc';
-    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-    setSortConfig({ key, direction });
+    if (sortConfig.key !== key) {
+      setSortConfig({ key, direction: 'asc' });
+    } else if (sortConfig.direction === 'asc') {
+      setSortConfig({ key, direction: 'desc' });
+    } else {
+      // 3rd click resets back to default (Date newest first)
+      setSortConfig({ key: 'date', direction: 'desc' });
+    }
   };
 
   const [consumableData, setConsumableData] = useState({ 
@@ -10240,8 +10250,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                   }}
                   title="Sort stock inventory order"
                 >
-                  <option value="date-desc">📅 Date (Newest)</option>
-                  <option value="date-asc">📅 Date (Oldest)</option>
+                  <option value="date-desc">📅 Default (Newest Inward)</option>
+                  <option value="date-asc">📅 Date (Oldest First)</option>
                   <option value="size-asc">📐 Size (Low → High)</option>
                   <option value="size-desc">📐 Size (High → Low)</option>
                   <option value="gsm-asc">⚖️ GSM (Low → High)</option>
@@ -10416,16 +10426,25 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     <button type="button" onClick={() => setFilters(f => ({ ...f, startDate: '', endDate: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
                 )}
+                {(sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>
+                    🔀 Sorted: {sortConfig.key.toUpperCase()} ({sortConfig.direction === 'asc' ? '▲ Low→High' : '▼ High→Low'})
+                    <button type="button" onClick={() => setSortConfig({ key: 'date', direction: 'desc' })} title="Reset sort to default" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#b45309', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
               </div>
 
-              {(filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company) && (
+              {(filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company || sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
                 <button
                   type="button"
-                  onClick={() => setFilters(defaultFilters)}
+                  onClick={() => {
+                    setFilters(defaultFilters);
+                    setSortConfig({ key: 'date', direction: 'desc' });
+                  }}
                   className="apex-btn apex-btn-ghost apex-btn-sm"
                   style={{ color: '#ef4444', fontWeight: 700, fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 4 }}
                 >
-                  <span>✕ Reset All Filters</span>
+                  <span>✕ Reset All Filters &amp; Sort</span>
                 </button>
               )}
             </div>
