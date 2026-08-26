@@ -25120,12 +25120,13 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     setWorkers(updated);
   };
 
-  // Helper to build auto-synced data for a given date from production/orders/wip
+  // Helper to build auto-synced data for a given date from production/orders/wip/fuel_gum
   const buildSyncedSections = (dateStr) => {
-    const dayProd = production.filter(p => p.date === dateStr);
+    const dayProd = (production || []).filter(p => (p.date || '').split('T')[0] === dateStr);
     
+    // Day Dispatches from Orders & Dispatches
     const dayDispatches = [];
-    orders.forEach(o => {
+    (orders || []).forEach(o => {
       (o.dispatchHistory || []).forEach(h => {
         const dStr = h.date ? h.date.split('T')[0] : '';
         if (dStr === dateStr) {
@@ -25140,111 +25141,149 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
       });
     });
 
-    // Auto Board Plant
+    // 1. Auto Board Plant (Corrugation)
     const autoBoardRows = [];
     if (dayProd.length > 0) {
       dayProd.forEach((p, idx) => {
-        const linkedOrd = orders.find(o => o.id === p.orderId);
+        const linkedOrd = (orders || []).find(o => o.id === p.orderId);
         autoBoardRows.push({
           srNo: String(idx + 1),
-          itemName: p.usedForItem || 'Corrugation Batch',
-          planQty: String(linkedOrd?.orderQty || p.linerQty || '0'),
-          actualQty: String(p.linerQty || p.useKg || '0'),
-          status: 'Completed',
-          remark: p.millName || p.paperUsedFor || ''
+          itemName: p.usedForItem || p.itemName || 'Corrugation Batch',
+          planQty: String(linkedOrd?.orderQty || p.linerQty || p.useKg || '0'),
+          actualQty: String(p.linerQty || p.productionKg || p.useKg || '0'),
+          status: p.status || 'Completed',
+          remark: p.millName || p.paperUsedFor || p.jobNo || ''
         });
       });
     }
+    // Also include active WIP in Corrugation
+    const corrugationWips = (wipStages || []).filter(w => (!w.currentStage || w.currentStage === 'Corrugation'));
+    corrugationWips.forEach(w => {
+      if (!autoBoardRows.some(r => r.itemName === w.itemName)) {
+        autoBoardRows.push({
+          srNo: String(autoBoardRows.length + 1),
+          itemName: w.itemName,
+          planQty: String(w.orderQty || w.qty || 0),
+          actualQty: String(w.qty || 0),
+          status: 'In Run',
+          remark: w.jobNo || w.operator || ''
+        });
+      }
+    });
     while (autoBoardRows.length < 3) {
       const idx = autoBoardRows.length + 1;
-      autoBoardRows.push({ srNo: String(idx), itemName: idx === 1 ? 'Mahapack' : '', planQty: '', actualQty: '', status: '', remark: '' });
+      autoBoardRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // RS-4-3 Colour (Printing)
-    const printingWips = wipStages.filter(w => (w.currentStage || '').toLowerCase().includes('printing') || (w.currentStage || '').toLowerCase().includes('pasting'));
+    // 2. RS-4-3 Colour (Printing)
+    const printingWips = (wipStages || []).filter(w => (w.currentStage || '').toLowerCase().includes('printing'));
     const printingRows = printingWips.map((w, idx) => ({
       srNo: String(idx + 1),
       itemName: w.itemName,
       planQty: String(w.orderQty || w.qty || 0),
       actualQty: String(w.qty || 0),
       status: 'In Run',
-      remark: w.operator || ''
+      remark: w.operator || w.jobNo || ''
     }));
     while (printingRows.length < 3) {
       const idx = printingRows.length + 1;
-      printingRows.push({ srNo: String(idx), itemName: idx === 1 ? '180ml IB' : '', planQty: idx === 1 ? '15140' : '', actualQty: '', status: '', remark: '' });
+      printingRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Rotary
-    const rotaryWips = wipStages.filter(w => (w.currentStage || '').toLowerCase().includes('creasing') || (w.currentStage || '').toLowerCase().includes('slotting'));
+    // 3. Rotary (Creasing & Slotting)
+    const rotaryWips = (wipStages || []).filter(w => (w.currentStage || '').toLowerCase().includes('creasing') || (w.currentStage || '').toLowerCase().includes('slotting') || (w.currentStage || '').toLowerCase().includes('rotary'));
     const rotaryRows = rotaryWips.map((w, idx) => ({
       srNo: String(idx + 1),
       itemName: w.itemName,
       planQty: String(w.orderQty || w.qty || 0),
       actualQty: String(w.qty || 0),
       status: 'Running',
-      remark: ''
+      remark: w.jobNo || ''
     }));
     while (rotaryRows.length < 3) {
       const idx = rotaryRows.length + 1;
-      rotaryRows.push({ srNo: String(idx), itemName: idx === 1 ? 'plate 90ml IB' : '', planQty: idx === 1 ? '9500' : '', actualQty: '', status: '', remark: '' });
+      rotaryRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Gluing
-    const gluingWips = wipStages.filter(w => (w.currentStage || '').toLowerCase().includes('stitching') || (w.currentStage || '').toLowerCase().includes('gluing'));
+    // 4. Machine:-Gluing (Stitching / Gluing / Bundling)
+    const gluingWips = (wipStages || []).filter(w => (w.currentStage || '').toLowerCase().includes('stitching') || (w.currentStage || '').toLowerCase().includes('gluing') || (w.currentStage || '').toLowerCase().includes('bundling') || (w.currentStage || '').toLowerCase().includes('pasting'));
     const gluingRows = gluingWips.map((w, idx) => ({
       srNo: String(idx + 1),
       itemName: w.itemName,
       planQty: String(w.orderQty || w.qty || 0),
       actualQty: String(w.qty || 0),
       status: 'Done',
-      remark: ''
+      remark: w.jobNo || ''
     }));
     while (gluingRows.length < 3) {
       const idx = gluingRows.length + 1;
-      gluingRows.push({ srNo: String(idx), itemName: idx === 2 ? 'CLOSED' : '', planQty: '', actualQty: '', status: '', remark: '', isClosed: idx === 2 });
+      gluingRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Punching
-    const punchingRows = [];
+    // 5. Machine:-Punching (Die Punching)
+    const punchingWips = (wipStages || []).filter(w => (w.currentStage || '').toLowerCase().includes('punching') || (w.currentStage || '').toLowerCase().includes('die'));
+    const punchingRows = punchingWips.map((w, idx) => ({
+      srNo: String(idx + 1),
+      itemName: w.itemName,
+      planQty: String(w.orderQty || w.qty || 0),
+      actualQty: String(w.qty || 0),
+      status: 'Running',
+      remark: w.jobNo || ''
+    }));
     while (punchingRows.length < 3) {
       const idx = punchingRows.length + 1;
-      punchingRows.push({ srNo: String(idx), itemName: idx === 1 ? '180ml IB' : '', planQty: idx === 1 ? '6500' : '', actualQty: '', status: '', remark: '' });
+      punchingRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Partition Filling
-    const partitionRows = [];
+    // 6. Partition Filling
+    const partitionWips = (wipStages || []).filter(w => (w.currentStage || '').toLowerCase().includes('partition') || (w.currentStage || '').toLowerCase().includes('assembly'));
+    const partitionRows = partitionWips.map((w, idx) => ({
+      srNo: String(idx + 1),
+      itemName: w.itemName,
+      planQty: String(w.orderQty || w.qty || 0),
+      actualQty: String(w.qty || 0),
+      status: 'Running',
+      remark: w.jobNo || ''
+    }));
     while (partitionRows.length < 3) {
       const idx = partitionRows.length + 1;
-      partitionRows.push({ srNo: String(idx), itemName: idx === 1 ? '180ml IB' : '', planQty: idx === 1 ? '8000' : '', actualQty: '', status: '', remark: '' });
+      partitionRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Dispatch
+    // 7. Dispatch
     const dispatchRows = dayDispatches.length > 0 ? dayDispatches.map((d, idx) => ({
       srNo: String(idx + 1),
       ...d
-    })) : [
-      { srNo: '1', itemName: '750ml IB', planQty: '2000', actualQty: '2000', status: 'Dispatched', remark: 'PO Closed' },
-      { srNo: '2', itemName: '90ml IB', planQty: '1500', actualQty: '1500', status: 'Dispatched', remark: '' },
-      { srNo: '3', itemName: '', planQty: '', actualQty: '', status: '', remark: '' }
-    ];
+    })) : [];
     while (dispatchRows.length < 3) {
-      dispatchRows.push({ srNo: String(dispatchRows.length + 1), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
+      const idx = dispatchRows.length + 1;
+      dispatchRows.push({ srNo: String(idx), itemName: '', planQty: '', actualQty: '', status: '', remark: '' });
     }
 
-    // Consumption & Power/Fuel
-    const totalPaperKg = dayProd.reduce((sum, p) => sum + parseFloat(p.useKg || 0), 0);
-    const dayWastage = wastageLogs.find(w => w.date === dateStr);
+    // 8. Consumption & Power / Fuel & Gum Logs
+    const totalPaperKgFromProd = dayProd.reduce((sum, p) => sum + parseFloat(p.useKg || p.consumedKg || 0), 0);
+    const dayWastage = (wastageLogs || []).find(w => (w.date || '').split('T')[0] === dateStr);
+    
+    // Kraft can come from Fuel & Gum log OR from daily production logs
+    const kraftPaperKg = (parseFloat(dayWastage?.kraftKg || 0)) || totalPaperKgFromProd || 0;
+
     const firewoodKg = parseFloat(dayWastage?.firewoodKg || 0);
     const firewoodRate = parseFloat(dayWastage?.firewoodRate || 4.6);
-    const gumUsedKg = parseFloat(dayWastage?.gumUsed || dayWastage?.gumKg || 0);
-    const gumRate = parseFloat(dayWastage?.gumPrice || dayWastage?.gumRate || 46);
+    const firewoodCost = dayWastage?.firewoodCost !== undefined ? parseFloat(dayWastage.firewoodCost) : (firewoodKg * firewoodRate);
+
+    const gum33Kg = parseFloat(dayWastage?.gum33Kg || dayWastage?.gumUsed || dayWastage?.gumKg || 0);
+    const gum33Rate = parseFloat(dayWastage?.gum33Rate || dayWastage?.gumPrice || 46);
+    const gum33Cost = dayWastage?.gum33Cost !== undefined ? parseFloat(dayWastage.gum33Cost) : (gum33Kg * gum33Rate);
+
+    const gum50Kg = parseFloat(dayWastage?.gum50Kg || 0);
+    const gum50Rate = parseFloat(dayWastage?.gum50Rate || 34);
+    const gum50Cost = dayWastage?.gum50Cost !== undefined ? parseFloat(dayWastage.gum50Cost) : (gum50Kg * gum50Rate);
 
     const consumptionRows = [
-      { srNo: '1', particular: 'kraft', qtyKg: String(totalPaperKg.toFixed(1)), rate: '', total: '0' },
-      { srNo: '2', particular: 'Firewood', qtyKg: String(firewoodKg || 0), rate: String(firewoodRate), total: (firewoodKg * firewoodRate).toFixed(2) },
-      { srNo: '3', particular: 'Gum-33Kg', qtyKg: String(gumUsedKg || 0), rate: String(gumRate), total: (gumUsedKg * gumRate).toFixed(2) },
-      { srNo: '4', particular: 'Gum-50Kg', qtyKg: '0', rate: '34', total: '0' }
+      { srNo: '1', particular: 'kraft', qtyKg: kraftPaperKg > 0 ? String(kraftPaperKg) : '0.0', rate: '', total: '0' },
+      { srNo: '2', particular: 'Firewood', qtyKg: String(firewoodKg || 0), rate: String(firewoodRate || 4.6), total: firewoodCost > 0 ? String(firewoodCost.toFixed(2)) : String((firewoodKg * firewoodRate).toFixed(2)) },
+      { srNo: '3', particular: 'Gum-33Kg', qtyKg: String(gum33Kg || 0), rate: String(gum33Rate || 46), total: gum33Cost > 0 ? String(gum33Cost.toFixed(2)) : String((gum33Kg * gum33Rate).toFixed(2)) },
+      { srNo: '4', particular: 'Gum-50Kg', qtyKg: String(gum50Kg || 0), rate: String(gum50Rate || 34), total: gum50Cost > 0 ? String(gum50Cost.toFixed(2)) : String((gum50Kg * gum50Rate).toFixed(2)) }
     ];
 
     return {
@@ -25312,10 +25351,14 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     updated[secKey][rIdx] = { ...updated[secKey][rIdx], [field]: val };
     
     // Auto calculate for consumption
-    if (secKey === 'consumption' && (field === 'qtyKg' || field === 'rate')) {
-      const q = parseFloat(updated[secKey][rIdx].qtyKg || 0);
-      const r = parseFloat(updated[secKey][rIdx].rate || 0);
-      updated[secKey][rIdx].total = (q * r).toFixed(2);
+    if (secKey === 'consumption') {
+      if (field === 'qtyKg' || field === 'rate') {
+        const q = parseFloat(updated[secKey][rIdx].qtyKg || 0);
+        const r = parseFloat(updated[secKey][rIdx].rate || 0);
+        if (rIdx !== 0) { // Not kraft paper
+          updated[secKey][rIdx].total = (q * r).toFixed(2);
+        }
+      }
     }
     setSections(updated);
   };
@@ -25556,6 +25599,20 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                onClick={() => {
+                  setSections(buildSyncedSections(reportDate));
+                  setIsSavedVersionLoaded(false);
+                  setSaveSuccessMsg('✓ Fetched fresh live data from Production, WIP & Fuel/Gum logs!');
+                  setTimeout(() => setSaveSuccessMsg(''), 4000);
+                }}
+                className="apex-btn apex-btn-secondary apex-btn-sm"
+                style={{ fontWeight: 800, padding: '5px 12px', fontSize: 12, background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #bfdbfe', display: 'flex', alignItems: 'center', gap: 6 }}
+                title="Re-pull live calculations from Production, WIP & Fuel/Gum logs for this date"
+              >
+                🔄 Pull Live Logs
+              </button>
+
               {isSavedVersionLoaded ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 11.5, background: '#dbeafe', color: '#1e40af', padding: '4px 12px', borderRadius: 12, fontWeight: 800, border: '1px solid #bfdbfe' }}>
@@ -25732,11 +25789,16 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
                         <td style={{ borderRight: '1px solid #000', textAlign: 'center', padding: '2px 4px', fontFamily: 'var(--font-mono)' }}>
                           <input type="text" value={row.rate || ''} onChange={e => handleCellChange('consumption', rIdx, 'rate', e.target.value)} style={{ width: '100%', textAlign: 'center', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'inherit' }} />
                         </td>
-                        <td style={{ borderRight: '1px solid #000', textAlign: 'center', padding: '2px 4px', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-                          {parseFloat(row.total || 0).toLocaleString('en-IN')}
+                        <td style={{ borderRight: '1px solid #000', textAlign: 'center', padding: '2px 4px', fontFamily: 'var(--font-mono)' }}>
+                          <input
+                            type="text"
+                            value={row.total || '0'}
+                            onChange={e => handleCellChange('consumption', rIdx, 'total', e.target.value)}
+                            style={{ width: '100%', textAlign: 'center', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'inherit', fontWeight: 700 }}
+                          />
                         </td>
                         <td style={{ textAlign: 'center', padding: '2px 6px', fontFamily: 'var(--font-mono)', color: '#475569', fontWeight: 600 }}>
-                          {convPerKg}
+                          {rIdx === 0 ? '-' : (convPerKg !== '-' ? `₹${convPerKg}` : '-')}
                         </td>
                         <td style={{ textAlign: 'center', padding: 0 }} className="print:hidden">
                           {sections.consumption.length > 1 && (
