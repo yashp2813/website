@@ -6550,15 +6550,24 @@ export default function App() {
   };
 
   const uid = activeUnitId;
-  const unitOrders        = useMemo(() => uid ? orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === uid) : orders, [uid, orders]);
-  const unitInventory     = useMemo(() => uid ? inventory.filter(i => !i.companyId || i.companyId === 'all' || i.companyId === uid) : inventory, [uid, inventory]);
-  const unitProduction    = useMemo(() => uid ? production.filter(p => !p.companyId || p.companyId === 'all' || p.companyId === uid) : production, [uid, production]);
-  const unitWipStages     = useMemo(() => uid ? wipStages.filter(w => !w.companyId || w.companyId === 'all' || w.companyId === uid) : wipStages, [uid, wipStages]);
-  const unitWastageLogs   = useMemo(() => uid ? wastageLogs.filter(w => !w.companyId || w.companyId === 'all' || w.companyId === uid) : wastageLogs, [uid, wastageLogs]);
-  const unitDispatches    = useMemo(() => uid ? dispatches.filter(d => !d.companyId || d.companyId === 'all' || d.companyId === uid) : dispatches, [uid, dispatches]);
-  const unitCustomers     = useMemo(() => uid ? customers.filter(c => !c.unitId || c.unitId === 'all' || c.unitId === uid) : customers, [uid, customers]);
-  const unitItems         = useMemo(() => uid ? items.filter(i => !i.unitId || i.unitId === 'all' || i.unitId === uid) : items, [uid, items]);
-  const unitPurchaseOrders= useMemo(() => uid ? purchaseOrders.filter(p => !p.companyId || p.companyId === 'all' || p.companyId === uid) : purchaseOrders, [uid, purchaseOrders]);
+  const activeCompany = useMemo(() => companies.find(c => c.id === uid || c.name === uid), [companies, uid]);
+  const matchesUnit = useCallback((compRef) => {
+    if (!uid || uid === 'all') return true;
+    if (!compRef || compRef === 'all') return true;
+    if (compRef === uid) return true;
+    if (activeCompany && (compRef === activeCompany.id || compRef === activeCompany.name)) return true;
+    return false;
+  }, [uid, activeCompany]);
+
+  const unitOrders        = useMemo(() => orders.filter(o => matchesUnit(o.companyId)), [orders, matchesUnit]);
+  const unitInventory     = useMemo(() => inventory.filter(i => matchesUnit(i.companyId)), [inventory, matchesUnit]);
+  const unitProduction    = useMemo(() => production.filter(p => matchesUnit(p.companyId)), [production, matchesUnit]);
+  const unitWipStages     = useMemo(() => wipStages.filter(w => matchesUnit(w.companyId)), [wipStages, matchesUnit]);
+  const unitWastageLogs   = useMemo(() => wastageLogs.filter(w => matchesUnit(w.companyId)), [wastageLogs, matchesUnit]);
+  const unitDispatches    = useMemo(() => dispatches.filter(d => matchesUnit(d.companyId)), [dispatches, matchesUnit]);
+  const unitCustomers     = useMemo(() => customers.filter(c => matchesUnit(c.unitId || c.companyId)), [customers, matchesUnit]);
+  const unitItems         = useMemo(() => items.filter(i => matchesUnit(i.unitId || i.companyId)), [items, matchesUnit]);
+  const unitPurchaseOrders= useMemo(() => purchaseOrders.filter(p => matchesUnit(p.companyId)), [purchaseOrders, matchesUnit]);
   const autoSetUnit       = useCallback((obj) => ({ ...obj, companyId: activeUnitId || obj.companyId || '' }), [activeUnitId]);
 
   // Centralized Planned Jobs (Job Cards created by Production Planning)
@@ -14328,9 +14337,18 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
 
 function OrdersView({ orders = [], production = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, activeUnitId, autoSetUnit, onStartProduction, wipStages = [], plannedJobs = [], onSavePlannedJobs }) {
   const allowedCompanyId = activeUnitId || 'all';
-  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
-  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => !i.companyId || i.companyId === 'all' || i.companyId === allowedCompanyId);
-  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === allowedCompanyId);
+  const activeCompany = useMemo(() => companies.find(c => c.id === allowedCompanyId || c.name === allowedCompanyId), [companies, allowedCompanyId]);
+  const matchesComp = useCallback((compRef) => {
+    if (!allowedCompanyId || allowedCompanyId === 'all') return true;
+    if (!compRef || compRef === 'all') return true;
+    if (compRef === allowedCompanyId) return true;
+    if (activeCompany && (compRef === activeCompany.id || compRef === activeCompany.name)) return true;
+    return false;
+  }, [allowedCompanyId, activeCompany]);
+
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId || c.name === allowedCompanyId);
+  const visibleItems = items.filter(i => matchesComp(i.companyId || i.unitId));
+  const visibleOrders = orders.filter(o => matchesComp(o.companyId));
 
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -14341,7 +14359,6 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
     orderQty: '',
     rate: '',
     deliveryDate: todayStr,
-    plannedUps: '1',
     notes: ''
   };
 
@@ -14389,7 +14406,6 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       orderQty: ord.orderQty !== undefined ? String(ord.orderQty) : '',
       rate: ord.rate !== undefined ? String(ord.rate) : '',
       deliveryDate: ord.deliveryDate || todayStr,
-      plannedUps: String(ord.plannedUps || ord.ups || '1'),
       status: ord.status || 'Pending',
       notes: ord.notes || ''
     }]);
@@ -14430,7 +14446,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
           orderQty: parseInt(single.orderQty || 0),
           rate: parseFloat(single.rate || 0),
           deliveryDate: single.deliveryDate,
-          plannedUps: parseInt(single.plannedUps || 1),
+          plannedUps: 1,
           status: single.status || 'Pending',
           notes: single.notes || '',
           updatedAt: new Date().toISOString()
@@ -14461,7 +14477,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
             dispatchedQty: 0,
             rate: parseFloat(ord.rate || 0),
             deliveryDate: ord.deliveryDate,
-            plannedUps: parseInt(ord.plannedUps || 1),
+            plannedUps: 1,
             status: 'Pending',
             createdAt: new Date().toISOString()
           };
@@ -14815,7 +14831,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Manufacturing Unit</label>
                 <select className="apex-select" value={orderHeader.companyId} onChange={e => setOrderHeader({ ...orderHeader, companyId: e.target.value })}>
                   <option value="">-- Select Unit --</option>
-                  {visibleCompanies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
               
@@ -14842,7 +14858,6 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                     <th className="p-2 w-28">Order Qty (pcs) *</th>
                     <th className="p-2 w-24">Rate (₹)</th>
                     <th className="p-2 w-32">Delivery Target</th>
-                    <th className="p-2 w-20">Ups</th>
                     <th className="p-2 min-w-[160px]">Special Instructions / Notes</th>
                     <th className="p-2 w-12 text-center"></th>
                   </tr>
@@ -14914,15 +14929,6 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
                           className="apex-input"
                           value={row.deliveryDate}
                           onChange={e => handleOrderRowChange(idx, 'deliveryDate', e.target.value)}
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="number"
-                          min="1"
-                          className="apex-input font-mono text-center"
-                          value={row.plannedUps}
-                          onChange={e => handleOrderRowChange(idx, 'plannedUps', e.target.value)}
                         />
                       </td>
                       <td className="p-2">
