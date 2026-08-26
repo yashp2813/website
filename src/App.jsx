@@ -6360,10 +6360,23 @@ export default function App() {
     await addDoc(getColRef('production'), prodPayload);
     setProduction(prev => [prodPayload, ...prev]);
 
-    // 3. Auto-Push to WIP Printing stage
+    // 3. Auto-Push to WIP Printing stage: first remove stale Corrugation WIP card for this job
     const producedSheets = parseFloat(formData.linerQty || 0);
     const upsCount = parseFloat(formData.numberOfUps || 1);
     if (producedSheets > 0) {
+      // Remove stale Corrugation-stage WIP cards for this exact order before adding Printing card
+      const staleWips = wipStages.filter(w =>
+        (w.orderId === order.id) && (w.currentStage === 'Corrugation' || !w.currentStage)
+      );
+      for (const staleWip of staleWips) {
+        try {
+          await deleteDoc(getDocRef('wip_stages', staleWip.id));
+          await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [staleWip.id]).catch(() => {});
+          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'delete', id: staleWip.id } }));
+        } catch (e) { console.warn('stale WIP cleanup:', e); }
+      }
+      setWipStages(prev => prev.filter(w => !(w.orderId === order.id && (w.currentStage === 'Corrugation' || !w.currentStage))));
+
       const wipPayload = {
         orderId: order.id,
         companyId: order.companyId || activeUnitId || '',
@@ -6697,6 +6710,54 @@ export default function App() {
       }
     };
     init();
+  }, []);
+
+  // 🔄 Real-time cross-device sync: poll Turso cloud DB every 30 seconds
+  // This keeps phones and PCs in sync without requiring a manual refresh.
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 30000; // 30 seconds
+    const intervalId = setInterval(async () => {
+      try {
+        const fetchTable = async (table) => {
+          const res = await executeQuery(`SELECT * FROM ${table}`);
+          return res.rows.map(row => {
+            const obj = {};
+            res.columns.forEach((col, i) => { obj[col] = row[i]; });
+            return obj;
+          });
+        };
+        // Only poll the most frequently changing tables for efficiency
+        const [prod, ords, wip, inv, pJobs, wst] = await Promise.all([
+          fetchTable('production').catch(() => null),
+          fetchTable('orders').catch(() => null),
+          fetchTable('wip_stages').catch(() => null),
+          fetchTable('inventory').catch(() => null),
+          fetchTable('planned_jobs').catch(() => null),
+          fetchTable('wastage').catch(() => null),
+        ]);
+        if (prod) setProduction(prod.map(p => ({ ...p, consumedReels: safeJsonParse(p.consumedReels, []) })));
+        if (ords) setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
+        if (wip) setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, []) })));
+        if (inv) setInventory(inv);
+        if (wst) setWastageLogs(wst);
+        if (pJobs && pJobs.length > 0) {
+          const parsedPJobs = pJobs.map(j => ({
+            ...j,
+            attachedReels: safeJsonParse(j.attachedReels, []),
+            rollStandTop: safeJsonParse(j.rollStandTop, null),
+            rollStandFluteC: safeJsonParse(j.rollStandFluteC, null),
+            rollStandBackingC: safeJsonParse(j.rollStandBackingC, null),
+            rollStandFluteB: safeJsonParse(j.rollStandFluteB, null),
+            rollStandBackingB: safeJsonParse(j.rollStandBackingB, null),
+          }));
+          setPlannedJobs(parsedPJobs);
+        }
+      } catch (err) {
+        // Silently ignore poll errors (network blip, etc.)
+        console.warn('Background sync poll error:', err);
+      }
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -12004,11 +12065,16 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       const saved = localStorage.getItem(PROD_DRAFT_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && parsed.newRecord && parsed.newRecord.orderId) {
+        const DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours — don't silently restore old sessions
+        const draftAge = Date.now() - (parsed.savedAt || 0);
+        if (parsed && parsed.newRecord && parsed.newRecord.orderId && draftAge < DRAFT_MAX_AGE_MS) {
           setNewRecord(parsed.newRecord);
           if (Array.isArray(parsed.consumedReels) && parsed.consumedReels.length > 0) {
             setConsumedReels(parsed.consumedReels);
           }
+        } else if (draftAge >= DRAFT_MAX_AGE_MS) {
+          // Draft is stale — clear it so the form starts fresh
+          localStorage.removeItem(PROD_DRAFT_KEY);
         }
       }
     } catch (e) {}
