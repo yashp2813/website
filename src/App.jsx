@@ -12240,6 +12240,20 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       // 2. AUTO-PUSH PRODUCED CORRUGATED SHEETS TO WIP PRINTING STAGE
       if (getColRef && parseFloat(finalRecord.linerQty || 0) > 0) {
         try {
+          // Always remove stale Corrugation-stage WIP cards first so there are no ghost/duplicate cards
+          const targetOrderId = finalRecord.orderId;
+          if (targetOrderId) {
+            await executeQuery(
+              `DELETE FROM wip_stages WHERE orderId = ? AND (currentStage = 'Corrugation' OR currentStage IS NULL)`,
+              [targetOrderId]
+            ).catch(() => {});
+            // Also remove any duplicate Printing cards so only one exists
+            await executeQuery(
+              `DELETE FROM wip_stages WHERE orderId = ? AND currentStage = 'Printing'`,
+              [targetOrderId]
+            ).catch(() => {});
+            window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'bulk_delete' } }));
+          }
           const wipPayload = {
             orderId: finalRecord.orderId || `job_${Date.now()}`,
             companyId: finalRecord.companyId || allowedCompanyId || '',
@@ -13744,12 +13758,23 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
     });
   };
 
-  const removeJob = (jobId) => {
+  const removeJob = async (jobId) => {
     const jobToRemove = (plannedJobs || []).find(j => j.id === jobId);
     const itemName = jobToRemove?.itemName || 'this job';
     if (window.confirm(`Remove "${itemName}" (${parseInt(jobToRemove?.plannedQty || 0).toLocaleString()} pcs) from the production queue?`)) {
       const updated = (plannedJobs || []).filter(j => j.id !== jobId);
       saveJobsToStorage(updated);
+      // Also clean up the WIP card for this job (it's being un-planned)
+      try {
+        if (jobToRemove?.orderId) {
+          await executeQuery(`DELETE FROM wip_stages WHERE orderId = ? AND currentStage = 'Corrugation'`, [jobToRemove.orderId]).catch(() => {});
+        }
+        await executeQuery(`DELETE FROM wip_stages WHERE orderId = ? AND currentStage = 'Corrugation'`, [jobId]).catch(() => {});
+        if (jobToRemove?.jobNo) {
+          await executeQuery(`DELETE FROM wip_stages WHERE jobNo = ? AND currentStage = 'Corrugation'`, [jobToRemove.jobNo]).catch(() => {});
+        }
+        window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'bulk_delete' } }));
+      } catch(e) {}
       if (addLog) addLog(`Removed job #${jobToRemove?.jobNo || jobId} (${itemName}) from production queue`);
     }
   };
