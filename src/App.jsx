@@ -6360,38 +6360,80 @@ export default function App() {
     await addDoc(getColRef('production'), prodPayload);
     setProduction(prev => [prodPayload, ...prev]);
 
-    // 3. Auto-Push to WIP Printing stage: first remove stale Corrugation WIP card for this job
+    // 3. Auto-Push to WIP Printing stage while updating remaining balance in Corrugation
     const producedSheets = parseFloat(formData.linerQty || 0);
     const upsCount = parseFloat(formData.numberOfUps || 1);
-    if (producedSheets > 0) {
-      // Remove stale Corrugation-stage WIP cards for this exact order before adding Printing card
-      const staleWips = wipStages.filter(w =>
-        (w.orderId === order.id) && (w.currentStage === 'Corrugation' || !w.currentStage)
-      );
-      for (const staleWip of staleWips) {
-        try {
-          await deleteDoc(getDocRef('wip_stages', staleWip.id));
-          await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [staleWip.id]).catch(() => {});
-          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'delete', id: staleWip.id } }));
-        } catch (e) { console.warn('stale WIP cleanup:', e); }
-      }
-      setWipStages(prev => prev.filter(w => !(w.orderId === order.id && (w.currentStage === 'Corrugation' || !w.currentStage))));
+    const producedQtyPcs = Math.round(producedSheets * upsCount);
 
-      const wipPayload = {
-        orderId: order.id,
-        companyId: order.companyId || activeUnitId || '',
-        jobNo: `JC-${(order.orderNo || order.id || '').slice(-6).toUpperCase()}`,
-        itemName: order.itemName || order.Item_Name || 'Corrugated Board',
-        currentStage: 'Printing',
-        qty: Math.round(producedSheets * upsCount),
-        sheets: Math.round(producedSheets),
-        ups: upsCount,
-        orderQty: order.orderQty || Math.round(producedSheets * upsCount),
-        operator: currentErpUser?.name || 'Corrugator Operator',
-        timeAgo: 'Just now'
-      };
-      await addDoc(getColRef('wip_stages'), wipPayload);
-      setWipStages(prev => [...prev, { ...wipPayload, stages: [] }]);
+    if (producedSheets > 0) {
+      // Find existing Corrugation-stage WIP card for this exact job/order
+      const existingCorrWip = wipStages.find(w =>
+        (w.orderId === order.id || (order.orderNo && w.jobNo === order.orderNo)) && 
+        (w.currentStage === 'Corrugation' || !w.currentStage)
+      );
+
+      if (existingCorrWip) {
+        const initialCorrQty = parseFloat(existingCorrWip.qty !== undefined ? existingCorrWip.qty : (existingCorrWip.orderQty || order.orderQty || 0));
+        const balanceCorrQty = Math.max(0, initialCorrQty - producedQtyPcs);
+        const balanceCorrSheets = Math.ceil(balanceCorrQty / Math.max(1, upsCount));
+
+        if (balanceCorrQty > 0) {
+          // Update Corrugation card to reflect remaining balance
+          try {
+            await updateDoc(getDocRef('wip_stages', existingCorrWip.id), { 
+              qty: balanceCorrQty, 
+              sheets: balanceCorrSheets, 
+              updatedAt: new Date().toISOString() 
+            });
+            await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [balanceCorrQty, balanceCorrSheets, existingCorrWip.id]).catch(() => {});
+            setWipStages(prev => prev.map(w => w.id === existingCorrWip.id ? { ...w, qty: balanceCorrQty, sheets: balanceCorrSheets } : w));
+          } catch(e) { console.warn('WIP balance update error:', e); }
+        } else {
+          // Planned quantity fully completed in Corrugation -> remove from Corrugation stage
+          try {
+            await deleteDoc(getDocRef('wip_stages', existingCorrWip.id));
+            await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [existingCorrWip.id]).catch(() => {});
+            setWipStages(prev => prev.filter(w => w.id !== existingCorrWip.id));
+          } catch(e) { console.warn('WIP cleanup error:', e); }
+        }
+      }
+
+      // Check if Printing card already exists for this order
+      const existingPrintingWip = wipStages.find(w =>
+        (w.orderId === order.id || (order.orderNo && w.jobNo === order.orderNo)) && 
+        w.currentStage === 'Printing'
+      );
+
+      if (existingPrintingWip) {
+        const newPrintQty = parseFloat(existingPrintingWip.qty || 0) + producedQtyPcs;
+        const newPrintSheets = parseFloat(existingPrintingWip.sheets || 0) + producedSheets;
+        try {
+          await updateDoc(getDocRef('wip_stages', existingPrintingWip.id), { 
+            qty: newPrintQty, 
+            sheets: newPrintSheets, 
+            updatedAt: new Date().toISOString() 
+          });
+          await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newPrintQty, newPrintSheets, existingPrintingWip.id]).catch(() => {});
+          setWipStages(prev => prev.map(w => w.id === existingPrintingWip.id ? { ...w, qty: newPrintQty, sheets: newPrintSheets } : w));
+        } catch(e) {}
+      } else {
+        const wipPayload = {
+          orderId: order.id,
+          companyId: order.companyId || activeUnitId || '',
+          jobNo: `JC-${(order.orderNo || order.id || '').slice(-6).toUpperCase()}`,
+          itemName: order.itemName || order.Item_Name || 'Corrugated Board',
+          currentStage: 'Printing',
+          qty: producedQtyPcs,
+          sheets: Math.round(producedSheets),
+          ups: upsCount,
+          orderQty: order.orderQty || producedQtyPcs,
+          operator: currentErpUser?.name || 'Corrugator Operator',
+          timeAgo: 'Just now'
+        };
+        const addedWip = await addDoc(getColRef('wip_stages'), wipPayload);
+        setWipStages(prev => [...prev, { ...wipPayload, id: addedWip.id, stages: [] }]);
+      }
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
     }
 
     // 4. Retain mounted reels on machine stands! Update remaining balance for consumed reels
@@ -12246,39 +12288,76 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         }
       }
 
-      // 2. AUTO-PUSH PRODUCED CORRUGATED SHEETS TO WIP PRINTING STAGE
-      if (getColRef && parseFloat(finalRecord.linerQty || 0) > 0) {
+      // 2. AUTO-ADVANCE WIP: Deduct produced quantity from Corrugation balance and add to Printing stage
+      const producedSheets = parseFloat(finalRecord.linerQty || 0);
+      const upsCount = parseFloat(finalRecord.numberOfUps || 1);
+      const producedQtyPcs = Math.round(producedSheets * upsCount);
+
+      if (getColRef && producedSheets > 0) {
         try {
-          // Always remove stale Corrugation-stage WIP cards first so there are no ghost/duplicate cards
           const targetOrderId = finalRecord.orderId;
-          if (targetOrderId) {
-            await executeQuery(
-              `DELETE FROM wip_stages WHERE orderId = ? AND (currentStage = 'Corrugation' OR currentStage IS NULL)`,
-              [targetOrderId]
-            ).catch(() => {});
-            // Also remove any duplicate Printing cards so only one exists
-            await executeQuery(
-              `DELETE FROM wip_stages WHERE orderId = ? AND currentStage = 'Printing'`,
-              [targetOrderId]
-            ).catch(() => {});
-            window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'bulk_delete' } }));
+          const targetJobNo = jCardNo;
+
+          // Find existing Corrugation WIP card
+          const existingCorrWip = (wipStages || []).find(w =>
+            (targetOrderId && w.orderId === targetOrderId || (targetJobNo && w.jobNo === targetJobNo)) &&
+            (w.currentStage === 'Corrugation' || !w.currentStage)
+          );
+
+          if (existingCorrWip) {
+            const initialCorrQty = parseFloat(existingCorrWip.qty !== undefined ? existingCorrWip.qty : (existingCorrWip.orderQty || 0));
+            const balanceCorrQty = Math.max(0, initialCorrQty - producedQtyPcs);
+            const balanceCorrSheets = Math.ceil(balanceCorrQty / Math.max(1, upsCount));
+
+            if (balanceCorrQty > 0) {
+              await updateDoc(getDocRef('wip_stages', existingCorrWip.id), { 
+                qty: balanceCorrQty, 
+                sheets: balanceCorrSheets, 
+                updatedAt: new Date().toISOString() 
+              });
+              await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [balanceCorrQty, balanceCorrSheets, existingCorrWip.id]).catch(() => {});
+            } else {
+              await deleteDoc(getDocRef('wip_stages', existingCorrWip.id));
+              await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [existingCorrWip.id]).catch(() => {});
+            }
           }
-          const wipPayload = {
-            orderId: finalRecord.orderId || `job_${Date.now()}`,
-            companyId: finalRecord.companyId || allowedCompanyId || '',
-            jobNo: jCardNo || 'JC-CORR',
-            itemName: finalRecord.usedForItem || 'Corrugated Board',
-            currentStage: 'Printing',
-            qty: Math.round(parseFloat(finalRecord.linerQty || 0) * parseFloat(finalRecord.numberOfUps || 1)),
-            sheets: Math.round(parseFloat(finalRecord.linerQty || 0)),
-            ups: parseFloat(finalRecord.numberOfUps || 1),
-            orderQty: Math.round(parseFloat(finalRecord.linerQty || 0) * parseFloat(finalRecord.numberOfUps || 1)),
-            operator: currentUser?.displayName || 'Corrugator Operator',
-            timeAgo: 'Just now'
-          };
-          await addDoc(getColRef('wip_stages'), wipPayload);
-          if (addLog) addLog(`Auto-pushed ${finalRecord.linerQty} corrugated sheets from Job [${jCardNo}] to WIP Stage: Printing`);
-        } catch(err) {}
+
+          // Check if Printing card already exists for this order
+          const existingPrintingWip = (wipStages || []).find(w =>
+            (targetOrderId && w.orderId === targetOrderId || (targetJobNo && w.jobNo === targetJobNo)) &&
+            w.currentStage === 'Printing'
+          );
+
+          if (existingPrintingWip) {
+            const newPrintQty = parseFloat(existingPrintingWip.qty || 0) + producedQtyPcs;
+            const newPrintSheets = parseFloat(existingPrintingWip.sheets || 0) + producedSheets;
+            await updateDoc(getDocRef('wip_stages', existingPrintingWip.id), { 
+              qty: newPrintQty, 
+              sheets: newPrintSheets, 
+              updatedAt: new Date().toISOString() 
+            });
+            await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newPrintQty, newPrintSheets, existingPrintingWip.id]).catch(() => {});
+          } else {
+            const wipPayload = {
+              orderId: targetOrderId || `job_${Date.now()}`,
+              companyId: finalRecord.companyId || allowedCompanyId || '',
+              jobNo: targetJobNo || 'JC-CORR',
+              itemName: finalRecord.usedForItem || 'Corrugated Board',
+              currentStage: 'Printing',
+              qty: producedQtyPcs,
+              sheets: Math.round(producedSheets),
+              ups: upsCount,
+              orderQty: existingCorrWip?.orderQty || producedQtyPcs,
+              operator: currentUser?.displayName || currentUser?.name || 'Corrugator Operator',
+              timeAgo: 'Just now'
+            };
+            await addDoc(getColRef('wip_stages'), wipPayload);
+          }
+          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
+          if (addLog) addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo}]`);
+        } catch(err) {
+          console.warn('WIP advance error:', err);
+        }
       }
 
       // F6: Auto-create draft wastage entry to eliminate double data entry
@@ -25261,11 +25340,12 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     }
 
     // 8. Consumption & Power / Fuel & Gum Logs
-    const totalPaperKgFromProd = dayProd.reduce((sum, p) => sum + parseFloat(p.useKg || p.consumedKg || 0), 0);
+    const autoBoardTotalActualKg = autoBoardRows.reduce((sum, r) => sum + (parseFloat(r.actualQty) || 0), 0);
+    const totalPaperKgFromProd = dayProd.reduce((sum, p) => sum + parseFloat(p.useKg || p.consumedKg || p.productionKg || p.linerQty || 0), 0);
     const dayWastage = (wastageLogs || []).find(w => (w.date || '').split('T')[0] === dateStr);
     
-    // Kraft can come from Fuel & Gum log OR from daily production logs
-    const kraftPaperKg = (parseFloat(dayWastage?.kraftKg || 0)) || totalPaperKgFromProd || 0;
+    // Kraft pulls from Auto Board Plant production / Production logs / Fuel & Gum log
+    const kraftPaperKg = (parseFloat(dayWastage?.kraftKg || 0)) || totalPaperKgFromProd || autoBoardTotalActualKg || 0;
 
     const firewoodKg = parseFloat(dayWastage?.firewoodKg || 0);
     const firewoodRate = parseFloat(dayWastage?.firewoodRate || 4.6);
@@ -25350,6 +25430,15 @@ function ReportsView({ inventory = [], orders = [], production = [], wipStages =
     updated[secKey] = [...updated[secKey]];
     updated[secKey][rIdx] = { ...updated[secKey][rIdx], [field]: val };
     
+    // Auto sync Auto Board Plant production changes to Kraft consumption
+    if (secKey === 'autoBoard' && (field === 'actualQty' || field === 'planQty')) {
+      const newAutoBoardTotalKg = updated.autoBoard.reduce((sum, r) => sum + (parseFloat(r.actualQty || r.planQty) || 0), 0);
+      if (newAutoBoardTotalKg > 0 && updated.consumption && updated.consumption[0]) {
+        updated.consumption = [...updated.consumption];
+        updated.consumption[0] = { ...updated.consumption[0], qtyKg: String(newAutoBoardTotalKg) };
+      }
+    }
+
     // Auto calculate for consumption
     if (secKey === 'consumption') {
       if (field === 'qtyKg' || field === 'rate') {
