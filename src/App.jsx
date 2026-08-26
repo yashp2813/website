@@ -7208,7 +7208,7 @@ export default function App() {
         {activeTab === 'calculator'      && canAccess(currentErpUser.role,'calculator')      && <CalculatorView companies={companies} items={unitItems} addLog={addLog} currentUser={currentErpUser} activeUnitId={uid} />}
         {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} getColRef={getColRef} addLog={addLog} costings={costings} />}
         {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
-        {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} />}
+        {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} wipStages={unitWipStages} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
         {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
@@ -14235,7 +14235,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   );
 }
 
-function OrdersView({ orders = [], production = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, activeUnitId, autoSetUnit, onStartProduction }) {
+function OrdersView({ orders = [], production = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, activeUnitId, autoSetUnit, onStartProduction, wipStages = [], plannedJobs = [], onSavePlannedJobs }) {
   const allowedCompanyId = activeUnitId || 'all';
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
   const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => !i.companyId || i.companyId === 'all' || i.companyId === allowedCompanyId);
@@ -14410,10 +14410,76 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
     }
   };
 
+  const cleanupOrderWipAndPlanning = async (orderId) => {
+    const ord = orders.find(o => o.id === orderId);
+    const ordNo = ord?.orderNo || '';
+
+    // Check if corrugation production was logged for this job
+    const hasProductionLogged = production.some(p => 
+      p.orderId === orderId || 
+      (ordNo && p.orderNo === ordNo) || 
+      (ordNo && String(p.reelNos || '').includes(ordNo))
+    );
+
+    // Find linked WIP items in wipStages
+    const linkedWips = wipStages.filter(w => 
+      w.orderId === orderId || 
+      (ordNo && w.jobNo === ordNo) || 
+      (ordNo && String(w.id || '').includes(ordNo))
+    );
+
+    // User Rule:
+    // - If item is still in 'Corrugation' stage OR production has NOT been logged -> REMOVE from WIP Tracker (mistake with the job).
+    // - If it has CLEARED corrugation stage (e.g. Printing, Punching, Stitching, Bundling) -> KEEP in WIP Tracker!
+    for (const wip of linkedWips) {
+      const isStillInCorrugation = !wip.currentStage || wip.currentStage === 'Corrugation';
+      if (isStillInCorrugation || !hasProductionLogged) {
+        try {
+          if (getDocRef && !wip.id.startsWith('wip_bundling') && !wip.id.startsWith('wip_stitching')) {
+            await deleteDoc(getDocRef('wip_stages', wip.id));
+          }
+          await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [wip.id]).catch(() => {});
+          await executeQuery(`DELETE FROM wipStages WHERE id = ?`, [wip.id]).catch(() => {});
+          if (wip.orderId) {
+            await executeQuery(`DELETE FROM wip_stages WHERE orderId = ? AND (currentStage = 'Corrugation' OR currentStage IS NULL)`, [wip.orderId]).catch(() => {});
+            await executeQuery(`DELETE FROM wipStages WHERE orderId = ? AND (currentStage = 'Corrugation' OR currentStage IS NULL)`, [wip.orderId]).catch(() => {});
+          }
+          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'delete', id: wip.id } }));
+        } catch (err) {
+          console.warn('WIP cleanup error:', err);
+        }
+      }
+    }
+
+    // Always remove from Planning Queue (plannedJobs in localStorage & DB) to declutter planning sheet
+    try {
+      const lsKeys = Object.keys(localStorage).filter(k => k.startsWith('erp_planned_jobs'));
+      for (const key of lsKeys) {
+        const saved = localStorage.getItem(key);
+        if (!saved) continue;
+        const all = JSON.parse(saved);
+        const after = all.filter(j => j.orderId !== orderId && (!ordNo || j.jobNo !== ordNo) && j.id !== orderId);
+        if (after.length !== all.length) localStorage.setItem(key, JSON.stringify(after));
+      }
+      await executeQuery(`DELETE FROM planned_jobs WHERE orderId = ?`, [orderId]).catch(() => {});
+      if (ordNo) await executeQuery(`DELETE FROM planned_jobs WHERE jobNo = ?`, [ordNo]).catch(() => {});
+      if (typeof onSavePlannedJobs === 'function') {
+        const updatedPlanned = (plannedJobs || []).filter(j => j.orderId !== orderId && (!ordNo || j.jobNo !== ordNo) && j.id !== orderId);
+        onSavePlannedJobs(updatedPlanned);
+      }
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'planned_jobs', action: 'delete', id: orderId } }));
+    } catch (e) {
+      console.warn('Planning queue cleanup error:', e);
+    }
+  };
+
   const handleBulkDeleteOrders = async () => {
     if (selectedOrderIds.size === 0) return;
     if (window.confirm(`Are you sure you want to permanently delete the ${selectedOrderIds.size} selected order(s)?`)) {
       const idsToDelete = Array.from(selectedOrderIds);
+      for (const id of idsToDelete) {
+        await cleanupOrderWipAndPlanning(id);
+      }
       await Promise.all(idsToDelete.map(id => deleteDoc(getDocRef('orders', id))));
       if (addLog) addLog(`Bulk deleted ${idsToDelete.length} orders`);
       setSelectedOrderIds(new Set());
@@ -14421,7 +14487,8 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
   };
 
   const handleDelete = async (id, itemName) => {
-    if (window.confirm(`Delete order for "${itemName || id}"? This will permanently remove it from database.`)) {
+    if (window.confirm(`Delete order for "${itemName || id}"? This will remove it from the orders database.`)) {
+      await cleanupOrderWipAndPlanning(id);
       await deleteDoc(getDocRef('orders', id));
       if (addLog) addLog(`Deleted order for ${itemName}`);
       setSelectedOrderIds(prev => {
