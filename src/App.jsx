@@ -14350,6 +14350,13 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
   const visibleItems = items.filter(i => matchesComp(i.companyId || i.unitId));
   const visibleOrders = orders.filter(o => matchesComp(o.companyId));
 
+  // Strict Unit Lock: non-admins are locked to their assigned unit; admins are locked to active unit if chosen
+  const lockedUnitId = (currentUser?.role !== 'admin' && currentUser?.companyId) 
+    ? currentUser.companyId 
+    : (activeUnitId && activeUnitId !== 'all' ? activeUnitId : '');
+
+  const activeCompObj = companies.find(c => c.id === (lockedUnitId || allowedCompanyId) || c.name === (lockedUnitId || allowedCompanyId));
+
   const todayStr = new Date().toISOString().split('T')[0];
 
   const emptyOrderRow = {
@@ -14364,12 +14371,19 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   const [orderHeader, setOrderHeader] = useState({
     orderDate: todayStr,
-    companyId: allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || ''),
+    companyId: lockedUnitId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
     orderType: 'regular', // 'regular' | 'job_work'
     customerId: '',
     jobWorkType: 'Full Box Conversion',
     clientInwardRef: ''
   });
+
+  // Keep companyId in sync if active unit or locked unit changes
+  useEffect(() => {
+    if (lockedUnitId) {
+      setOrderHeader(prev => ({ ...prev, companyId: lockedUnitId }));
+    }
+  }, [lockedUnitId]);
 
   const [ordersInput, setOrdersInput] = useState([{ ...emptyOrderRow }]);
   const [showBatchForm, setShowBatchForm] = useState(false);
@@ -14393,7 +14407,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
     setEditingId(ord.id);
     setOrderHeader({
       orderDate: ord.orderDate || todayStr,
-      companyId: ord.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
+      companyId: ord.companyId || lockedUnitId || (allowedCompanyId !== 'all' ? allowedCompanyId : (companies[0]?.id || '')),
       orderType: ord.orderType || 'regular',
       customerId: ord.customerId || '',
       jobWorkType: ord.jobWorkType || 'Full Box Conversion',
@@ -14415,6 +14429,20 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   const handleSaveOrders = async (e) => {
     e.preventDefault();
+
+    // 🔒 Strict Unit-Enforcement: Orders can only be entered when logged into a specific unit
+    const targetCompId = lockedUnitId || orderHeader.companyId;
+    if (!targetCompId || targetCompId === 'all') {
+      alert("⚠️ Orders can only be entered when logged into a specific manufacturing unit.\n\nPlease select your specific unit before entering orders.");
+      return;
+    }
+
+    // If non-admin user, strictly prevent any other unit
+    if (currentUser?.role !== 'admin' && currentUser?.companyId && targetCompId !== currentUser.companyId) {
+      alert(`⚠️ Unauthorized: You are logged into unit "${currentUser?.companyName || 'assigned unit'}" and cannot enter orders for another plant.`);
+      return;
+    }
+
     const isJobWork = orderHeader.orderType === 'job_work';
     if (isJobWork && !orderHeader.customerId) {
       alert("Please select a Job Work Client.");
@@ -14434,7 +14462,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         }
         await updateDoc(getDocRef('orders', editingId), {
           orderDate: orderHeader.orderDate,
-          companyId: orderHeader.companyId,
+          companyId: targetCompId,
           orderType: orderHeader.orderType || 'regular',
           customerId: orderHeader.customerId || '',
           customerName: finalCustName,
@@ -14458,14 +14486,14 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
         alert(`✓ Order updated successfully.`);
       } else {
         let count = 0;
-        const targetCompId = isJobWork ? (getNashikCompanyId(companies) || orderHeader.companyId) : orderHeader.companyId;
+        const finalPlantId = isJobWork ? (getNashikCompanyId(companies) || targetCompId) : targetCompId;
         for (const ord of ordersInput) {
           if (!ord.itemName.trim() || !ord.orderQty) continue;
           const ordPayload = {
             orderNo: `ORD-${isJobWork ? 'JW-' : ''}${Date.now().toString().slice(-6)}`,
             orderType: orderHeader.orderType || 'regular',
             orderDate: orderHeader.orderDate,
-            companyId: targetCompId,
+            companyId: finalPlantId,
             customerId: orderHeader.customerId || '',
             customerName: finalCustName,
             jobWorkType: isJobWork ? (orderHeader.jobWorkType || 'Full Box Conversion') : '',
@@ -14651,7 +14679,15 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
-            onClick={() => { setShowBatchForm(!showBatchForm); setEditingId(null); setOrdersInput([{ ...emptyOrderRow }]); }}
+            onClick={() => {
+              if (currentUser?.role !== 'admin' && !lockedUnitId) {
+                alert("⚠️ Orders can only be entered when logged into a specific unit.\n\nPlease select your manufacturing unit from the sidebar.");
+                return;
+              }
+              setShowBatchForm(!showBatchForm);
+              setEditingId(null);
+              setOrdersInput([{ ...emptyOrderRow }]);
+            }}
             className="apex-btn apex-btn-primary"
             style={{ fontWeight: 800, padding: '7px 16px', fontSize: 12, background: '#2563eb' }}
           >
@@ -14828,11 +14864,24 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
               )}
 
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Manufacturing Unit</label>
-                <select className="apex-select" value={orderHeader.companyId} onChange={e => setOrderHeader({ ...orderHeader, companyId: e.target.value })}>
-                  <option value="">-- Select Unit --</option>
-                  {visibleCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Manufacturing Unit *</label>
+                {lockedUnitId ? (
+                  <div style={{ padding: '7px 12px', background: '#f1f5f9', border: '1.5px solid #cbd5e1', borderRadius: 6, fontWeight: 800, fontSize: 12, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Lock style={{ width: 13, height: 13, color: '#2563eb' }} />
+                    <span>🏭 {activeCompObj?.name || 'Assigned Unit'}</span>
+                    <span style={{ fontSize: 9.5, color: '#64748b', marginLeft: 'auto', fontWeight: 600, textTransform: 'uppercase' }}>Locked to Session</span>
+                  </div>
+                ) : (
+                  <select
+                    required
+                    className="apex-select"
+                    value={orderHeader.companyId}
+                    onChange={e => setOrderHeader({ ...orderHeader, companyId: e.target.value })}
+                  >
+                    <option value="">-- Choose Unit to Assign Order * --</option>
+                    {companies.map(c => <option key={c.id} value={c.id}>🏭 {c.name}</option>)}
+                  </select>
+                )}
               </div>
               
               {editingId && (
