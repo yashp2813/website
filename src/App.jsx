@@ -5722,14 +5722,23 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
 
   const sortedInventory = useMemo(() => {
     return [...(inventory || [])].sort((a, b) => {
-      let valA = a[sortConfig.key];
-      let valB = b[sortConfig.key];
-      if (valA === undefined || valA === null) valA = '';
-      if (valB === undefined || valB === null) valB = '';
-      if (typeof valA === 'number' && typeof valB === 'number') {
-        return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+      const key = sortConfig.key;
+      const dir = sortConfig.direction === 'asc' ? 1 : -1;
+      const numFields = ['size', 'gsm', 'bf', 'receivedQty', 'balanceQty', 'initialIssuedQty', 'issuedQty', 'ratePerKg', 'value'];
+
+      if (numFields.includes(key)) {
+        const numA = parseFloat(a[key]) || 0;
+        const numB = parseFloat(b[key]) || 0;
+        return (numA - numB) * dir;
       }
-      return sortConfig.direction === 'asc' ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
+      if (key === 'date') {
+        const timeA = new Date(a.date || 0).getTime() || 0;
+        const timeB = new Date(b.date || 0).getTime() || 0;
+        return (timeA - timeB) * dir;
+      }
+      const strA = String(a[key] || '').toLowerCase();
+      const strB = String(b[key] || '').toLowerCase();
+      return strA.localeCompare(strB) * dir;
     });
   }, [inventory, sortConfig]);
 
@@ -5790,9 +5799,14 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           onSaveReturn={async (updated) => {
             try {
               if (getDocRef && updateDoc) {
-                await updateDoc(getDocRef('inventory', updated.id), { balanceQty: updated.balanceQty, location: updated.location });
+                await updateDoc(getDocRef('inventory', remnantReelItem.id), {
+                  receivedQty: updated.balanceQty,
+                  balanceQty: updated.balanceQty,
+                  remnantStatus: 'returned_from_floor',
+                  returnedDate: updated.returnedDate
+                });
               }
-              if (addLog) addLog(`Floor Return Remnant: Reel #${updated.supplierReelNo || updated.reelNo} balance updated to ${updated.balanceQty}kg`);
+              if (addLog) addLog(`Remnant Roll Return: Reel #${remnantReelItem.reelNo} re-weighed at ${updated.balanceQty} kg`);
             } catch(e) {}
             setRemnantReelItem(null);
             if (onPrintBarcode) onPrintBarcode(updated);
@@ -5842,7 +5856,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           )}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          💡 <em>Click any cell to edit inline. Press Enter / Tab to save instantly.</em>
+          💡 <em>Click any column header to sort. Click cell to edit inline. Press Enter / Tab to save instantly.</em>
         </div>
       </div>
 
@@ -5856,16 +5870,16 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
               <th style={{ width: 40, textAlign: 'center', color: '#94a3b8' }}>#</th>
               <th onClick={() => requestSort('date')} style={{ cursor: 'pointer', userSelect: 'none' }}>Date {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
               <th onClick={() => requestSort('millName')} style={{ cursor: 'pointer', userSelect: 'none' }}>Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('invoiceNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Invoice No.</th>
-              <th onClick={() => requestSort('vehicleNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Vehicle No.</th>
-              <th onClick={() => requestSort('uniqueReelId')} style={{ cursor: 'pointer', userSelect: 'none' }}>System Reel ID</th>
+              <th onClick={() => requestSort('invoiceNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Invoice No. {sortConfig.key === 'invoiceNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('vehicleNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Vehicle No. {sortConfig.key === 'vehicleNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('systemReelId')} style={{ cursor: 'pointer', userSelect: 'none' }}>System Reel ID {sortConfig.key === 'systemReelId' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
               <th onClick={() => requestSort('reelNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Supplier Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Size (cm)</th>
-              <th onClick={() => requestSort('gsm')} style={{ cursor: 'pointer', userSelect: 'none' }}>GSM</th>
-              <th onClick={() => requestSort('bf')} style={{ cursor: 'pointer', userSelect: 'none' }}>BF</th>
-              <th>Colour</th>
-              <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Recv (KG)</th>
-              <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Bal (KG)</th>
+              <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Size (cm) {sortConfig.key === 'size' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('gsm')} style={{ cursor: 'pointer', userSelect: 'none' }}>GSM {sortConfig.key === 'gsm' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('bf')} style={{ cursor: 'pointer', userSelect: 'none' }}>BF {sortConfig.key === 'bf' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('colour')} style={{ cursor: 'pointer', userSelect: 'none' }}>Colour {sortConfig.key === 'colour' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Recv (KG) {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+              <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Bal (KG) {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
               <th>Linear Meters</th>
               <th>Stock Age</th>
               <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate/KG</th>
@@ -8966,6 +8980,13 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const defaultFilters = { company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All', startDate: '', endDate: '', minRate: '', maxRate: '', invoiceNo: '', vehicleNo: '' };
   const [filters, setFilters] = useState(defaultFilters);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+
+  const requestSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+    setSortConfig({ key, direction });
+  };
 
   const [consumableData, setConsumableData] = useState({ 
       date: new Date().toISOString().split('T')[0], itemName: 'Gum', vendorName: '', invoiceNo: '', receivedQty: '', rate: '', initialIssuedQty: '' 
@@ -9446,6 +9467,33 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     });
   }, [inventoryWithUsage, allowedCompanyId, filters, companies, lowStockThreshold]);
 
+  const sortedFilteredInventory = useMemo(() => {
+    return [...filteredInventory].sort((a, b) => {
+      const key = sortConfig.key;
+      const dir = sortConfig.direction === 'asc' ? 1 : -1;
+      const numFields = ['size', 'gsm', 'bf', 'receivedQty', 'balanceQty', 'initialIssuedQty', 'issuedQty', 'ratePerKg', 'value'];
+
+      if (numFields.includes(key)) {
+        const numA = parseFloat(a[key]) || 0;
+        const numB = parseFloat(b[key]) || 0;
+        return (numA - numB) * dir;
+      }
+      if (key === 'date') {
+        const timeA = new Date(a.date || 0).getTime() || 0;
+        const timeB = new Date(b.date || 0).getTime() || 0;
+        return (timeA - timeB) * dir;
+      }
+      if (key === 'company') {
+        const compA = companies.find(c => c.id === a.companyId)?.name || '';
+        const compB = companies.find(c => c.id === b.companyId)?.name || '';
+        return compA.localeCompare(compB) * dir;
+      }
+      const strA = String(a[key] || '').toLowerCase();
+      const strB = String(b[key] || '').toLowerCase();
+      return strA.localeCompare(strB) * dir;
+    });
+  }, [filteredInventory, sortConfig, companies]);
+
   const toggleSelection = (id) => {
     const newSet = new Set(selectedIds);
     if (newSet.has(id)) newSet.delete(id);
@@ -9454,16 +9502,16 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   };
 
   const toggleAll = () => {
-    if (selectedIds.size === filteredInventory.length) {
+    if (selectedIds.size === sortedFilteredInventory.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredInventory.map(r => r.id)));
+      setSelectedIds(new Set(sortedFilteredInventory.map(r => r.id)));
     }
   };
 
   const handleExport = () => {
     if (typeof downloadCSV !== 'function') return alert("Export function unavailable.");
-    const exportData = filteredInventory.map(reel => ({
+    const exportData = sortedFilteredInventory.map(reel => ({
       Ownership: reel.stockType === 'job_work' ? `Job Work (${reel.clientName || 'Client'})` : 'Factory Stock',
       Company: companies.find(c => c.id === reel.companyId)?.name || 'Unknown',
       Date: reel.date || '',
@@ -10180,6 +10228,36 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 </select>
               </div>
 
+              {/* Sort By Selector */}
+              <div>
+                <select
+                  className="apex-select"
+                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: 700, borderColor: '#cbd5e1', background: '#f8fafc' }}
+                  value={`${sortConfig.key}-${sortConfig.direction}`}
+                  onChange={e => {
+                    const [key, direction] = e.target.value.split('-');
+                    setSortConfig({ key, direction });
+                  }}
+                  title="Sort stock inventory order"
+                >
+                  <option value="date-desc">📅 Date (Newest)</option>
+                  <option value="date-asc">📅 Date (Oldest)</option>
+                  <option value="size-asc">📐 Size (Low → High)</option>
+                  <option value="size-desc">📐 Size (High → Low)</option>
+                  <option value="gsm-asc">⚖️ GSM (Low → High)</option>
+                  <option value="gsm-desc">⚖️ GSM (High → Low)</option>
+                  <option value="bf-asc">💪 BF (Low → High)</option>
+                  <option value="bf-desc">💪 BF (High → Low)</option>
+                  <option value="balanceQty-desc">📦 Bal KG (High → Low)</option>
+                  <option value="balanceQty-asc">📦 Bal KG (Low → High)</option>
+                  <option value="receivedQty-desc">📥 Recv KG (High → Low)</option>
+                  <option value="ratePerKg-desc">💰 Rate (High → Low)</option>
+                  <option value="ratePerKg-asc">💰 Rate (Low → High)</option>
+                  <option value="millName-asc">🏭 Mill (A → Z)</option>
+                  <option value="reelNo-asc">🏷️ Reel # (A → Z)</option>
+                </select>
+              </div>
+
               {/* Advanced Filters Toggle Button */}
               <div>
                 <button
@@ -10357,7 +10435,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           {inventoryMode === 'grid' ? (
             <>
               <ExcelStockInventory
-                inventory={filteredInventory}
+                inventory={sortedFilteredInventory}
                 companies={companies}
                 role={role}
                 updateDoc={updateDoc}
@@ -10376,29 +10454,25 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
             <table className="apex-table" style={{ minWidth: 1100 }}>
               <thead>
                 <tr>
-                  {role === 'admin' && <th style={{ width: 36, paddingLeft: 14 }}><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === filteredInventory.length && filteredInventory.length > 0} /></th>}
-                  <th>Company</th>
-                  <th>Date &amp; Ref</th>
-                  <th>Mill / Party</th>
-                  <th>Reel No.</th>
-                  <th>Specs</th>
-                  <th>Received</th>
-                  <th>Issued</th>
-                  <th>Balance</th>
-                  <th>Rate &amp; Value</th>
+                  {role === 'admin' && <th style={{ width: 36, paddingLeft: 14 }}><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === sortedFilteredInventory.length && sortedFilteredInventory.length > 0} /></th>}
+                  <th onClick={() => requestSort('company')} style={{ cursor: 'pointer', userSelect: 'none' }}>Company {sortConfig.key === 'company' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('date')} style={{ cursor: 'pointer', userSelect: 'none' }}>Date &amp; Ref {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('millName')} style={{ cursor: 'pointer', userSelect: 'none' }}>Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('reelNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Specs (Size/GSM/BF) {['size', 'gsm', 'bf'].includes(sortConfig.key) ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Received {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('issuedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Issued {sortConfig.key === 'issuedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Balance {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                  <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate &amp; Value {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                   <th>Usage History</th>
                   {role === 'admin' && <th style={{ textAlign: 'right' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {filteredInventory.length === 0 && (
+                {sortedFilteredInventory.length === 0 && (
                   <tr><td colSpan="12" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontStyle: 'italic' }}>No inventory records match the current filters.</td></tr>
                 )}
-                {[...filteredInventory].sort((a, b) => {
-                  const dateA = new Date(a.date || 0).getTime();
-                  const dateB = new Date(b.date || 0).getTime();
-                  return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-                }).map(reel => {
+                {sortedFilteredInventory.map(reel => {
                   const isAvailable = (reel.balanceQty || 0) > 0;
                   const isLow = isAvailable && (reel.balanceQty || 0) < lowStockThreshold;
                   const compName = companies.find(c => c.id === reel.companyId)?.name || 'Unassigned';
