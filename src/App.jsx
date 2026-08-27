@@ -15,7 +15,7 @@ import Barcode from 'react-barcode';
 // 1. TURSO DATABASE SETUP & GEMINI AI SERVICE
 // ==========================================
 import { executeQuery, executeBatch, generateId, initDb, getNextCounter } from './db.js';
-import { getGeminiApiKey, setGeminiApiKey, isGeminiConfigured, getPreferredGeminiModel, setPreferredGeminiModel, GEMINI_CANDIDATE_MODELS, parseBoxRecipeWithAI, askFactoryAI, parseReelsInwardWithAI, calculateFactoryKPIs } from './gemini.js';
+import { getGeminiApiKey, setGeminiApiKey, isGeminiConfigured, getPreferredGeminiModel, setPreferredGeminiModel, GEMINI_CANDIDATE_MODELS, parseBoxRecipeWithAI, askFactoryAI, parseReelsInwardWithAI, parseInvoiceImageWithAI, calculateFactoryKPIs } from './gemini.js';
 
 
 // Audio synthesizer for barcode scan feedback
@@ -9558,38 +9558,78 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         reader.onerror = (error) => reject(error);
       });
 
-      const functions = getFunctions(app, 'asia-south1');
-      const parseInvoice = httpsCallable(functions, 'parseInvoice');
+      let data = null;
 
-      const response = await parseInvoice({ base64Image, mimeType: file.type });
-      const data = response.data;
+      // 1. Try Gemini Vision OCR first (instant multimodal extraction)
+      if (isGeminiConfigured()) {
+        try {
+          data = await parseInvoiceImageWithAI({ base64Data: base64Image, mimeType: file.type, vendors });
+        } catch(geminiErr) {
+          console.warn('Gemini vision invoice scan error, trying fallback:', geminiErr);
+        }
+      }
+
+      // 2. If Gemini key not configured, prompt operator for key or use fallback
+      if (!data && !isGeminiConfigured()) {
+        const promptKey = window.prompt(
+          "🤖 Google Gemini Vision API Key Required\n\nTo scan invoices & delivery challans directly from images/PDFs, please enter your Gemini API Key:\n(You can get a free key from aistudio.google.com)"
+        );
+        if (promptKey && promptKey.trim()) {
+          setGeminiApiKey(promptKey.trim());
+          try {
+            data = await parseInvoiceImageWithAI({ base64Data: base64Image, mimeType: file.type, vendors });
+          } catch(err) {
+            console.warn('Gemini OCR error after key entry:', err);
+          }
+        }
+      }
+
+      // 3. Fallback to Cloud Function if available
+      if (!data) {
+        try {
+          const functions = getFunctions(app, 'asia-south1');
+          const parseInvoice = httpsCallable(functions, 'parseInvoice');
+          const response = await parseInvoice({ base64Image, mimeType: file.type });
+          data = response.data;
+        } catch(cloudErr) {
+          console.warn('Cloud function fallback error:', cloudErr);
+        }
+      }
+
+      if (!data) {
+        throw new Error("Could not parse invoice. Please ensure the image is well-lit and legible, and your Gemini API key is configured.");
+      }
 
       setCommonData(prev => ({
         ...prev,
         millName: data.millName || prev.millName,
         invoiceNo: data.invoiceNo || prev.invoiceNo,
-        date: data.date || prev.date
+        date: data.date || prev.date,
+        vehicleNo: data.vehicleNo || prev.vehicleNo
       }));
 
       if (data.lineItems && data.lineItems.length > 0) {
         setReelsInput(data.lineItems.map(item => ({
+          uniqueReelId: '',
+          supplierReelNo: item.reelNo || '',
           reelNo: item.reelNo || '',
-          size: item.size || '',
-          gsm: item.gsm || '', 
-          bf: item.bf || '',   
-          colour: 'Kraft',
-          receivedQty: item.weight || '',
+          size: String(item.size || '').replace(/[^0-9.]/g, ''),
+          gsm: String(item.gsm || '').replace(/[^0-9.]/g, ''), 
+          bf: String(item.bf || '').replace(/[^0-9.]/g, ''),   
+          colour: item.colour || 'Kraft',
+          receivedQty: String(item.weight || item.receivedQty || '').replace(/[^0-9.]/g, ''),
           initialIssuedQty: '',
-          ratePerKg: item.rate || ''
+          ratePerKg: String(item.rate || item.ratePerKg || '').replace(/[^0-9.]/g, '')
         })));
-        if (addLog) addLog(`AI Scanned Invoice: ${data.invoiceNo || 'Unknown'}`);
+        if (addLog) addLog(`AI Scanned Invoice: ${data.invoiceNo || 'Unknown'} (${data.lineItems.length} reels extracted)`);
+        alert(`✓ Successfully scanned invoice #${data.invoiceNo || ''} from ${data.millName || 'Mill'}.\n${data.lineItems.length} paper reels detected and filled!`);
       } else {
-        alert("Invoice scanned, but no paper reels were detected.");
+        alert("Invoice scanned, but no paper reel line items were detected. Please check the image.");
       }
 
     } catch (error) {
       console.error("Scan error:", error);
-      alert(`Scanning failed: ${error.message}`);
+      alert(`Invoice scanning failed: ${error.message}`);
     } finally {
       setIsScanning(false);
       e.target.value = null;

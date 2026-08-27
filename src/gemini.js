@@ -44,7 +44,7 @@ export function isGeminiConfigured() {
  * Calls Gemini API with latest models (1.5 Flash / 2.5 Flash / 1.5 Pro)
  * with automatic fallback cascade if a specific model endpoint is unavailable.
  */
-async function callGeminiApi({ prompt, systemInstruction = '', responseSchema = null, temperature = 0.2 }) {
+async function callGeminiApi({ prompt, inlineData = null, systemInstruction = '', responseSchema = null, temperature = 0.2 }) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('GEMINI_KEY_MISSING');
@@ -62,16 +62,29 @@ async function callGeminiApi({ prompt, systemInstruction = '', responseSchema = 
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
+      const userParts = [];
+      if (inlineData && inlineData.data) {
+        userParts.push({
+          inlineData: {
+            mimeType: inlineData.mimeType || 'image/jpeg',
+            data: inlineData.data
+          }
+        });
+      }
+      if (prompt) {
+        userParts.push({ text: prompt });
+      }
+
       const payload = {
         contents: [
           {
             role: 'user',
-            parts: [{ text: prompt }]
+            parts: userParts
           }
         ],
         generationConfig: {
           temperature,
-          maxOutputTokens: 2048
+          maxOutputTokens: 4096
         }
       };
 
@@ -899,6 +912,84 @@ Return JSON matching the schema with millName, invoiceNo, vehicleNo, date, and t
 
   const rawJson = await callGeminiApi({
     prompt,
+    systemInstruction,
+    responseSchema: schema,
+    temperature: 0.1
+  });
+
+  return cleanAndParseJson(rawJson);
+}
+
+/**
+ * 4. AI INVOICE & DELIVERY CHALLAN IMAGE/PDF OCR SCANNER
+ * Uses Google Gemini Multimodal Vision to extract Mill Name, Invoice No, Date, Vehicle No,
+ * and all paper reel items directly from uploaded bill photos / scans / PDFs.
+ */
+export async function parseInvoiceImageWithAI({ base64Data, mimeType = 'image/jpeg', vendors = [] }) {
+  let cleanBase64 = base64Data;
+  let resolvedMime = mimeType;
+  if (base64Data && base64Data.startsWith('data:')) {
+    const commaIdx = base64Data.indexOf(',');
+    if (commaIdx !== -1) {
+      const mimeMatch = base64Data.slice(0, commaIdx).match(/data:([^;]+);/);
+      if (mimeMatch) resolvedMime = mimeMatch[1];
+      cleanBase64 = base64Data.slice(commaIdx + 1);
+    }
+  }
+
+  const vendorsList = vendors.map(v => v.name || v.vendorName).filter(Boolean).slice(0, 40).join(', ');
+
+  const systemInstruction = `You are an expert Paper Corrugation Mill Invoice & Delivery Challan OCR Parser.
+Analyze this invoice/challan image, photo, or document and extract all data with high precision:
+1. Mill / Supplier Name (e.g. Star Paper Mill, Spenzzer, Dev Bhoomi, Hanumant, Sukraft, etc.). Known vendors: [${vendorsList}].
+2. Invoice Number / Delivery Challan Number.
+3. Invoice Date (in YYYY-MM-DD format).
+4. Vehicle / Truck Number (e.g. MH-15-AB-1234, GJ-01-XX-9999).
+5. All Paper Reel Line Items:
+   - reelNo (The unique mill reel number or barcode printed on invoice / roll list)
+   - size (Deckle / Width in cm, e.g. 100, 105, 110, 115, 120, 125, 130, 140, 150. If in mm like 1200, convert to 120)
+   - gsm (Grammage in GSM, e.g. 100, 110, 120, 140, 150, 170, 180, 200)
+   - bf (Bursting Factor, e.g. 14, 16, 18, 20, 22, 24, 28)
+   - colour (Default 'Kraft', or Natural, Golden, White, Duplex)
+   - weight (Net weight in KG, number only)
+   - rate (Rate per KG in ₹ if available, number only)`;
+
+  const prompt = `Parse all paper reels and invoice metadata from this image. Return structured JSON matching the schema.`;
+
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      millName: { type: 'STRING', description: 'Paper Mill or Vendor Name' },
+      invoiceNo: { type: 'STRING', description: 'Invoice Number or DC Number' },
+      date: { type: 'STRING', description: 'Date in YYYY-MM-DD format' },
+      vehicleNo: { type: 'STRING', description: 'Truck / Vehicle registration number' },
+      lineItems: {
+        type: 'ARRAY',
+        description: 'Array of paper reels listed in invoice',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            reelNo: { type: 'STRING', description: 'Reel number / Roll ID' },
+            size: { type: 'STRING', description: 'Size in cm' },
+            gsm: { type: 'STRING', description: 'GSM value' },
+            bf: { type: 'STRING', description: 'BF value' },
+            colour: { type: 'STRING', description: 'Paper shade (Kraft, Natural, Golden, White)' },
+            weight: { type: 'NUMBER', description: 'Net weight in KG' },
+            rate: { type: 'NUMBER', description: 'Rate per KG in INR' }
+          },
+          required: ['reelNo', 'weight']
+        }
+      }
+    },
+    required: ['lineItems']
+  };
+
+  const rawJson = await callGeminiApi({
+    prompt,
+    inlineData: {
+      mimeType: resolvedMime || 'image/jpeg',
+      data: cleanBase64
+    },
     systemInstruction,
     responseSchema: schema,
     temperature: 0.1
