@@ -9095,6 +9095,234 @@ function WastageView({ wastageLogs, orders, companies, production, addLog, role,
   );
 }
 
+// --- INVENTORY MULTI-SELECT FILTER DROPDOWN COMPONENT ---
+function InventoryMultiSelectDropdown({ 
+  label, 
+  icon, 
+  options = [], 
+  selected = [], 
+  onChange, 
+  unit = '',
+  itemCounts = {} 
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const filteredOptions = options.filter(opt => 
+    String(opt).toLowerCase().includes(search.toLowerCase())
+  );
+
+  const toggleOption = (opt) => {
+    const optStr = String(opt);
+    if (selected.includes(optStr)) {
+      onChange(selected.filter(item => item !== optStr));
+    } else {
+      onChange([...selected, optStr]);
+    }
+  };
+
+  const selectAll = () => {
+    onChange(options.map(o => String(o)));
+  };
+
+  const clearAll = () => {
+    onChange([]);
+  };
+
+  const hasSelection = selected && selected.length > 0;
+
+  return (
+    <div style={{ position: 'relative', minWidth: 125 }} ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="apex-btn"
+        style={{
+          width: '100%',
+          padding: '7px 8px',
+          fontSize: 12,
+          fontWeight: hasSelection ? 700 : 500,
+          background: hasSelection ? '#eff6ff' : '#fff',
+          border: `1.5px solid ${hasSelection ? '#2563eb' : '#cbd5e1'}`,
+          color: hasSelection ? '#1d4ed8' : '#334155',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 4,
+          borderRadius: 6,
+          cursor: 'pointer',
+          transition: 'all 0.15s',
+          boxShadow: hasSelection ? '0 1px 4px rgba(37,99,235,0.18)' : 'none'
+        }}
+        title={`Filter by ${label} (Multi-select)`}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {icon && <span style={{ fontSize: 11 }}>{icon}</span>}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {hasSelection 
+              ? (selected.length === 1 ? `${label}: ${selected[0]}${unit ? ' ' + unit : ''}` : `${label} (${selected.length})`) 
+              : `All ${label}`}
+          </span>
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          {hasSelection && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                clearAll();
+              }}
+              style={{
+                width: 15,
+                height: 15,
+                borderRadius: '50%',
+                background: '#bfdbfe',
+                color: '#1e40af',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 9,
+                fontWeight: 900,
+                cursor: 'pointer'
+              }}
+              title="Clear selection"
+            >
+              ✕
+            </span>
+          )}
+          <span style={{ fontSize: 9, color: '#64748b' }}>{isOpen ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {isOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            minWidth: 210,
+            width: 'max-content',
+            maxWidth: 280,
+            background: '#ffffff',
+            border: '1.5px solid #cbd5e1',
+            borderRadius: 8,
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.18), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+            zIndex: 1000,
+            padding: 8
+          }}
+        >
+          {/* Search box if > 4 options */}
+          {options.length > 4 && (
+            <div style={{ marginBottom: 6 }}>
+              <input
+                type="text"
+                placeholder={`Search ${label}...`}
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '4px 8px',
+                  fontSize: 11.5,
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 4,
+                  outline: 'none'
+                }}
+                autoFocus
+              />
+            </div>
+          )}
+
+          {/* Quick Select All / Clear */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 4px 6px', borderBottom: '1px solid #f1f5f9', fontSize: 11, fontWeight: 700 }}>
+            <button
+              type="button"
+              onClick={selectAll}
+              style={{ border: 'none', background: 'transparent', color: '#2563eb', cursor: 'pointer', padding: 0 }}
+            >
+              Select All ({options.length})
+            </button>
+            <button
+              type="button"
+              onClick={clearAll}
+              style={{ border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer', padding: 0 }}
+            >
+              Clear
+            </button>
+          </div>
+
+          {/* Option list */}
+          <div style={{ maxHeight: 210, overflowY: 'auto', paddingTop: 4 }}>
+            {filteredOptions.length === 0 ? (
+              <div style={{ padding: '8px 4px', fontSize: 11.5, color: '#94a3b8', textAlign: 'center' }}>
+                No matches found
+              </div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const optStr = String(opt);
+                const isChecked = selected.includes(optStr);
+                const count = itemCounts[optStr] || 0;
+
+                return (
+                  <label
+                    key={optStr}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '5px 6px',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      background: isChecked ? '#eff6ff' : 'transparent',
+                      color: isChecked ? '#1e40af' : '#1e293b',
+                      fontWeight: isChecked ? 700 : 500,
+                      marginBottom: 1,
+                      userSelect: 'none'
+                    }}
+                    onMouseEnter={e => { if (!isChecked) e.currentTarget.style.background = '#f8fafc'; }}
+                    onMouseLeave={e => { if (!isChecked) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleOption(optStr)}
+                        style={{ cursor: 'pointer', width: 13, height: 13, accentColor: '#2563eb' }}
+                      />
+                      <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        {optStr}{unit ? ` ${unit}` : ''}
+                      </span>
+                    </div>
+                    {count > 0 && (
+                      <span style={{ fontSize: 10, background: isChecked ? '#dbeafe' : '#f1f5f9', color: isChecked ? '#1e40af' : '#64748b', padding: '1px 5px', borderRadius: 10, fontWeight: 700, marginLeft: 6 }}>
+                        {count}
+                      </span>
+                    )}
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- INVENTORY VIEW ---
 function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
   const allowedCompanyId = activeUnitId || 'all';
@@ -9133,7 +9361,29 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
   const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
-  const defaultFilters = { company: '', stockType: 'All', clientId: '', millName: '', searchReel: '', size: '', gsm: '', bf: '', colour: '', status: 'All', startDate: '', endDate: '', minRate: '', maxRate: '', invoiceNo: '', vehicleNo: '' };
+  const defaultFilters = { 
+    company: '', 
+    stockType: 'All', 
+    clientId: '', 
+    mills: [], 
+    millName: '', 
+    searchReel: '', 
+    sizes: [], 
+    size: '', 
+    gsms: [], 
+    gsm: '', 
+    bfs: [], 
+    bf: '', 
+    colours: [], 
+    colour: '', 
+    status: 'All', 
+    startDate: '', 
+    endDate: '', 
+    minRate: '', 
+    maxRate: '', 
+    invoiceNo: '', 
+    vehicleNo: '' 
+  };
   const [filters, setFilters] = useState(defaultFilters);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -9575,11 +9825,51 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     });
   }, [inventory, production]);
 
-  const uniqueMills = useMemo(() => Array.from(new Set(inventory.map(r => r.millName).filter(Boolean))).sort(), [inventory]);
-  const uniqueSizes = useMemo(() => Array.from(new Set(inventory.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
-  const uniqueGsms = useMemo(() => Array.from(new Set(inventory.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
-  const uniqueBfs = useMemo(() => Array.from(new Set(inventory.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventory]);
-  const uniqueColours = useMemo(() => Array.from(new Set(inventory.map(r => r.colour).filter(Boolean))).sort(), [inventory]);
+  const uniqueMills = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.millName).filter(Boolean))).sort(), [inventoryWithUsage]);
+  const uniqueSizes = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
+  const uniqueGsms = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
+  const uniqueBfs = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
+  const uniqueColours = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.colour).filter(Boolean))).sort(), [inventoryWithUsage]);
+
+  const millCounts = useMemo(() => {
+    const counts = {};
+    inventoryWithUsage.forEach(r => {
+      if (r.millName) counts[String(r.millName)] = (counts[String(r.millName)] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryWithUsage]);
+
+  const sizeCounts = useMemo(() => {
+    const counts = {};
+    inventoryWithUsage.forEach(r => {
+      if (r.size) counts[String(r.size)] = (counts[String(r.size)] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryWithUsage]);
+
+  const gsmCounts = useMemo(() => {
+    const counts = {};
+    inventoryWithUsage.forEach(r => {
+      if (r.gsm) counts[String(r.gsm)] = (counts[String(r.gsm)] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryWithUsage]);
+
+  const bfCounts = useMemo(() => {
+    const counts = {};
+    inventoryWithUsage.forEach(r => {
+      if (r.bf) counts[String(r.bf)] = (counts[String(r.bf)] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryWithUsage]);
+
+  const colourCounts = useMemo(() => {
+    const counts = {};
+    inventoryWithUsage.forEach(r => {
+      if (r.colour) counts[String(r.colour)] = (counts[String(r.colour)] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryWithUsage]);
 
   const filteredInventory = useMemo(() => {
     return inventoryWithUsage.filter(reel => {
@@ -9592,7 +9882,43 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const matchName = String(reel.clientName || '').toLowerCase() === filters.clientId.toLowerCase();
         if (!matchId && !matchName) return false;
       }
-      if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) return false;
+
+      // Multi-Select Mills Filter
+      if (filters.mills && filters.mills.length > 0) {
+        if (!filters.mills.includes(String(reel.millName))) return false;
+      } else if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) {
+        return false;
+      }
+
+      // Multi-Select Sizes Filter
+      if (filters.sizes && filters.sizes.length > 0) {
+        if (!filters.sizes.includes(String(reel.size))) return false;
+      } else if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) {
+        return false;
+      }
+
+      // Multi-Select GSM Filter
+      if (filters.gsms && filters.gsms.length > 0) {
+        if (!filters.gsms.includes(String(reel.gsm))) return false;
+      } else if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) {
+        return false;
+      }
+
+      // Multi-Select BF Filter
+      if (filters.bfs && filters.bfs.length > 0) {
+        if (!filters.bfs.includes(String(reel.bf))) return false;
+      } else if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) {
+        return false;
+      }
+
+      // Multi-Select Colours Filter
+      if (filters.colours && filters.colours.length > 0) {
+        if (!filters.colours.some(c => c.toLowerCase() === String(reel.colour || '').toLowerCase())) return false;
+      } else if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) {
+        return false;
+      }
+
+      // Global Search
       if (filters.searchReel) {
         const sQ = filters.searchReel.toLowerCase().trim();
         const matchReelNo = String(reel.reelNo || '').toLowerCase().includes(sQ);
@@ -9602,12 +9928,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const matchVeh = String(reel.vehicleNo || '').toLowerCase().includes(sQ);
         const matchMill = String(reel.millName || '').toLowerCase().includes(sQ);
         const matchClient = String(reel.clientName || '').toLowerCase().includes(sQ);
-        if (!matchReelNo && !matchSupNo && !matchSysId && !matchInv && !matchVeh && !matchMill && !matchClient) return false;
+        const matchSize = String(reel.size || '').includes(sQ);
+        const matchGsm = String(reel.gsm || '').includes(sQ);
+        const matchBf = String(reel.bf || '').includes(sQ);
+        if (!matchReelNo && !matchSupNo && !matchSysId && !matchInv && !matchVeh && !matchMill && !matchClient && !matchSize && !matchGsm && !matchBf) return false;
       }
-      if (filters.size && !String(reel.size || '').toLowerCase().includes(filters.size.toLowerCase())) return false;
-      if (filters.gsm && !String(reel.gsm || '').includes(String(filters.gsm))) return false;
-      if (filters.bf && !String(reel.bf || '').includes(String(filters.bf))) return false;
-      if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) return false;
+
       if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
       if (filters.status === 'Used' && (reel.balanceQty || 0) > 0) return false;
       if (filters.status === 'Low' && ((reel.balanceQty || 0) <= 0 || (reel.balanceQty || 0) >= lowStockThreshold)) return false;
@@ -10289,7 +10615,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </div>
             </div>
 
-            {/* ROW 2: Primary Parameter Inputs (Search, Mill, Size, GSM, BF, Colour, Adv toggle) */}
+            {/* ROW 2: Primary Parameter Inputs with Multi-Select Dropdowns */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, alignItems: 'center' }}>
               {/* Global Search */}
               <div style={{ gridColumn: 'span 2', minWidth: 200, position: 'relative' }}>
@@ -10312,82 +10638,58 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 )}
               </div>
 
-              {/* Mill / Party Selector */}
-              <div>
-                <select
-                  className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.millName ? 700 : 400, borderColor: filters.millName ? '#2563eb' : '#cbd5e1' }}
-                  value={filters.millName}
-                  onChange={e => setFilters(f => ({ ...f, millName: e.target.value }))}
-                >
-                  <option value="">All Mills / Parties</option>
-                  {uniqueMills.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
+              {/* Multi-Select Mills / Parties */}
+              <InventoryMultiSelectDropdown
+                label="Mills"
+                icon="🏭"
+                options={uniqueMills}
+                selected={filters.mills || []}
+                onChange={vals => setFilters(f => ({ ...f, mills: vals }))}
+                itemCounts={millCounts}
+              />
 
-              {/* Size (cm) */}
-              <div>
-                <select
-                  className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.size ? 700 : 400, borderColor: filters.size ? '#2563eb' : '#cbd5e1' }}
-                  value={filters.size}
-                  onChange={e => setFilters(f => ({ ...f, size: e.target.value }))}
-                >
-                  <option value="">All Sizes (cm)</option>
-                  {uniqueSizes.map(s => (
-                    <option key={s} value={s}>{s} cm</option>
-                  ))}
-                </select>
-              </div>
+              {/* Multi-Select Sizes (cm) */}
+              <InventoryMultiSelectDropdown
+                label="Sizes"
+                icon="📐"
+                unit="cm"
+                options={uniqueSizes}
+                selected={filters.sizes || []}
+                onChange={vals => setFilters(f => ({ ...f, sizes: vals }))}
+                itemCounts={sizeCounts}
+              />
 
-              {/* GSM */}
-              <div>
-                <select
-                  className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.gsm ? 700 : 400, borderColor: filters.gsm ? '#2563eb' : '#cbd5e1' }}
-                  value={filters.gsm}
-                  onChange={e => setFilters(f => ({ ...f, gsm: e.target.value }))}
-                >
-                  <option value="">All GSM</option>
-                  {uniqueGsms.map(g => (
-                    <option key={g} value={g}>{g} GSM</option>
-                  ))}
-                </select>
-              </div>
+              {/* Multi-Select GSM */}
+              <InventoryMultiSelectDropdown
+                label="GSM"
+                icon="⚖️"
+                unit="GSM"
+                options={uniqueGsms}
+                selected={filters.gsms || []}
+                onChange={vals => setFilters(f => ({ ...f, gsms: vals }))}
+                itemCounts={gsmCounts}
+              />
 
-              {/* BF */}
-              <div>
-                <select
-                  className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.bf ? 700 : 400, borderColor: filters.bf ? '#2563eb' : '#cbd5e1' }}
-                  value={filters.bf}
-                  onChange={e => setFilters(f => ({ ...f, bf: e.target.value }))}
-                >
-                  <option value="">All BF</option>
-                  {uniqueBfs.map(b => (
-                    <option key={b} value={b}>BF {b}</option>
-                  ))}
-                </select>
-              </div>
+              {/* Multi-Select BF */}
+              <InventoryMultiSelectDropdown
+                label="BF"
+                icon="💪"
+                unit="BF"
+                options={uniqueBfs}
+                selected={filters.bfs || []}
+                onChange={vals => setFilters(f => ({ ...f, bfs: vals }))}
+                itemCounts={bfCounts}
+              />
 
-              {/* Colour / Shade */}
-              <div>
-                <select
-                  className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: filters.colour ? 700 : 400, borderColor: filters.colour ? '#2563eb' : '#cbd5e1' }}
-                  value={filters.colour}
-                  onChange={e => setFilters(f => ({ ...f, colour: e.target.value }))}
-                >
-                  <option value="">All Colours</option>
-                  <option value="Natural">Natural</option>
-                  <option value="Golden">Golden</option>
-                  <option value="Duplex">Duplex</option>
-                  <option value="White">White Top</option>
-                  <option value="Semi-Kraft">Semi-Kraft</option>
-                </select>
-              </div>
+              {/* Multi-Select Colours */}
+              <InventoryMultiSelectDropdown
+                label="Colours"
+                icon="🎨"
+                options={Array.from(new Set(['Kraft', 'Natural', 'Golden', 'White', 'Duplex', 'Semi-Kraft', ...uniqueColours]))}
+                selected={filters.colours || []}
+                onChange={vals => setFilters(f => ({ ...f, colours: vals }))}
+                itemCounts={colourCounts}
+              />
 
               {/* Sort By Selector */}
               <div>
@@ -10539,44 +10841,60 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </div>
             )}
 
-            {/* ROW 4: Live Results Summary & Active Filter Tag Chips */}
+            {/* ROW 4: Live Results Summary & Active Multi-Filter Tag Chips */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid #f1f5f9', fontSize: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ color: '#475569' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ color: '#475569', marginRight: 4 }}>
                   Showing <strong style={{ color: '#0f172a' }}>{filteredInventory.length}</strong> reels (<strong style={{ color: '#16a34a' }}>{filteredInventory.filter(r => (r.balanceQty || 0) > 0).length} active</strong>) · Total Stock: <strong style={{ color: '#0284c7' }}>{(filteredInventory.reduce((sum, r) => sum + (r.balanceQty || 0), 0) / 1000).toFixed(2)} MT</strong> · Value: <strong style={{ color: '#d97706' }}>₹{filteredInventory.reduce((sum, r) => sum + (r.value || 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
                 </span>
 
-                {/* Active Filter Chips */}
-                {filters.millName && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    Mill: {filters.millName}
-                    <button type="button" onClick={() => setFilters(f => ({ ...f, millName: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                {/* Multi-Select Mills Chips */}
+                {(filters.mills || []).map(m => (
+                  <span key={`chip-mill-${m}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    🏭 {m}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, mills: (f.mills || []).filter(item => item !== m) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
-                )}
-                {filters.size && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    Size: {filters.size}cm
-                    <button type="button" onClick={() => setFilters(f => ({ ...f, size: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                ))}
+
+                {/* Multi-Select Sizes Chips */}
+                {(filters.sizes || []).map(s => (
+                  <span key={`chip-size-${s}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    📐 {s} cm
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, sizes: (f.sizes || []).filter(item => item !== s) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
-                )}
-                {filters.gsm && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    GSM: {filters.gsm}
-                    <button type="button" onClick={() => setFilters(f => ({ ...f, gsm: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                ))}
+
+                {/* Multi-Select GSM Chips */}
+                {(filters.gsms || []).map(g => (
+                  <span key={`chip-gsm-${g}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    ⚖️ {g} GSM
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, gsms: (f.gsms || []).filter(item => item !== g) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
-                )}
-                {filters.bf && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    BF: {filters.bf}
-                    <button type="button" onClick={() => setFilters(f => ({ ...f, bf: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                ))}
+
+                {/* Multi-Select BF Chips */}
+                {(filters.bfs || []).map(b => (
+                  <span key={`chip-bf-${b}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    💪 {b} BF
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, bfs: (f.bfs || []).filter(item => item !== b) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
-                )}
+                ))}
+
+                {/* Multi-Select Colours Chips */}
+                {(filters.colours || []).map(c => (
+                  <span key={`chip-colour-${c}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    🎨 {c}
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, colours: (f.colours || []).filter(item => item !== c) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                ))}
+
                 {(filters.startDate || filters.endDate) && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
                     📅 {filters.startDate || 'Start'} → {filters.endDate || 'End'}
                     <button type="button" onClick={() => setFilters(f => ({ ...f, startDate: '', endDate: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
                 )}
+
                 {(sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>
                     🔀 Sorted: {sortConfig.key.toUpperCase()} ({sortConfig.direction === 'asc' ? '▲ Low→High' : '▼ High→Low'})
@@ -10585,7 +10903,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 )}
               </div>
 
-              {(filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.millName || filters.searchReel || filters.size || filters.gsm || filters.bf || filters.colour || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company || sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
+              {((filters.mills && filters.mills.length > 0) || (filters.sizes && filters.sizes.length > 0) || (filters.gsms && filters.gsms.length > 0) || (filters.bfs && filters.bfs.length > 0) || (filters.colours && filters.colours.length > 0) || filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.searchReel || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company || sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -10593,7 +10911,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     setSortConfig({ key: 'date', direction: 'desc' });
                   }}
                   className="apex-btn apex-btn-ghost apex-btn-sm"
-                  style={{ color: '#ef4444', fontWeight: 700, fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 4 }}
+                  style={{ color: '#ef4444', fontWeight: 700, fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}
                 >
                   <span>✕ Reset All Filters &amp; Sort</span>
                 </button>
