@@ -190,15 +190,9 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
   const odAllowance = 4;
   
   let odStr = '';
-  if (itemType === 'PPC' || itemType === 'Plate' || itemType === 'Sheet' || itemType === 'Partition') {
-    // For PPC / Partition / Plate / Sheet: Directly register PPC size without RSC box flap expansion
-    if (L > 0 && W > 0 && H > 0) {
-      odStr = `${L}x${W}x${H}`;
-    } else if (L > 0 && W > 0) {
-      odStr = `${L}x${W}`;
-    } else if (L > 0) {
-      odStr = `${L}`;
-    }
+  if (itemType === 'PPC' || itemType === 'Plate' || itemType === 'Sheet' || itemType === 'Partition' || itemType === 'Plate / Pad') {
+    // ID/OD sizes do NOT exist for Plate and PPC items (flat dimension only)
+    odStr = '—';
   } else {
     const odL = L > 0 ? L + odAllowance : 0;
     const odW = W > 0 ? W + odAllowance : 0;
@@ -206,17 +200,13 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
     odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : (L > 0 && W > 0 ? `${odL}x${odW}` : '');
   }
 
-  let lapMm = 35;
-  if (jointType && jointType.includes('Gluing')) lapMm = 30;
-  else if (jointType && (jointType.includes('Interlock') || jointType.includes('None'))) lapMm = 0;
-
   let deckleMm = 0;
   let cutLengthMm = 0;
   let creasingScores = '';
 
   if (itemType === 'Box') {
-    deckleMm = Math.round(W + H + 20);
-    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+    deckleMm = Math.round(W + H + 15); // 15mm tolerance in deckle
+    cutLengthMm = Math.round((2 * L) + (2 * W) + 40); // 40mm tolerance in cutting
     const flap = Math.round(W / 2 + 3);
     creasingScores = `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`;
   } else if (itemType === 'PPC' || itemType === 'Partition') {
@@ -224,7 +214,7 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
     deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
     cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
     creasingScores = 'PPC Partition Plate / Grid Profile';
-  } else if (itemType === 'Plate') {
+  } else if (itemType === 'Plate' || itemType === 'Plate / Pad') {
     deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
     cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
     creasingScores = 'Flat Separator Plate / Divider Pad';
@@ -238,7 +228,7 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
     creasingScores = 'Plain Corrugated Sheet';
   } else {
     deckleMm = Math.round(W + H + 15);
-    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
+    cutLengthMm = Math.round((2 * L) + (2 * W) + 40);
     creasingScores = 'Custom Die-Cut Profile';
   }
 
@@ -11691,8 +11681,8 @@ function CreateDirectJobModal({ isOpen, onClose, items = [], companies = [], cus
                     <strong style={{ color: '#4ade80', fontSize: 13, fontFamily: 'monospace' }}>{currentCad.cutLengthMm || '—'} mm</strong>
                   </div>
                   <div>
-                    <span style={{ color: '#94a3b8' }}>📦 Outer Size (OD):</span><br />
-                    <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{currentCad.odStr || '—'} mm</strong>
+                    <span style={{ color: '#94a3b8' }}>{(customItem.itemType === 'Plate' || customItem.itemType === 'PPC' || customItem.itemType === 'Sheet') ? '📦 Plate / PPC Size:' : '📦 Outer Size (OD):'}</span><br />
+                    <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{(customItem.itemType === 'Plate' || customItem.itemType === 'PPC' || customItem.itemType === 'Sheet') ? `${customItem.size || '—'} mm` : (currentCad.odStr !== '—' ? `${currentCad.odStr} mm` : '—')}</strong>
                   </div>
                   <div>
                     <span style={{ color: '#94a3b8' }}>⚖️ Total Board GSM:</span><br />
@@ -13577,21 +13567,21 @@ const calculateSheetAndDeckle = (itemType = 'Box', L = 400, W = 250, H = 250, uL
   if (typeUpper.includes('TRAY') || typeUpper.includes('LID') || typeUpper.includes('COVER')) {
     singleCutLength = L + (2 * H) + 10;
     singleSheetWidth = W + (2 * H) + 10;
-  } else if (typeUpper.includes('PARTITION') || typeUpper.includes('PPC') || typeUpper.includes('SHEET')) {
+  } else if (typeUpper.includes('PARTITION') || typeUpper.includes('PPC') || typeUpper.includes('SHEET') || typeUpper.includes('PLATE')) {
     singleCutLength = L;
     singleSheetWidth = W;
   } else {
     // Regular Slotted Box (RSC / Standard Box)
-    // Cut Length = (Length + Width) * 2 + 40mm Glue Flap
+    // Box cutting: 40mm tolerance in cutting -> (Length + Width) * 2 + 40mm
     singleCutLength = (L + W) * 2 + 40;
-    // 1-UP Sheet Width = Top Flap (W/2) + Height (H) + Bottom Flap (W/2) + Crease Allowance (6mm) = W + H + 6mm
-    singleSheetWidth = W + H + 6;
+    // Box deckle: 15mm tolerance in deckle -> Width + Height + 15mm
+    singleSheetWidth = W + H + 15;
   }
 
   const cutLength = Math.round(singleCutLength * Math.max(1, uL));
   const totalSheetWidth = Math.round(singleSheetWidth * Math.max(1, uW));
-  // Deckle Width = (Total Sheet Width) + 25mm Side Trim Allowance
-  const deckleWidthMm = Math.round(totalSheetWidth + 25);
+  // Deckle Width = Total Sheet Width (15mm tolerance already included in singleSheetWidth)
+  const deckleWidthMm = Math.round(totalSheetWidth);
   const deckleInches = (deckleWidthMm / 25.4).toFixed(1);
 
   return {
@@ -13783,8 +13773,14 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
                   <span>📐</span> Sheet &amp; Box Specifications
                 </h4>
                 <div className="grid grid-cols-2 gap-y-2 text-xs font-semibold">
-                  <div><span className="text-stone-500 font-medium">Box ID (Internal L × W × H):</span> <br/><strong className="text-blue-900 font-mono">{idL} × {idW} × {idH} mm</strong></div>
-                  <div><span className="text-stone-500 font-medium">Box OD (Outer L × W × H):</span> <br/><strong className="text-purple-900 font-mono">{odL} × {odW} × {odH} mm</strong></div>
+                  {isPpcOrFlat ? (
+                    <div className="col-span-2"><span className="text-stone-500 font-medium">Plate / PPC Size:</span> <br/><strong className="text-blue-900 font-mono">{idL} × {idW} {idH > 0 ? `× ${idH}` : ''} mm</strong></div>
+                  ) : (
+                    <>
+                      <div><span className="text-stone-500 font-medium">Box ID (Internal L × W × H):</span> <br/><strong className="text-blue-900 font-mono">{idL} × {idW} × {idH} mm</strong></div>
+                      <div><span className="text-stone-500 font-medium">Box OD (Outer L × W × H):</span> <br/><strong className="text-purple-900 font-mono">{odL} × {odW} × {odH} mm</strong></div>
+                    </>
+                  )}
                   <div><span className="text-stone-500 font-medium">Board GSM:</span> <br/><strong>{boardGsm} GSM</strong></div>
                   <div><span className="text-stone-500 font-medium">Flute Type:</span> <br/><strong>{fluteType} Flute</strong></div>
                   <div><span className="text-stone-500 font-medium">Cut Length:</span> <br/><strong>{cutLength} mm</strong></div>
@@ -18237,8 +18233,21 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                 <span>📦</span> Auto-Engineered CAD Blank Dimensions &amp; Strength Specs
               </h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, fontSize: 12 }}>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Inner Size (ID):</span><br /><strong style={{ fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.size || activeBomModalItem.Size_mm || '-'} mm</strong></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Outer Size (OD):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{(() => { const _id = activeBomModalItem.size || activeBomModalItem.Size_mm || ''; const _p = _id.split(/[xX*×]+/).map(s => parseFloat(s.trim()) || 0); return (_p.length >= 3 && _p[0] > 0) ? `${_p[0]+4}x${_p[1]+4}x${_p[2]+4}` : '-'; })()} mm</strong></div>
+                {(() => {
+                  const itmType = (activeBomModalItem.itemType || activeBomModalItem.Item_Type || '').toUpperCase();
+                  const isFlat = itmType.includes('PLATE') || itmType.includes('PPC') || itmType.includes('SHEET') || itmType.includes('PARTITION');
+                  if (isFlat) {
+                    return (
+                      <div><span style={{ color: '#64748b', fontSize: 11 }}>Plate / PPC Size:</span><br /><strong style={{ fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.size || activeBomModalItem.Size_mm || '-'} mm</strong></div>
+                    );
+                  }
+                  return (
+                    <>
+                      <div><span style={{ color: '#64748b', fontSize: 11 }}>Inner Size (ID):</span><br /><strong style={{ fontFamily: 'var(--font-mono)' }}>{activeBomModalItem.size || activeBomModalItem.Size_mm || '-'} mm</strong></div>
+                      <div><span style={{ color: '#64748b', fontSize: 11 }}>Outer Size (OD):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{(() => { const _id = activeBomModalItem.size || activeBomModalItem.Size_mm || ''; const _p = _id.split(/[xX*×]+/).map(s => parseFloat(s.trim()) || 0); return (_p.length >= 3 && _p[0] > 0) ? `${_p[0]+4}x${_p[1]+4}x${_p[2]+4}` : '-'; })()} mm</strong></div>
+                    </>
+                  );
+                })()}
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Cutting Deckle (Width):</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#16a34a' }}>{activeBomModalItem.deckleMm || '-'} mm</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Cut Sheet Length:</span><br /><strong style={{ fontFamily: 'var(--font-mono)', color: '#16a34a' }}>{activeBomModalItem.cutLengthMm || '-'} mm</strong></div>
                 <div><span style={{ color: '#64748b', fontSize: 11 }}>Joint / Lap:</span><br /><strong>{activeBomModalItem.jointType || 'Stitching (35mm)'}</strong></div>
@@ -18493,7 +18502,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                     <th className="p-2 min-w-[130px]">Plant</th>
                     <th className="p-2 w-20">Type</th>
                     <th className="p-2 min-w-[170px]">Item / Box SKU *</th>
-                    <th className="p-2 min-w-[110px]">Inner Size (ID mm) *</th>
+                    <th className="p-2 min-w-[110px]">Size / ID (mm) *</th>
                     <th className="p-2 min-w-[100px]">Outer Size (OD)</th>
                     <th className="p-2 w-16">Ply</th>
                     <th className="p-2 w-16">Flute</th>
@@ -18508,6 +18517,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                   {itemsInput.map((itm, idx) => {
                     const isSelected = selectedLayerConfigRow === idx;
                     const layerSummary = (itm.layers || []).map(l => `${l.gsm}G ${l.type || l.colour || 'Kraft'}`).join(' / ') || '180G Golden / 120F Kraft / 140K Kraft';
+                    const isFlatItm = (itm.itemType || '').toUpperCase() === 'PPC' || (itm.itemType || '').toUpperCase() === 'PLATE' || (itm.itemType || '').toUpperCase() === 'SHEET' || (itm.itemType || '').toUpperCase() === 'PARTITION';
                     return (
                       <tr key={idx} className={`${isSelected ? 'bg-blue-50/70 ring-1 ring-blue-300' : 'hover:bg-stone-50'}`}>
                         <td className="p-2 text-center font-bold text-stone-500">{idx + 1}</td>
@@ -18547,7 +18557,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                           </div>
                         </td>
                         <td className="p-1.5">
-                          <input type="text" readOnly placeholder="Auto OD" className="w-full p-1.5 border rounded text-xs font-mono bg-slate-50 text-slate-700" value={itm.od} />
+                          <input type="text" readOnly placeholder="Auto OD" className="w-full p-1.5 border rounded text-xs font-mono bg-slate-50 text-slate-700" value={isFlatItm ? '—' : (itm.od || '')} />
                         </td>
                         <td className="p-1.5">
                           <select className="w-full p-1.5 border rounded text-xs font-bold" value={itm.ply} onChange={e => handleItemChange(idx, 'ply', e.target.value)}>
@@ -19095,7 +19105,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               <th>Unit</th>
               <th>Item / SKU Name</th>
               <th>Type</th>
-              <th>Inner Size (ID mm)</th>
+              <th>Size / ID (mm)</th>
               <th>Outer Size (OD mm)</th>
               <th>Cutting Blank (Deckle x Cut)</th>
               <th>Ply / Flute</th>
@@ -19112,11 +19122,17 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
               const comp = companies.find(c => c.id === item.companyId)?.name || 'Default';
               const name = item.name || item.Item_Name || 'Unnamed';
               const idDim = item.size || item.Size_mm || '-';
-              // Compute OD dynamically from ID + 4mm (ignore stale stored values)
+              const isPpcOrPlate = (item.itemType || item.Item_Type || '').toUpperCase() === 'PPC' || 
+                (item.itemType || item.Item_Type || '').toUpperCase() === 'PLATE' || 
+                (item.itemType || item.Item_Type || '').toUpperCase() === 'SHEET' || 
+                (item.itemType || item.Item_Type || '').toUpperCase() === 'PARTITION' ||
+                (item.itemType || item.Item_Type || '').toUpperCase() === 'PLATE / PAD';
+
+              // Compute OD dynamically from ID + 4mm for boxes; for Plate & PPC items OD does not exist ('—')
               const _idParts = idDim !== '-' ? idDim.split(/[xX*×]+/).map(s => parseFloat(s.trim()) || 0) : [];
-              const odDim = (_idParts.length >= 3 && _idParts[0] > 0)
+              const odDim = isPpcOrPlate ? '—' : ((_idParts.length >= 3 && _idParts[0] > 0)
                 ? `${_idParts[0] + 4}x${_idParts[1] + 4}x${_idParts[2] + 4}`
-                : '-';
+                : '-');
               const ply = item.ply || item.Ply || '3';
               const flute = item.fluteType || 'B';
               const wt = item.weight || item.Weight_g ? `${item.weight || item.Weight_g}g` : '-';
