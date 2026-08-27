@@ -9830,51 +9830,69 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     });
   }, [inventory, production]);
 
-  const uniqueMills = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.millName).filter(Boolean))).sort(), [inventoryWithUsage]);
-  const uniqueSizes = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
-  const uniqueGsms = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
-  const uniqueBfs = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [inventoryWithUsage]);
-  const uniqueColours = useMemo(() => Array.from(new Set(inventoryWithUsage.map(r => r.colour).filter(Boolean))).sort(), [inventoryWithUsage]);
+  // Base inventory strictly scoped to current plant, ownership, and active stock status
+  const baseAvailableInventory = useMemo(() => {
+    return inventoryWithUsage.filter(reel => {
+      if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
+      if (filters.stockType === 'factory' && reel.stockType === 'job_work') return false;
+      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work') return false;
+      if (filters.clientId) {
+        const matchId = reel.clientId === filters.clientId;
+        const matchName = String(reel.clientName || '').toLowerCase() === filters.clientId.toLowerCase();
+        if (!matchId && !matchName) return false;
+      }
+      if (filters.status === 'Available') return (reel.balanceQty || 0) > 0;
+      if (filters.status === 'Used') return (reel.balanceQty || 0) <= 0;
+      if (filters.status === 'Low') return (reel.balanceQty || 0) > 0 && (reel.balanceQty || 0) < lowStockThreshold;
+      return (reel.balanceQty || 0) > 0; // Default to active stock
+    });
+  }, [inventoryWithUsage, allowedCompanyId, filters.stockType, filters.clientId, filters.status, lowStockThreshold]);
+
+  const uniqueMills = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.millName).filter(Boolean))).sort(), [baseAvailableInventory]);
+  const uniqueSizes = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
+  const uniqueGsms = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
+  const uniqueBfs = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
+  const uniqueColours = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.colour).filter(Boolean))).sort(), [baseAvailableInventory]);
 
   const millCounts = useMemo(() => {
     const counts = {};
-    inventoryWithUsage.forEach(r => {
+    baseAvailableInventory.forEach(r => {
       if (r.millName) counts[String(r.millName)] = (counts[String(r.millName)] || 0) + 1;
     });
     return counts;
-  }, [inventoryWithUsage]);
+  }, [baseAvailableInventory]);
 
   const sizeCounts = useMemo(() => {
     const counts = {};
-    inventoryWithUsage.forEach(r => {
+    baseAvailableInventory.forEach(r => {
       if (r.size) counts[String(r.size)] = (counts[String(r.size)] || 0) + 1;
     });
     return counts;
-  }, [inventoryWithUsage]);
+  }, [baseAvailableInventory]);
 
   const gsmCounts = useMemo(() => {
     const counts = {};
-    inventoryWithUsage.forEach(r => {
+    baseAvailableInventory.forEach(r => {
       if (r.gsm) counts[String(r.gsm)] = (counts[String(r.gsm)] || 0) + 1;
     });
     return counts;
-  }, [inventoryWithUsage]);
+  }, [baseAvailableInventory]);
 
   const bfCounts = useMemo(() => {
     const counts = {};
-    inventoryWithUsage.forEach(r => {
+    baseAvailableInventory.forEach(r => {
       if (r.bf) counts[String(r.bf)] = (counts[String(r.bf)] || 0) + 1;
     });
     return counts;
-  }, [inventoryWithUsage]);
+  }, [baseAvailableInventory]);
 
   const colourCounts = useMemo(() => {
     const counts = {};
-    inventoryWithUsage.forEach(r => {
+    baseAvailableInventory.forEach(r => {
       if (r.colour) counts[String(r.colour)] = (counts[String(r.colour)] || 0) + 1;
     });
     return counts;
-  }, [inventoryWithUsage]);
+  }, [baseAvailableInventory]);
 
   const filteredInventory = useMemo(() => {
     return inventoryWithUsage.filter(reel => {
@@ -10699,7 +10717,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 <InventoryMultiSelectDropdown
                   label="Colours"
                   icon="🎨"
-                  options={Array.from(new Set(['Kraft', 'Natural', 'Golden', 'White', 'Duplex', 'Semi-Kraft', ...uniqueColours]))}
+                  options={uniqueColours}
                   selected={filters.colours || []}
                   onChange={vals => setFilters(f => ({ ...f, colours: vals }))}
                   itemCounts={colourCounts}
