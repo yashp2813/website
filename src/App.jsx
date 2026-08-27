@@ -12632,11 +12632,15 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
         try {
           const targetOrderId = finalRecord.orderId;
           const targetJobNo = jCardNo;
+          const targetItemName = finalRecord.usedForItem;
 
-          // Find existing Corrugation WIP card
+          // Find existing Corrugation WIP card by orderId, jobNo, or itemName
           const existingCorrWip = (wipStages || []).find(w =>
-            (targetOrderId && w.orderId === targetOrderId || (targetJobNo && w.jobNo === targetJobNo)) &&
-            (w.currentStage === 'Corrugation' || !w.currentStage)
+            (w.currentStage === 'Corrugation' || !w.currentStage) && (
+              (targetOrderId && w.orderId === targetOrderId) ||
+              (targetJobNo && w.jobNo === targetJobNo) ||
+              (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
+            )
           );
 
           if (existingCorrWip) {
@@ -12657,10 +12661,13 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             }
           }
 
-          // Check if Printing card already exists for this order
+          // Check if Printing card already exists for this order/job
           const existingPrintingWip = (wipStages || []).find(w =>
-            (targetOrderId && w.orderId === targetOrderId || (targetJobNo && w.jobNo === targetJobNo)) &&
-            w.currentStage === 'Printing'
+            w.currentStage === 'Printing' && (
+              (targetOrderId && w.orderId === targetOrderId) ||
+              (targetJobNo && w.jobNo === targetJobNo) ||
+              (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
+            )
           );
 
           if (existingPrintingWip) {
@@ -12677,7 +12684,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
               orderId: targetOrderId || `job_${Date.now()}`,
               companyId: finalRecord.companyId || allowedCompanyId || '',
               jobNo: targetJobNo || 'JC-CORR',
-              itemName: finalRecord.usedForItem || 'Corrugated Board',
+              itemName: targetItemName || 'Corrugated Board',
               currentStage: 'Printing',
               qty: producedQtyPcs,
               sheets: Math.round(producedSheets),
@@ -12689,27 +12696,10 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             await addDoc(getColRef('wip_stages'), wipPayload);
           }
           window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
-          if (addLog) addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo}]`);
+          if (addLog) addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo || targetItemName}]`);
         } catch(err) {
           console.warn('WIP advance error:', err);
         }
-      }
-
-      // F6: Auto-create draft wastage entry to eliminate double data entry
-      if (totalKg > 0 && finalRecord.orderId) {
-        await addDoc(getColRef('wastage'), {
-          date: finalRecord.date,
-          orderId: finalRecord.orderId,
-          companyId: finalRecord.companyId,
-          totalReelsKg: totalKg.toFixed(1),
-          productionKg: '', paperWastage: '', sheetWastage: '',
-          corePipe: '', balanceReel: '',
-          gumUsed: '', gumPrice: localStorage.getItem('apex_lastGumPrice') || '',
-          isDraft: true,
-          calculatedNetPaper: '0', goodProductionKg: '0',
-          totalWastageKg: '0', calculatedWastagePercent: '0',
-          totalGumCost: '0', gumCostPerKgPaper: '0'
-        });
       }
 
       // Auto-advance job / order status
@@ -23570,8 +23560,15 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
       addLog(`Updated Fuel & Gum record for ${form.date}`);
       setEditingId(null);
     } else {
-      await addDoc(getColRef('wastage'), payload);
-      addLog(`Added Fuel & Gum record for ${form.date}`);
+      // Check if a record already exists for this date and unit -> update it rather than creating duplicates!
+      const existing = (wastageLogs || []).find(w => (w.date || '').split('T')[0] === form.date && (!payload.companyId || w.companyId === payload.companyId));
+      if (existing) {
+        await updateDoc(getDocRef('wastage', existing.id), payload);
+        addLog(`Updated existing Fuel & Gum record for ${form.date}`);
+      } else {
+        await addDoc(getColRef('wastage'), payload);
+        addLog(`Added Fuel & Gum record for ${form.date}`);
+      }
     }
 
     setForm({ ...defaultForm, companyId: activeUnitId || '' });
@@ -23596,11 +23593,55 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
   const handleDelete = async (id, date) => {
     if (window.confirm(`Delete Fuel & Gum record for ${date}?`)) {
       await deleteDoc(getDocRef('wastage', id));
+      await executeQuery(`DELETE FROM wastage WHERE id = ?`, [id]).catch(() => {});
+      await executeQuery(`DELETE FROM wastage_logs WHERE id = ?`, [id]).catch(() => {});
       addLog(`Deleted Fuel & Gum record for ${date}`);
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wastage', action: 'delete', id } }));
     }
   };
 
-  const visibleLogs = (wastageLogs || []).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  // Find and clean up ghost/empty records with 0 Kraft and 0 expense
+  const emptyGhostRecords = (wastageLogs || []).filter(r => {
+    const kraft = parseFloat(r.kraftKg || r.calculatedNetPaper || 0);
+    const fwKg = parseFloat(r.firewoodKg || 0);
+    const g33Kg = parseFloat(r.gum33Kg || r.gumUsed || 0);
+    const g50Kg = parseFloat(r.gum50Kg || 0);
+    const fwCost = parseFloat(r.firewoodCost || 0);
+    const gCost = parseFloat(r.totalGumCost || 0);
+    return kraft === 0 && fwKg === 0 && g33Kg === 0 && g50Kg === 0 && fwCost === 0 && gCost === 0;
+  });
+
+  const handleCleanEmptyLogs = async () => {
+    if (emptyGhostRecords.length === 0) {
+      alert("No empty duplicate records found.");
+      return;
+    }
+    if (window.confirm(`🧹 Clean up ${emptyGhostRecords.length} empty/duplicate record(s) from database?`)) {
+      for (const row of emptyGhostRecords) {
+        try {
+          await deleteDoc(getDocRef('wastage', row.id));
+          await executeQuery(`DELETE FROM wastage WHERE id = ?`, [row.id]).catch(() => {});
+          await executeQuery(`DELETE FROM wastage_logs WHERE id = ?`, [row.id]).catch(() => {});
+        } catch(e) {}
+      }
+      addLog(`Cleaned up ${emptyGhostRecords.length} empty Fuel & Gum ghost records`);
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wastage', action: 'bulk_delete' } }));
+    }
+  };
+
+  // Filter out duplicate/blank ghost logs
+  const visibleLogs = (wastageLogs || [])
+    .filter(r => {
+      const kraft = parseFloat(r.kraftKg || r.calculatedNetPaper || 0);
+      const fwKg = parseFloat(r.firewoodKg || 0);
+      const g33Kg = parseFloat(r.gum33Kg || r.gumUsed || 0);
+      const g50Kg = parseFloat(r.gum50Kg || 0);
+      const fwCost = parseFloat(r.firewoodCost || 0);
+      const gCost = parseFloat(r.totalGumCost || 0);
+      const isBlank = (kraft === 0 && fwKg === 0 && g33Kg === 0 && g50Kg === 0 && fwCost === 0 && gCost === 0);
+      return !isBlank && (!activeUnitId || !r.companyId || r.companyId === activeUnitId);
+    })
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   const totalKraftProcessed = visibleLogs.reduce((sum, r) => sum + (parseFloat(r.kraftKg || r.calculatedNetPaper || 0)), 0);
   const totalFirewoodSpent = visibleLogs.reduce((sum, r) => sum + (parseFloat(r.firewoodCost || 0)), 0);
@@ -23622,6 +23663,17 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
             Track daily firewood and gum consumption rates per Kg of Kraft paper
           </p>
         </div>
+        {emptyGhostRecords.length > 0 && (
+          <button
+            type="button"
+            onClick={handleCleanEmptyLogs}
+            className="apex-btn apex-btn-danger"
+            style={{ fontWeight: 800, fontSize: 12, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6 }}
+            title="Clean up empty draft records from database"
+          >
+            🧹 Clean Up {emptyGhostRecords.length} Ghost Records
+          </button>
+        )}
       </div>
 
       {/* EXECUTIVE SCORECARD BENCHMARK BANNER */}
