@@ -188,10 +188,23 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
 
   const ply = parseInt(plyStr, 10) || 3;
   const odAllowance = 4;
-  const odL = L > 0 ? L + odAllowance : 0;
-  const odW = W > 0 ? W + odAllowance : 0;
-  const odH = H > 0 ? H + odAllowance : 0;
-  const odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : '';
+  
+  let odStr = '';
+  if (itemType === 'PPC' || itemType === 'Plate' || itemType === 'Sheet' || itemType === 'Partition') {
+    // For PPC / Partition / Plate / Sheet: Directly register PPC size without RSC box flap expansion
+    if (L > 0 && W > 0 && H > 0) {
+      odStr = `${L}x${W}x${H}`;
+    } else if (L > 0 && W > 0) {
+      odStr = `${L}x${W}`;
+    } else if (L > 0) {
+      odStr = `${L}`;
+    }
+  } else {
+    const odL = L > 0 ? L + odAllowance : 0;
+    const odW = W > 0 ? W + odAllowance : 0;
+    const odH = H > 0 ? H + odAllowance : 0;
+    odStr = L > 0 && W > 0 && H > 0 ? `${odL}x${odW}x${odH}` : (L > 0 && W > 0 ? `${odL}x${odW}` : '');
+  }
 
   let lapMm = 35;
   if (jointType && jointType.includes('Gluing')) lapMm = 30;
@@ -206,10 +219,11 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
     cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
     const flap = Math.round(W / 2 + 3);
     creasingScores = `Flap: ${flap}mm | Depth: ${H}mm | Flap: ${flap}mm`;
-  } else if (itemType === 'PPC') {
-    deckleMm = Math.round(W + H + 15);
-    cutLengthMm = Math.round((2 * L) + (2 * W) + lapMm);
-    creasingScores = 'PPC Partition & Plate Set Profile';
+  } else if (itemType === 'PPC' || itemType === 'Partition') {
+    // PPC Partition formula: Direct deckle & cut length matching PPC plate/sheet dimensions
+    deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
+    cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
+    creasingScores = 'PPC Partition Plate / Grid Profile';
   } else if (itemType === 'Plate') {
     deckleMm = Math.round(W > 0 ? W : (L > 0 ? L : 0));
     cutLengthMm = Math.round(L > 0 ? L : (W > 0 ? W : 0));
@@ -266,7 +280,11 @@ export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemT
 
   if (itemType === 'PPC' || ppcConfig?.enabled) {
     calculatedPpc = calculatePpcMatrix(idDimensions, ppcConfig || { enabled: true }, totalBoardGsm, outerBoxWeightGrams);
-    theoreticalWeightGrams = calculatedPpc.totalSetWeightGrams;
+    if (ppcConfig && (ppcConfig.longCount > 0 || ppcConfig.crossCount > 0 || (ppcConfig.cellRows > 0 && ppcConfig.cellCols > 0 && ppcConfig.enabled))) {
+      theoreticalWeightGrams = calculatedPpc.totalSetWeightGrams;
+    } else {
+      theoreticalWeightGrams = outerBoxWeightGrams;
+    }
   }
 
   return {
@@ -13608,18 +13626,23 @@ const getItemDimensions = (item = {}) => {
     odH = odDims[2] || 0;
   }
 
-  // AUTO-FILL REFERENCE LOGIC: 4mm difference between ID and OD
+  const isPpcOrFlat = (item.itemType || item.Item_Type || '').toUpperCase().includes('PPC') ||
+    (item.itemType || item.Item_Type || '').toUpperCase().includes('PARTITION') ||
+    (item.itemType || item.Item_Type || '').toUpperCase().includes('PLATE') ||
+    (item.itemType || item.Item_Type || '').toUpperCase().includes('SHEET');
+
+  // AUTO-FILL REFERENCE LOGIC: 4mm difference between ID and OD for boxes; identical for PPC/Plates/Sheets
   if ((idL || idW || idH) && (!odL || !odW || !odH)) {
-    odL = idL ? idL + 4 : 0;
-    odW = idW ? idW + 4 : 0;
-    odH = idH ? idH + 4 : 0;
+    odL = idL ? (isPpcOrFlat ? idL : idL + 4) : 0;
+    odW = idW ? (isPpcOrFlat ? idW : idW + 4) : 0;
+    odH = idH ? (isPpcOrFlat ? idH : idH + 4) : 0;
   } else if ((odL || odW || odH) && (!idL || !idW || !idH)) {
-    idL = odL ? Math.max(0, odL - 4) : 0;
-    idW = odW ? Math.max(0, odW - 4) : 0;
-    idH = odH ? Math.max(0, odH - 4) : 0;
+    idL = odL ? (isPpcOrFlat ? odL : Math.max(0, odL - 4)) : 0;
+    idW = odW ? (isPpcOrFlat ? odW : Math.max(0, odW - 4)) : 0;
+    idH = odH ? (isPpcOrFlat ? odH : Math.max(0, odH - 4)) : 0;
   } else if (!idL && !odL) {
     idL = 400; idW = 250; idH = 250;
-    odL = 404; odW = 254; odH = 254;
+    odL = isPpcOrFlat ? 400 : 404; odW = isPpcOrFlat ? 250 : 254; odH = isPpcOrFlat ? 250 : 254;
   }
 
   const fluteType = item.fluteType || item.Flute_Type || 'B';
