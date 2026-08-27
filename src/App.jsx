@@ -7448,8 +7448,9 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
         totalCommonPieces += sheets * parseInt(p.commonUps || order.commonUps || 0);
         totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
       });
-      producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
-      if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+      const prodLogsQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
+      const fgStockQty = parseInt(order.openingFgQty || 0);
+      producedQty = Math.max(fgStockQty, isNaN(prodLogsQty) || prodLogsQty === Infinity ? 0 : prodLogsQty);
     } else {
       const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
       const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
@@ -7464,10 +7465,10 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
       else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
       else effectiveBase = sumBoard + sumPaper;
       
-      producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+      const prodLogsQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+      const fgStockQty = parseInt(order.openingFgQty || 0);
+      producedQty = Math.max(fgStockQty, prodLogsQty);
     }
-
-    producedQty += parseInt(order.openingFgQty || 0);
     const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
     const avgWeightKg = producedQty > 0 && totalKgUsed > 0 ? (totalKgUsed / producedQty) : (parseFloat(item?.weight || item?.Weight_g || order?.weight || order?.Weight_g || 0) / 1000);
     
@@ -12724,8 +12725,9 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             const sPPS = Math.max(1, parseInt(linkedOrder.commonPerSet || 2) - 1);
             let tc = 0, ts = 0;
             allPLogs.forEach(p => { tc += parseFloat(p.linerQty || 0) * parseInt(p.commonUps || linkedOrder.commonUps || 0); ts += parseFloat(p.linerQty || 0) * parseInt(p.smallUps || linkedOrder.smallUps || 0); });
-            producedQty = Math.min(Math.floor(tc / cPPS), Math.floor(ts / sPPS));
-            if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+            const prodLogsQty = Math.min(Math.floor(tc / cPPS), Math.floor(ts / sPPS));
+            const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
+            producedQty = Math.max(fgStockQty, isNaN(prodLogsQty) || prodLogsQty === Infinity ? 0 : prodLogsQty);
           } else {
             const ply = parseInt(item?.ply || item?.Ply || 3);
             const sumBoard = allPLogs.filter(p => p.paperUsedFor === 'Board').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
@@ -12737,9 +12739,10 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             else if (ply === 5) effBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
             else if (ply === 7) effBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
             else effBase = sumBoard + sumPaper;
-            producedQty = Math.floor(effBase * parseFloat(linkedOrder.plannedUps || 1));
+            const prodLogsQty = Math.floor(effBase * parseFloat(linkedOrder.plannedUps || 1));
+            const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
+            producedQty = Math.max(fgStockQty, prodLogsQty);
           }
-          producedQty += parseInt(linkedOrder.openingFgQty || 0);
           const orderQty = parseInt(linkedOrder.orderQty || 0);
           if (producedQty >= orderQty && orderQty > 0) {
             await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'Completed' });
@@ -12773,10 +12776,77 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     setConsumedReels([{ reelNo: '', weight: '' }]);
   };
 
-  const handleDelete = async (id, nameOrReels) => {
-    if (window.confirm(`Delete production record (${nameOrReels || 'Entry'})? This will remove it from database.`)) {
+  const deleteProductionWithWipCleanup = async (id, nameOrReels) => {
+    const rec = (production || []).find(p => p.id === id);
+    const orderId = rec?.orderId;
+    const itemName = rec?.usedForItem;
+    const sheets = parseFloat(rec?.linerQty || 0);
+    const ups = parseFloat(rec?.numberOfUps || 1);
+    const producedPcs = Math.round(sheets * ups);
+
+    // 1. Delete production record from Firestore & SQLite
+    try {
       await deleteDoc(getDocRef('production', id));
-      if (addLog) addLog(`Deleted production record: ${nameOrReels || id}`);
+      await executeQuery(`DELETE FROM production WHERE id = ?`, [id]).catch(() => {});
+    } catch(e) {}
+
+    // 2. Check and clean up WIP cards associated with this job
+    if (orderId || itemName) {
+      const otherLogs = (production || []).filter(p => p.id !== id && (p.orderId === orderId || (itemName && p.usedForItem === itemName)));
+      const hasOtherProduction = otherLogs.length > 0;
+
+      const linkedWips = (wipStages || []).filter(w => 
+        (orderId && w.orderId === orderId) || (itemName && w.itemName === itemName)
+      );
+
+      for (const wip of linkedWips) {
+        const stage = wip.currentStage || 'Corrugation';
+        // If it hasn't advanced past Corrugation or Printing
+        if (stage === 'Corrugation' || stage === 'Printing') {
+          const currentQty = parseFloat(wip.qty || 0);
+          const newQty = currentQty - producedPcs;
+          if (newQty <= 0 || !hasOtherProduction || stage === 'Corrugation') {
+            // Delete this unadvanced WIP card completely
+            try {
+              if (getDocRef && !wip.id.startsWith('wip_bundling') && !wip.id.startsWith('wip_stitching')) {
+                await deleteDoc(getDocRef('wip_stages', wip.id));
+              }
+              await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [wip.id]).catch(() => {});
+              await executeQuery(`DELETE FROM wipStages WHERE id = ?`, [wip.id]).catch(() => {});
+            } catch(e) {}
+          } else {
+            // Deduct the quantity from the WIP card
+            try {
+              if (getDocRef && !wip.id.startsWith('wip_bundling') && !wip.id.startsWith('wip_stitching')) {
+                await updateDoc(getDocRef('wip_stages', wip.id), { qty: newQty, updatedAt: new Date().toISOString() });
+              }
+              await executeQuery(`UPDATE wip_stages SET qty = ? WHERE id = ?`, [newQty, wip.id]).catch(() => {});
+            } catch(e) {}
+          }
+        }
+      }
+
+      // 3. Revert order status if no other production remains
+      if (!hasOtherProduction && orderId) {
+        try {
+          const ord = (orders || []).find(o => o.id === orderId);
+          if (ord) {
+            await updateDoc(getDocRef('orders', ord.id), {
+              status: 'Pending'
+            });
+          }
+        } catch(e) {}
+      }
+
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'delete' } }));
+    }
+
+    if (addLog) addLog(`Deleted production record: ${nameOrReels || id} & cleaned up unadvanced WIP cards`);
+  };
+
+  const handleDelete = async (id, nameOrReels) => {
+    if (window.confirm(`Delete production record (${nameOrReels || 'Entry'})? This will remove it from database and clean up unadvanced WIP cards.`)) {
+      await deleteProductionWithWipCleanup(id, nameOrReels);
       setSelectedIds(prev => {
         const next = new Set(prev);
         next.delete(id);
@@ -12804,10 +12874,11 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (window.confirm(`Are you sure you want to permanently delete the ${selectedIds.size} selected production record(s)?`)) {
+    if (window.confirm(`Are you sure you want to permanently delete the ${selectedIds.size} selected production record(s)? This will also clean up unadvanced WIP cards.`)) {
       const idsToDelete = Array.from(selectedIds);
-      await Promise.all(idsToDelete.map(id => deleteDoc(getDocRef('production', id))));
-      if (addLog) addLog(`Bulk deleted ${idsToDelete.length} production records`);
+      for (const id of idsToDelete) {
+        await deleteProductionWithWipCleanup(id);
+      }
       setSelectedIds(new Set());
     }
   };
@@ -15764,8 +15835,9 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
             totalSmallPieces += sheets * parseInt(p.smallUps || order.smallUps || 0);
         });
 
-        producedQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
-        if (isNaN(producedQty) || producedQty === Infinity) producedQty = 0;
+        const prodLogsQty = Math.min(Math.floor(totalCommonPieces / cPiecesPerSet), Math.floor(totalSmallPieces / sPiecesPerSet));
+        const fgStockQty = parseInt(order.openingFgQty || 0);
+        producedQty = Math.max(fgStockQty, isNaN(prodLogsQty) || prodLogsQty === Infinity ? 0 : prodLogsQty);
     } else {
         const getGoodSheets = (p) => parseFloat(p.linerQty || 0);
         const sumBoard = pLogs.filter(p => p.paperUsedFor === 'Board').reduce((acc, p) => acc + getGoodSheets(p), 0);
@@ -15781,10 +15853,10 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
         else if (ply === 7) effectiveBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
         else effectiveBase = sumBoard + sumPaper;
         
-        producedQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+        const prodLogsQty = Math.floor(effectiveBase * parseFloat(order.plannedUps || 1));
+        const fgStockQty = parseInt(order.openingFgQty || 0);
+        producedQty = Math.max(fgStockQty, prodLogsQty);
     }
-
-    producedQty += parseInt(order.openingFgQty || 0);
 
     const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
     const avgWeightKg = producedQty > 0 && totalKgUsed > 0 ? (totalKgUsed / producedQty) : (parseFloat(item?.weight || item?.Weight_g || order?.weight || order?.Weight_g || 0) / 1000);
@@ -23834,34 +23906,51 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
       // Move entire batch to target stage
       setLocalWipList(prev => prev.map(w => w.id === wipItem.id ? { ...w, currentStage: targetStage } : w));
       if (getDocRef && !wipItem.id.startsWith('wip_bundling') && !wipItem.id.startsWith('wip_stitching')) {
-        try { await updateDoc(getDocRef('wip_stages', wipItem.id), { currentStage: targetStage }); } catch(err) {}
+        try { 
+          await updateDoc(getDocRef('wip_stages', wipItem.id), { 
+            currentStage: targetStage,
+            updatedAt: new Date().toISOString()
+          }); 
+        } catch(err) {}
+      }
+      await executeQuery(`UPDATE wip_stages SET currentStage = ?, updatedAt = ? WHERE id = ?`, [targetStage, new Date().toISOString(), wipItem.id]).catch(() => {});
+      if (typeof onAdvance === 'function') {
+        onAdvance({ ...wipItem, qty: actualAdvanceQty, currentStage: targetStage }, targetStage);
       }
     } else {
-      // Partial batch movement: split into remaining batch + advanced batch
+      // Partial batch movement: split into remaining batch (stays in currentStage) + advanced batch (goes to targetStage)
       const remainingQty = maxQty - actualAdvanceQty;
+      const newSplitId = `wip_split_${Date.now()}`;
       const newPartialWip = {
         ...wipItem,
-        id: `wip_split_${Date.now()}`,
+        id: newSplitId,
         currentStage: targetStage,
         qty: actualAdvanceQty,
         timeAgo: 'Just now'
       };
 
       setLocalWipList(prev => [
-        ...prev.map(w => w.id === wipItem.id ? { ...w, qty: remainingQty } : w),
+        ...prev.map(w => w.id === wipItem.id ? { ...w, qty: remainingQty, currentStage: currentStage } : w),
         newPartialWip
       ]);
 
       if (getDocRef && !wipItem.id.startsWith('wip_bundling') && !wipItem.id.startsWith('wip_stitching')) {
         try {
-          await updateDoc(getDocRef('wip_stages', wipItem.id), { qty: remainingQty });
+          await updateDoc(getDocRef('wip_stages', wipItem.id), { 
+            qty: remainingQty, 
+            currentStage: currentStage,
+            updatedAt: new Date().toISOString()
+          });
           if (getColRef) await addDoc(getColRef('wip_stages'), newPartialWip);
         } catch(err) {}
       }
-    }
+      await executeQuery(`UPDATE wip_stages SET qty = ?, currentStage = ?, updatedAt = ? WHERE id = ?`, [remainingQty, currentStage, new Date().toISOString(), wipItem.id]).catch(() => {});
+      await executeQuery(
+        `INSERT OR REPLACE INTO wip_stages (id, orderId, companyId, jobNo, itemName, currentStage, qty, sheets, ups, orderQty, operator, timeAgo, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newSplitId, newPartialWip.orderId || '', newPartialWip.companyId || '', newPartialWip.jobNo || '', newPartialWip.itemName || '', targetStage, actualAdvanceQty, newPartialWip.sheets || 0, newPartialWip.ups || 1, newPartialWip.orderQty || 0, newPartialWip.operator || '', 'Just now', new Date().toISOString(), new Date().toISOString()]
+      ).catch(() => {});
 
-    if (typeof onAdvance === 'function') {
-      onAdvance({ ...wipItem, qty: actualAdvanceQty, currentStage: targetStage }, targetStage);
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
     }
 
     // Compute Real Cost of Box upon Job/Lot Completion
