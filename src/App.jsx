@@ -9147,14 +9147,15 @@ function InventoryMultiSelectDropdown({
   const hasSelection = selected && selected.length > 0;
 
   return (
-    <div style={{ position: 'relative', minWidth: 125 }} ref={dropdownRef}>
+    <div style={{ position: 'relative', width: '100%' }} ref={dropdownRef}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="apex-btn"
         style={{
           width: '100%',
-          padding: '7px 8px',
+          height: 36,
+          padding: '0 8px',
           fontSize: 12,
           fontWeight: hasSelection ? 700 : 500,
           background: hasSelection ? '#eff6ff' : '#fff',
@@ -9167,7 +9168,8 @@ function InventoryMultiSelectDropdown({
           borderRadius: 6,
           cursor: 'pointer',
           transition: 'all 0.15s',
-          boxShadow: hasSelection ? '0 1px 4px rgba(37,99,235,0.18)' : 'none'
+          boxShadow: hasSelection ? '0 1px 4px rgba(37,99,235,0.18)' : 'none',
+          boxSizing: 'border-box'
         }}
         title={`Filter by ${label} (Multi-select)`}
       >
@@ -9214,14 +9216,14 @@ function InventoryMultiSelectDropdown({
             position: 'absolute',
             top: 'calc(100% + 4px)',
             left: 0,
-            minWidth: 210,
+            minWidth: 230,
             width: 'max-content',
-            maxWidth: 280,
+            maxWidth: 300,
             background: '#ffffff',
             border: '1.5px solid #cbd5e1',
             borderRadius: 8,
-            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.18), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-            zIndex: 1000,
+            boxShadow: '0 12px 28px -4px rgba(0, 0, 0, 0.25), 0 6px 12px -2px rgba(0, 0, 0, 0.12)',
+            zIndex: 99999,
             padding: 8
           }}
         >
@@ -9235,11 +9237,13 @@ function InventoryMultiSelectDropdown({
                 onChange={e => setSearch(e.target.value)}
                 style={{
                   width: '100%',
+                  height: 30,
                   padding: '4px 8px',
                   fontSize: 11.5,
                   border: '1px solid #cbd5e1',
                   borderRadius: 4,
-                  outline: 'none'
+                  outline: 'none',
+                  boxSizing: 'border-box'
                 }}
                 autoFocus
               />
@@ -9265,7 +9269,7 @@ function InventoryMultiSelectDropdown({
           </div>
 
           {/* Option list */}
-          <div style={{ maxHeight: 210, overflowY: 'auto', paddingTop: 4 }}>
+          <div style={{ maxHeight: 240, overflowY: 'auto', paddingTop: 4 }}>
             {filteredOptions.length === 0 ? (
               <div style={{ padding: '8px 4px', fontSize: 11.5, color: '#94a3b8', textAlign: 'center' }}>
                 No matches found
@@ -10456,7 +10460,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       {activeSubTab === 'Paper' ? (
         <>
           {/* ── INDUSTRIAL MULTI-PARAMETER FILTER CONTROL PANEL ── */}
-          <div className="apex-card" style={{ padding: '14px 18px', marginBottom: 16, background: '#ffffff', border: '1.5px solid #e2e8f0', borderRadius: 10, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <div className="apex-card" style={{ padding: '14px 18px', marginBottom: 16, background: '#ffffff', border: '1.5px solid #e2e8f0', borderRadius: 10, boxShadow: '0 1px 4px rgba(0,0,0,0.05)', overflow: 'visible', position: 'relative', zIndex: 20 }}>
             {/* ROW 1: Quick Status Tabs, Ownership & View Mode Switcher */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f1f5f9' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -10616,14 +10620,14 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
             </div>
 
             {/* ROW 2: Primary Parameter Inputs with Multi-Select Dropdowns */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               {/* Global Search */}
-              <div style={{ gridColumn: 'span 2', minWidth: 200, position: 'relative' }}>
+              <div style={{ flex: '2 1 200px', minWidth: 180, position: 'relative' }}>
                 <input
                   type="text"
                   className="apex-input"
                   placeholder="🔍 Search Reel #, Supplier No, ID, Invoice, Mill..."
-                  style={{ width: '100%', padding: '7px 28px 7px 10px', fontSize: 12.5, fontWeight: 600, borderColor: filters.searchReel ? '#2563eb' : '#cbd5e1', background: filters.searchReel ? '#eff6ff' : '#fff' }}
+                  style={{ width: '100%', height: 36, padding: '0 28px 0 10px', fontSize: 12.5, fontWeight: 600, borderColor: filters.searchReel ? '#2563eb' : '#cbd5e1', background: filters.searchReel ? '#eff6ff' : '#fff', boxSizing: 'border-box' }}
                   value={filters.searchReel}
                   onChange={e => setFilters(f => ({ ...f, searchReel: e.target.value }))}
                 />
@@ -10639,63 +10643,73 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </div>
 
               {/* Multi-Select Mills / Parties */}
-              <InventoryMultiSelectDropdown
-                label="Mills"
-                icon="🏭"
-                options={uniqueMills}
-                selected={filters.mills || []}
-                onChange={vals => setFilters(f => ({ ...f, mills: vals }))}
-                itemCounts={millCounts}
-              />
+              <div style={{ flex: '1 1 120px', minWidth: 110 }}>
+                <InventoryMultiSelectDropdown
+                  label="Mills"
+                  icon="🏭"
+                  options={uniqueMills}
+                  selected={filters.mills || []}
+                  onChange={vals => setFilters(f => ({ ...f, mills: vals }))}
+                  itemCounts={millCounts}
+                />
+              </div>
 
               {/* Multi-Select Sizes (cm) */}
-              <InventoryMultiSelectDropdown
-                label="Sizes"
-                icon="📐"
-                unit="cm"
-                options={uniqueSizes}
-                selected={filters.sizes || []}
-                onChange={vals => setFilters(f => ({ ...f, sizes: vals }))}
-                itemCounts={sizeCounts}
-              />
+              <div style={{ flex: '1 1 115px', minWidth: 105 }}>
+                <InventoryMultiSelectDropdown
+                  label="Sizes"
+                  icon="📐"
+                  unit="cm"
+                  options={uniqueSizes}
+                  selected={filters.sizes || []}
+                  onChange={vals => setFilters(f => ({ ...f, sizes: vals }))}
+                  itemCounts={sizeCounts}
+                />
+              </div>
 
               {/* Multi-Select GSM */}
-              <InventoryMultiSelectDropdown
-                label="GSM"
-                icon="⚖️"
-                unit="GSM"
-                options={uniqueGsms}
-                selected={filters.gsms || []}
-                onChange={vals => setFilters(f => ({ ...f, gsms: vals }))}
-                itemCounts={gsmCounts}
-              />
+              <div style={{ flex: '1 1 110px', minWidth: 100 }}>
+                <InventoryMultiSelectDropdown
+                  label="GSM"
+                  icon="⚖️"
+                  unit="GSM"
+                  options={uniqueGsms}
+                  selected={filters.gsms || []}
+                  onChange={vals => setFilters(f => ({ ...f, gsms: vals }))}
+                  itemCounts={gsmCounts}
+                />
+              </div>
 
               {/* Multi-Select BF */}
-              <InventoryMultiSelectDropdown
-                label="BF"
-                icon="💪"
-                unit="BF"
-                options={uniqueBfs}
-                selected={filters.bfs || []}
-                onChange={vals => setFilters(f => ({ ...f, bfs: vals }))}
-                itemCounts={bfCounts}
-              />
+              <div style={{ flex: '1 1 100px', minWidth: 95 }}>
+                <InventoryMultiSelectDropdown
+                  label="BF"
+                  icon="💪"
+                  unit="BF"
+                  options={uniqueBfs}
+                  selected={filters.bfs || []}
+                  onChange={vals => setFilters(f => ({ ...f, bfs: vals }))}
+                  itemCounts={bfCounts}
+                />
+              </div>
 
               {/* Multi-Select Colours */}
-              <InventoryMultiSelectDropdown
-                label="Colours"
-                icon="🎨"
-                options={Array.from(new Set(['Kraft', 'Natural', 'Golden', 'White', 'Duplex', 'Semi-Kraft', ...uniqueColours]))}
-                selected={filters.colours || []}
-                onChange={vals => setFilters(f => ({ ...f, colours: vals }))}
-                itemCounts={colourCounts}
-              />
+              <div style={{ flex: '1 1 115px', minWidth: 105 }}>
+                <InventoryMultiSelectDropdown
+                  label="Colours"
+                  icon="🎨"
+                  options={Array.from(new Set(['Kraft', 'Natural', 'Golden', 'White', 'Duplex', 'Semi-Kraft', ...uniqueColours]))}
+                  selected={filters.colours || []}
+                  onChange={vals => setFilters(f => ({ ...f, colours: vals }))}
+                  itemCounts={colourCounts}
+                />
+              </div>
 
               {/* Sort By Selector */}
-              <div>
+              <div style={{ flex: '1 1 130px', minWidth: 120 }}>
                 <select
                   className="apex-select"
-                  style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontWeight: 700, borderColor: '#cbd5e1', background: '#f8fafc' }}
+                  style={{ width: '100%', height: 36, padding: '0 8px', fontSize: 12, fontWeight: 700, borderColor: '#cbd5e1', background: '#f8fafc', boxSizing: 'border-box' }}
                   value={`${sortConfig.key}-${sortConfig.direction}`}
                   onChange={e => {
                     const [key, direction] = e.target.value.split('-');
@@ -10703,8 +10717,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                   }}
                   title="Sort stock inventory order"
                 >
-                  <option value="date-desc">📅 Default (Newest Inward)</option>
-                  <option value="date-asc">📅 Date (Oldest First)</option>
+                  <option value="date-desc">📅 Default (Newest)</option>
+                  <option value="date-asc">📅 Date (Oldest)</option>
                   <option value="size-asc">📐 Size (Low → High)</option>
                   <option value="size-desc">📐 Size (High → Low)</option>
                   <option value="gsm-asc">⚖️ GSM (Low → High)</option>
@@ -10722,14 +10736,15 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               </div>
 
               {/* Advanced Filters Toggle Button */}
-              <div>
+              <div style={{ flex: '1 1 115px', minWidth: 110 }}>
                 <button
                   type="button"
                   onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
                   className="apex-btn"
                   style={{
                     width: '100%',
-                    padding: '7px 10px',
+                    height: 36,
+                    padding: '0 10px',
                     fontSize: 12,
                     fontWeight: 700,
                     background: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#eff6ff' : '#f8fafc',
@@ -10738,7 +10753,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 6
+                    gap: 6,
+                    boxSizing: 'border-box'
                   }}
                 >
                   <span>⚙️ Date &amp; Rates</span>
