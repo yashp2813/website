@@ -136,22 +136,22 @@ export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm 
   const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
   const L = dims[0] || 350;
   const W = dims[1] || 250;
-  const H = dims[2] || 200;
+  const H = dims[2] || 90;
 
   const cellRows = parseInt(ppcConfig.cellRows || 4);
   const cellCols = parseInt(ppcConfig.cellCols || 3);
   const totalCells = cellRows * cellCols;
 
   const longCount = parseInt(ppcConfig.longCount !== undefined && ppcConfig.longCount !== '' ? ppcConfig.longCount : (cellCols - 1));
-  const longLengthMm = parseFloat(ppcConfig.longLengthMm) || Math.max(50, L - 10);
-  const longHeightMm = parseFloat(ppcConfig.longHeightMm) || Math.max(50, H - 10);
+  const longLengthMm = parseFloat(ppcConfig.longLengthMm) || (L > 0 ? L : 350);
+  const longHeightMm = parseFloat(ppcConfig.longHeightMm) || (H > 0 ? H : 90);
   const longAreaSqM = (longLengthMm * longHeightMm) / 1000000;
   const longPieceWeightGrams = Math.round(longAreaSqM * totalBoardGsm);
   const longTotalWeightGrams = longCount * longPieceWeightGrams;
 
   const crossCount = parseInt(ppcConfig.crossCount !== undefined && ppcConfig.crossCount !== '' ? ppcConfig.crossCount : (cellRows - 1));
-  const crossLengthMm = parseFloat(ppcConfig.crossLengthMm) || Math.max(50, W - 10);
-  const crossHeightMm = parseFloat(ppcConfig.crossHeightMm) || Math.max(50, H - 10);
+  const crossLengthMm = parseFloat(ppcConfig.crossLengthMm) || (W > 0 ? W : 250);
+  const crossHeightMm = parseFloat(ppcConfig.crossHeightMm) || (H > 0 ? H : 90);
   const crossAreaSqM = (crossLengthMm * crossHeightMm) / 1000000;
   const crossPieceWeightGrams = Math.round(crossAreaSqM * totalBoardGsm);
   const crossTotalWeightGrams = crossCount * crossPieceWeightGrams;
@@ -18759,35 +18759,38 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
 
             {/* DEDICATED PPC PARTITION & PLATE SET MATRIX CONFIGURATION */}
             {(() => {
-              const currentPpc = currentConfigItem.ppcMatrix || { ...defaultPpcMatrix, enabled: currentConfigItem.itemType === 'PPC' };
-              const isPpcActive = currentConfigItem.itemType === 'PPC' || !!currentPpc.enabled;
+              const isPpcItem = currentConfigItem.itemType === 'PPC';
+              const currentPpc = currentConfigItem.ppcMatrix || { ...defaultPpcMatrix, enabled: isPpcItem };
+              const isPpcActive = isPpcItem || !!currentPpc.enabled;
 
               return (
                 <div className={`border-2 rounded-xl p-4 mb-4 shadow-md transition ${isPpcActive ? 'bg-amber-50/40 border-amber-400' : 'bg-slate-50 border-slate-300'}`}>
                   <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-200 flex-wrap gap-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`text-xs font-black px-2.5 py-1 rounded-md text-white ${isPpcActive ? 'bg-amber-600' : 'bg-slate-600'}`}>
-                        🧩 PPC PARTITION &amp; PLATE MATRIX
+                        🧩 {isPpcItem ? 'PPC PARTITION MATRIX (LONG & CROSS ONLY)' : 'PPC PARTITION & PLATE MATRIX'}
                       </span>
                       <span className="font-extrabold text-slate-900 text-sm">
-                        Bottle Cells, Partition Dimensions &amp; Set Weight Calculation
+                        {isPpcItem ? 'Long & Cross Partition Strips Grid & Set Weight' : 'Bottle Cells, Partition Dimensions & Set Weight Calculation'}
                       </span>
                     </div>
-                    <label className="flex items-center gap-2 text-xs font-bold cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 text-amber-600 rounded"
-                        checked={isPpcActive}
-                        onChange={e => handlePpcChange(selectedLayerConfigRow, 'enabled', e.target.checked)}
-                      />
-                      <span>Enable PPC Partition Matrix for this Item</span>
-                    </label>
+                    {!isPpcItem && (
+                      <label className="flex items-center gap-2 text-xs font-bold cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 text-amber-600 rounded"
+                          checked={isPpcActive}
+                          onChange={e => handlePpcChange(selectedLayerConfigRow, 'enabled', e.target.checked)}
+                        />
+                        <span>Enable PPC Partition Matrix for this Item</span>
+                      </label>
+                    )}
                   </div>
 
                   {isPpcActive ? (
                     <div className="space-y-4">
                       {/* Presets & Cell Grid Configuration */}
-                      <div className="bg-white p-3 rounded-lg border border-amber-300 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                      <div className={`bg-white p-3 rounded-lg border border-amber-300 grid grid-cols-1 ${isPpcItem ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-3 text-xs`}>
                         <div>
                           <label className="block font-bold text-slate-700 mb-1">Standard Bottle Matrix Preset</label>
                           <select
@@ -18827,21 +18830,23 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                             </span>
                           </div>
                         </div>
-                        <div>
-                          <label className="block font-bold text-slate-700 mb-1">Include Outer Shipper Box</label>
-                          <label className="flex items-center gap-2 mt-1 font-bold text-slate-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={currentPpc.includeOuterBox !== false}
-                              onChange={e => handlePpcChange(selectedLayerConfigRow, 'includeOuterBox', e.target.checked)}
-                            />
-                            <span>Master Set (Box + Partitions)</span>
-                          </label>
-                        </div>
+                        {!isPpcItem && (
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">Include Outer Shipper Box</label>
+                            <label className="flex items-center gap-2 mt-1 font-bold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={currentPpc.includeOuterBox !== false}
+                                onChange={e => handlePpcChange(selectedLayerConfigRow, 'includeOuterBox', e.target.checked)}
+                              />
+                              <span>Master Set (Box + Partitions)</span>
+                            </label>
+                          </div>
+                        )}
                         <div>
                           <label className="block font-bold text-slate-700 mb-1">Total Set Weight</label>
                           <div className="text-sm font-mono font-black text-amber-600 bg-amber-50 p-1.5 rounded border border-amber-200 text-center">
-                            🏆 {currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0} g / Master Set
+                            🏆 {currentPpc.totalPpcWeightGrams || currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0} g / {isPpcItem ? 'PPC Set' : 'Master Set'}
                           </div>
                         </div>
                       </div>
@@ -18877,7 +18882,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                               <td className="p-1.5">
                                 <input
                                   type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  className="w-24 p-1 border rounded font-mono text-center font-bold"
                                   placeholder="Length mm"
                                   value={currentPpc.longLengthMm || ''}
                                   onChange={e => handlePpcChange(selectedLayerConfigRow, 'longLengthMm', e.target.value)}
@@ -18886,7 +18891,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                               <td className="p-1.5">
                                 <input
                                   type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  className="w-24 p-1 border rounded font-mono text-center font-bold"
                                   placeholder="Height mm"
                                   value={currentPpc.longHeightMm || ''}
                                   onChange={e => handlePpcChange(selectedLayerConfigRow, 'longHeightMm', e.target.value)}
@@ -18917,7 +18922,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                               <td className="p-1.5">
                                 <input
                                   type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  className="w-24 p-1 border rounded font-mono text-center font-bold"
                                   placeholder="Length mm"
                                   value={currentPpc.crossLengthMm || ''}
                                   onChange={e => handlePpcChange(selectedLayerConfigRow, 'crossLengthMm', e.target.value)}
@@ -18926,7 +18931,7 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                               <td className="p-1.5">
                                 <input
                                   type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
+                                  className="w-24 p-1 border rounded font-mono text-center font-bold"
                                   placeholder="Height mm"
                                   value={currentPpc.crossHeightMm || ''}
                                   onChange={e => handlePpcChange(selectedLayerConfigRow, 'crossHeightMm', e.target.value)}
@@ -18940,48 +18945,50 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                               </td>
                             </tr>
 
-                            {/* 3. Top / Bottom Divider Pads */}
-                            <tr className="hover:bg-amber-50/50">
-                              <td className="p-2 font-bold text-slate-800">
-                                📋 Top / Bottom Divider Plates (Pads)
-                              </td>
-                              <td className="p-1.5 text-center">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  className="w-14 p-1 border rounded text-center font-bold bg-white"
-                                  value={currentPpc.padCount !== undefined ? currentPpc.padCount : 2}
-                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padCount', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-1.5">
-                                <input
-                                  type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
-                                  placeholder="Length mm"
-                                  value={currentPpc.padLengthMm || ''}
-                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padLengthMm', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-1.5">
-                                <input
-                                  type="number"
-                                  className="w-24 p-1 border rounded font-mono text-center"
-                                  placeholder="Width mm"
-                                  value={currentPpc.padWidthMm || ''}
-                                  onChange={e => handlePpcChange(selectedLayerConfigRow, 'padWidthMm', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 text-right font-mono font-bold text-slate-600">
-                                {currentPpc.padPieceWeightGrams || 0} g
-                              </td>
-                              <td className="p-2 text-right pr-3 font-mono font-black text-amber-700">
-                                {currentPpc.padTotalWeightGrams || 0} g
-                              </td>
-                            </tr>
+                            {/* 3. Top / Bottom Divider Pads (Only for Box kits) */}
+                            {!isPpcItem && (
+                              <tr className="hover:bg-amber-50/50">
+                                <td className="p-2 font-bold text-slate-800">
+                                  📋 Top / Bottom Divider Plates (Pads)
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    className="w-14 p-1 border rounded text-center font-bold bg-white"
+                                    value={currentPpc.padCount !== undefined ? currentPpc.padCount : 0}
+                                    onChange={e => handlePpcChange(selectedLayerConfigRow, 'padCount', e.target.value)}
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    className="w-24 p-1 border rounded font-mono text-center"
+                                    placeholder="Length mm"
+                                    value={currentPpc.padLengthMm || ''}
+                                    onChange={e => handlePpcChange(selectedLayerConfigRow, 'padLengthMm', e.target.value)}
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    className="w-24 p-1 border rounded font-mono text-center"
+                                    placeholder="Width mm"
+                                    value={currentPpc.padWidthMm || ''}
+                                    onChange={e => handlePpcChange(selectedLayerConfigRow, 'padWidthMm', e.target.value)}
+                                  />
+                                </td>
+                                <td className="p-2 text-right font-mono font-bold text-slate-600">
+                                  {currentPpc.padPieceWeightGrams || 0} g
+                                </td>
+                                <td className="p-2 text-right pr-3 font-mono font-black text-amber-700">
+                                  {currentPpc.padTotalWeightGrams || 0} g
+                                </td>
+                              </tr>
+                            )}
 
-                            {/* 4. Outer Shipper Box (RSC) */}
-                            {currentPpc.includeOuterBox !== false && (
+                            {/* 4. Outer Shipper Box (Only for Box kits) */}
+                            {!isPpcItem && currentPpc.includeOuterBox !== false && (
                               <tr className="bg-slate-50 font-bold">
                                 <td className="p-2 text-slate-700">
                                   📦 Outer RSC Shipper Carton
@@ -19008,22 +19015,24 @@ function ItemsView({ items = [], companies = [], addLog, role, getColRef, getDoc
                           ⚡ Weight Breakdown:
                         </span>
                         <div className="flex gap-2 flex-wrap font-mono font-bold text-xs text-slate-800">
-                          {currentPpc.includeOuterBox !== false && (
+                          {!isPpcItem && currentPpc.includeOuterBox !== false && (
                             <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
                               Box: {currentPpc.outerBoxWeightGrams || 0}g
                             </span>
                           )}
                           <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
-                            Long ({currentPpc.longCount || 2} pcs): {currentPpc.longTotalWeightGrams || 0}g
+                            Long ({currentPpc.longCount !== undefined ? currentPpc.longCount : 2} pcs): {currentPpc.longTotalWeightGrams || 0}g
                           </span>
                           <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
-                            Cross ({currentPpc.crossCount || 3} pcs): {currentPpc.crossTotalWeightGrams || 0}g
+                            Cross ({currentPpc.crossCount !== undefined ? currentPpc.crossCount : 3} pcs): {currentPpc.crossTotalWeightGrams || 0}g
                           </span>
-                          <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
-                            Pads ({currentPpc.padCount || 2} pcs): {currentPpc.padTotalWeightGrams || 0}g
-                          </span>
+                          {!isPpcItem && currentPpc.padCount > 0 && (
+                            <span className="bg-white px-2 py-0.5 rounded border border-amber-200">
+                              Pads ({currentPpc.padCount} pcs): {currentPpc.padTotalWeightGrams || 0}g
+                            </span>
+                          )}
                           <span className="bg-amber-600 text-white px-2.5 py-0.5 rounded shadow-sm">
-                            Total Master Set: {currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0}g
+                            Total {isPpcItem ? 'PPC' : 'Master'} Set: {currentPpc.totalPpcWeightGrams || currentPpc.totalSetWeightGrams || currentConfigItem.weight || 0}g
                           </span>
                         </div>
                       </div>
