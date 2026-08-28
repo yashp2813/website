@@ -2583,17 +2583,24 @@ function buildInventoryIdMap(inventory) {
 function formatSystemReelId(r, allInventory = []) {
   if (!r) return 'RL-00001';
 
-  // 1. Explicit clean sequential ID pattern RL-XXXXX
+  // 1a. Explicit clean sequential ID pattern RL-JW-XXXXX (Job Work reels — MUST be checked before RL-XXXXX)
+  if (r.uniqueReelId && /^RL-JW-\d{5}$/.test(r.uniqueReelId)) {
+    return r.uniqueReelId;
+  }
+
+  // 1b. Explicit clean sequential ID pattern RL-XXXXX (Own / Factory reels)
   if (r.uniqueReelId && /^RL-\d{5}$/.test(r.uniqueReelId)) {
     return r.uniqueReelId;
   }
 
   // 2. Numeric sequence number or pure digits
   if (r.seqNo && !isNaN(r.seqNo)) {
-    return `RL-${String(r.seqNo).padStart(5, '0')}`;
+    const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
+    return `${prefix}-${String(r.seqNo).padStart(5, '0')}`;
   }
   if (r.uniqueReelId && /^\d+$/.test(r.uniqueReelId)) {
-    return `RL-${String(r.uniqueReelId).padStart(5, '0')}`;
+    const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
+    return `${prefix}-${String(r.uniqueReelId).padStart(5, '0')}`;
   }
 
   // 3. Fast O(1) Cached Map Lookup
@@ -2604,13 +2611,14 @@ function formatSystemReelId(r, allInventory = []) {
     if (r.supplierReelNo && map.has(String(r.supplierReelNo))) return map.get(String(r.supplierReelNo));
   }
 
-  // 4. If uniqueReelId contains numbers, extract last 5 digits
+  // 4. If uniqueReelId contains numbers, extract last 5 digits — preserve JW prefix if job work
   if (r.uniqueReelId && typeof r.uniqueReelId === 'string') {
     const digits = r.uniqueReelId.replace(/\D/g, '');
     if (digits) {
       const num = parseInt(digits.slice(-5), 10);
       if (!isNaN(num) && num > 0) {
-        return `RL-${String(num).padStart(5, '0')}`;
+        const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
+        return `${prefix}-${String(num).padStart(5, '0')}`;
       }
     }
   }
@@ -2622,7 +2630,8 @@ function formatSystemReelId(r, allInventory = []) {
     hash = (hash * 31 + str.charCodeAt(i)) % 99999;
   }
   const cleanNum = (Math.abs(hash) % 1000) + 1;
-  return `RL-${String(cleanNum).padStart(5, '0')}`;
+  const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
+  return `${prefix}-${String(cleanNum).padStart(5, '0')}`;
 }
 
 function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [], addLog }) {
@@ -5155,7 +5164,11 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
     let query = String(rawCode || '').trim();
     if (!query) return;
     setScanInput(query);
-    const cleanQuery = query.toLowerCase().replace(/^(r-|job-|fg-)/i, '').trim();
+    // Strip common barcode prefixes for fuzzy matching:
+    // RL-JW-XXXXX (job work), RL-XXXXX (own stock), r-, job-, fg-
+    const cleanQuery = query.toLowerCase()
+      .replace(/^(rl-jw-|rl-|r-|job-|fg-)/i, '')
+      .trim();
     const queryLower = query.toLowerCase();
     const sortedInventory = [...inventory].sort((a, b) => {
       const tA = new Date(a.date || a.createdAt || 0).getTime();
@@ -5168,9 +5181,13 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
       if (String(r.reelNo || '').trim().toLowerCase() === cleanQuery) return true;
       if (String(r.id || '').toLowerCase() === queryLower) return true;
       if (String(r.supplierReelNo || '').trim().toLowerCase() === queryLower) return true;
+      // Direct uniqueReelId match — critical for RL-JW-XXXXX job work barcodes
       if (String(r.uniqueReelId || '').trim().toLowerCase() === queryLower) return true;
       const computedId = r.systemReelId || formatSystemReelId(r, sortedInventory);
       if (computedId.toLowerCase() === queryLower) return true;
+      // Fallback: strip prefix from both sides and compare numeric part only
+      const computedClean = computedId.toLowerCase().replace(/^(rl-jw-|rl-)/, '');
+      if (computedClean === cleanQuery) return true;
       return false;
     });
     const matchedOrder = orders.find(o =>
