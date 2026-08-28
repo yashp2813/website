@@ -984,13 +984,7 @@ export function GlobalVoiceAssistant({
 
             // --- 11. ATTACH REEL TO STAND ---
             else if (action.type === 'attach_reel' && action.reelQuery) {
-              const rQ = action.reelQuery.toLowerCase();
-              const matchedReel = inventory.find(r => 
-                (r.systemReelId || '').toLowerCase().includes(rQ) ||
-                (r.uniqueReelId || '').toLowerCase().includes(rQ) ||
-                String(r.reelNo || '').toLowerCase().includes(rQ) ||
-                String(r.supplierReelNo || '').toLowerCase().includes(rQ)
-              );
+              const matchedReel = findInventoryReel(inventory, action.reelQuery);
               const ordQ = (action.targetOrderId || '').toLowerCase();
               let targetOrder = orders.find(o => 
                 String(o.id).toLowerCase() === ordQ || 
@@ -1107,17 +1101,9 @@ export function GlobalVoiceAssistant({
     // 2. SPECIFIC REEL LOOKUP / LOCATION (e.g. "Status of reel RL-00012", "Where is reel 1005", "Find reel 405")
     // =========================================================================
     if ((raw.includes('reel') && (raw.includes('where') || raw.includes('status') || raw.includes('find') || raw.includes('location') || raw.includes('kahan'))) || raw.startsWith('rl-') || raw.includes('reel no') || raw.includes('reel number')) {
-      const reelMatch = raw.match(/\b(rl[-\s]?\d+|\d{3,6})\b/i);
-      const queryDigits = reelMatch ? reelMatch[1].replace(/\D/g, '') : null;
-      const rawReelQuery = reelMatch ? reelMatch[0].replace(/\s+/g, '-').toUpperCase() : '';
-
-      const matchedReel = inventory.find(r => {
-        const sysId = String(r.systemReelId || r.uniqueReelId || '').toUpperCase();
-        const reelNo = String(r.supplierReelNo || r.reelNo || '');
-        if (rawReelQuery && sysId.includes(rawReelQuery)) return true;
-        if (queryDigits && (sysId.includes(queryDigits) || reelNo.includes(queryDigits))) return true;
-        return false;
-      });
+      const reelMatch = raw.match(/\b(rl[-\s]?(?:jw[-\s]?)?\d+|\d{3,6})\b/i);
+      const queryCode = reelMatch ? reelMatch[0].replace(/\s+/g, '-').toUpperCase() : raw;
+      const matchedReel = findInventoryReel(inventory, queryCode);
 
       if (matchedReel) {
         const sysId = matchedReel.systemReelId || matchedReel.uniqueReelId || `RL-${matchedReel.reelNo}`;
@@ -1464,15 +1450,9 @@ export function GlobalVoiceAssistant({
     // 5.11 ATTACH / MOUNT REEL TO JOB VIA VOICE
     // =========================================================================
     if (raw.includes('attach reel') || raw.includes('mount reel') || raw.includes('load reel') || raw.includes('reel lagao') || raw.includes('reel attach') || (raw.includes('reel') && (raw.includes('stand') || raw.includes('job')))) {
-      const reelMatch = raw.match(/\b(rl-\d+|\d{3,6})\b/i);
-      const reelTerm = reelMatch ? reelMatch[0].toLowerCase() : '';
-      
-      let matchedReel = inventory.find(r => 
-        (r.systemReelId || '').toLowerCase().includes(reelTerm) ||
-        (r.uniqueReelId || '').toLowerCase().includes(reelTerm) ||
-        String(r.reelNo || '').toLowerCase() === reelTerm ||
-        String(r.supplierReelNo || '').toLowerCase() === reelTerm
-      );
+      const reelMatch = raw.match(/\b(rl[-\s]?(?:jw[-\s]?)?\d+|\d{3,6})\b/i);
+      const reelTerm = reelMatch ? reelMatch[0].replace(/\s+/g, '-').toUpperCase() : raw;
+      let matchedReel = findInventoryReel(inventory, reelTerm);
 
       let stand = 'Top';
       if (raw.includes('flute') || raw.includes('corrug')) stand = 'Flute(C)';
@@ -2632,6 +2612,97 @@ function formatSystemReelId(r, allInventory = []) {
   const cleanNum = (Math.abs(hash) % 1000) + 1;
   const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
   return `${prefix}-${String(cleanNum).padStart(5, '0')}`;
+}
+
+// Global High-Precision Reel Finder: Resolves ANY printed barcode (e.g. RL-00255, RL-01245, RL-00920),
+// supplier reel numbers (e.g. 27754, 178388, RL-JW-00911), unique IDs, or sequence numbers
+export function findInventoryReel(inventory = [], rawQuery = '') {
+  if (!inventory || !Array.isArray(inventory) || inventory.length === 0) return null;
+  const q = String(rawQuery || '').trim();
+  if (!q) return null;
+
+  const qLower = q.toLowerCase();
+  const qClean = qLower.replace(/^(rl-jw-|rl-|r-|job-|fg-)/i, '').trim();
+  const qDigits = q.replace(/\D/g, '');
+  const qSeq = qDigits ? parseInt(qDigits, 10) : null;
+
+  // 1. Direct exact match on primary identifiers
+  for (const r of inventory) {
+    if (!r) continue;
+    if (r.id && String(r.id).toLowerCase() === qLower) return r;
+    if (r.uniqueReelId && String(r.uniqueReelId).trim().toLowerCase() === qLower) return r;
+    if (r.systemReelId && String(r.systemReelId).trim().toLowerCase() === qLower) return r;
+    if (r.reelNo && String(r.reelNo).trim().toLowerCase() === qLower) return r;
+    if (r.supplierReelNo && String(r.supplierReelNo).trim().toLowerCase() === qLower) return r;
+  }
+
+  // 2. Direct clean prefix match (e.g. searching '00255' or '01245' matches 'RL-00255')
+  if (qClean) {
+    for (const r of inventory) {
+      if (!r) continue;
+      const rNoClean = String(r.reelNo || '').toLowerCase().replace(/^(rl-jw-|rl-|r-)/i, '').trim();
+      const supClean = String(r.supplierReelNo || '').toLowerCase().replace(/^(rl-jw-|rl-|r-)/i, '').trim();
+      const uniqClean = String(r.uniqueReelId || '').toLowerCase().replace(/^(rl-jw-|rl-|r-)/i, '').trim();
+      const sysClean = String(r.systemReelId || '').toLowerCase().replace(/^(rl-jw-|rl-|r-)/i, '').trim();
+
+      if (rNoClean && rNoClean === qClean) return r;
+      if (supClean && supClean === qClean) return r;
+      if (uniqClean && uniqClean === qClean) return r;
+      if (sysClean && sysClean === qClean) return r;
+    }
+  }
+
+  // 3. Fast O(1) Cached Map Lookup for printed stickers (e.g. RL-00255, RL-01245)
+  const idMap = buildInventoryIdMap(inventory);
+  for (const r of inventory) {
+    if (!r) continue;
+    const printedId = idMap.get(r.id) || idMap.get(String(r.reelNo)) || idMap.get(String(r.supplierReelNo));
+    if (printedId) {
+      const pLower = printedId.toLowerCase();
+      const pClean = pLower.replace(/^(rl-jw-|rl-|r-)/i, '').trim();
+      if (pLower === qLower || pClean === qClean) return r;
+      if (qDigits && printedId.replace(/\D/g, '') === qDigits) return r;
+    }
+  }
+
+  // 4. Sequence number index match for sorted inventory (e.g. RL-00255 -> 255th reel in sorted inventory)
+  if (qSeq !== null && qSeq >= 1 && qSeq <= inventory.length) {
+    const sorted = [...inventory].sort((a, b) => {
+      const tA = (a.date || a.createdAt || '');
+      const tB = (b.date || b.createdAt || '');
+      if (tA !== tB) return tA < tB ? -1 : 1;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+    if (sorted[qSeq - 1]) {
+      return sorted[qSeq - 1];
+    }
+  }
+
+  // 5. Numeric digits exact match
+  if (qDigits) {
+    for (const r of inventory) {
+      if (!r) continue;
+      const supDigits = String(r.supplierReelNo || '').replace(/\D/g, '');
+      const rNoDigits = String(r.reelNo || '').replace(/\D/g, '');
+      const uniqDigits = String(r.uniqueReelId || '').replace(/\D/g, '');
+      if (supDigits && supDigits === qDigits) return r;
+      if (rNoDigits && rNoDigits === qDigits) return r;
+      if (uniqDigits && uniqDigits === qDigits) return r;
+    }
+  }
+
+  // 6. Substring / contains fallback
+  for (const r of inventory) {
+    if (!r) continue;
+    const sup = String(r.supplierReelNo || '').toLowerCase();
+    const rNo = String(r.reelNo || '').toLowerCase();
+    const uniq = String(r.uniqueReelId || '').toLowerCase();
+    if (sup && (sup.includes(qLower) || qLower.includes(sup))) return r;
+    if (rNo && (rNo.includes(qLower) || qLower.includes(rNo))) return r;
+    if (uniq && (uniq.includes(qLower) || qLower.includes(uniq))) return r;
+  }
+
+  return null;
 }
 
 function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, allInventory = [], addLog }) {
@@ -5164,32 +5235,10 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
     let query = String(rawCode || '').trim();
     if (!query) return;
     setScanInput(query);
-    // Strip common barcode prefixes for fuzzy matching:
-    // RL-JW-XXXXX (job work), RL-XXXXX (own stock), r-, job-, fg-
-    const cleanQuery = query.toLowerCase()
-      .replace(/^(rl-jw-|rl-|r-|job-|fg-)/i, '')
-      .trim();
     const queryLower = query.toLowerCase();
-    const sortedInventory = [...inventory].sort((a, b) => {
-      const tA = new Date(a.date || a.createdAt || 0).getTime();
-      const tB = new Date(b.date || b.createdAt || 0).getTime();
-      if (tA !== tB) return tA - tB;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
-    const matchedReel = inventory.find(r => {
-      if (String(r.reelNo || '').trim().toLowerCase() === queryLower) return true;
-      if (String(r.reelNo || '').trim().toLowerCase() === cleanQuery) return true;
-      if (String(r.id || '').toLowerCase() === queryLower) return true;
-      if (String(r.supplierReelNo || '').trim().toLowerCase() === queryLower) return true;
-      // Direct uniqueReelId match — critical for RL-JW-XXXXX job work barcodes
-      if (String(r.uniqueReelId || '').trim().toLowerCase() === queryLower) return true;
-      const computedId = r.systemReelId || formatSystemReelId(r, sortedInventory);
-      if (computedId.toLowerCase() === queryLower) return true;
-      // Fallback: strip prefix from both sides and compare numeric part only
-      const computedClean = computedId.toLowerCase().replace(/^(rl-jw-|rl-)/, '');
-      if (computedClean === cleanQuery) return true;
-      return false;
-    });
+    const cleanQuery = queryLower.replace(/^(rl-jw-|rl-|r-|job-|fg-)/i, '').trim();
+
+    const matchedReel = findInventoryReel(inventory, query);
     const matchedOrder = orders.find(o =>
       String(o.id || '').toLowerCase() === queryLower ||
       String(o.id || '').toLowerCase() === cleanQuery ||
@@ -11844,16 +11893,7 @@ function AttachReelModal({ isOpen, onClose, inventory = [], orders = [], planned
 
   const handleScan = (code) => {
     if (!code) return;
-    const clean = code.trim().toLowerCase();
-    const cleanQuery = clean.replace(/^(r-|job-|fg-)/i, '').trim();
-    const found = inventory.find(r => 
-      String(r.systemReelId || '').toLowerCase() === clean ||
-      String(r.uniqueReelId || '').toLowerCase() === clean ||
-      String(r.supplierReelNo || '').toLowerCase() === clean ||
-      String(r.reelNo || '').toLowerCase() === clean ||
-      String(r.reelNo || '').toLowerCase() === cleanQuery ||
-      String(r.id || '').toLowerCase() === clean
-    );
+    const found = findInventoryReel(inventory, code);
     if (found) {
       setSelectedReelId(found.id);
       setScanInput('');
@@ -12440,19 +12480,20 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
 
   const handleQuickReelScan = (code) => {
     if (!code) return;
-    const cleanCode = code.trim().toLowerCase();
-    const matchedReel = inventory.find(i => String(i.reelNo || '').trim().toLowerCase() === cleanCode || String(i.uniqueReelId || '').trim().toLowerCase() === cleanCode || i.id === cleanCode);
+    const matchedReel = findInventoryReel(inventory, code);
     
     if (matchedReel) {
       const availKg = parseFloat(matchedReel.balanceQty !== undefined ? matchedReel.balanceQty : (matchedReel.receivedQty || 0));
+      const idMap = buildInventoryIdMap(inventory);
+      const printedId = idMap.get(matchedReel.id) || matchedReel.systemReelId || matchedReel.supplierReelNo || matchedReel.reelNo || code.trim().toUpperCase();
       setConsumedReels(prev => {
         const filtered = prev.filter(r => r.reelNo.trim() !== '');
-        return [...filtered, { reelNo: matchedReel.supplierReelNo || matchedReel.reelNo, weight: availKg > 0 ? String(availKg) : '' }];
+        return [...filtered, { reelNo: printedId, weight: availKg > 0 ? String(availKg) : '' }];
       });
       if (matchedReel.millName && !newRecord.millName) {
         setNewRecord(r => ({ ...r, millName: matchedReel.millName }));
       }
-      if (addLog) addLog(`Scanned reel #${matchedReel.supplierReelNo || matchedReel.reelNo} (${availKg}kg available)`);
+      if (addLog) addLog(`Scanned reel #${printedId} (${availKg}kg available)`);
     } else {
       setConsumedReels(prev => {
         const filtered = prev.filter(r => r.reelNo.trim() !== '');
@@ -13256,11 +13297,12 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
               } : undefined}
               onSelectReel={(scannedReel) => {
                 if (scannedReel) {
-                  const rNo = scannedReel.supplierReelNo || scannedReel.reelNo || scannedReel.id || '';
+                  const idMap = buildInventoryIdMap(inventory);
+                  const printedId = idMap.get(scannedReel.id) || scannedReel.systemReelId || scannedReel.supplierReelNo || scannedReel.reelNo || scannedReel.id || '';
                   const availKg = parseFloat(scannedReel.balanceQty !== undefined ? scannedReel.balanceQty : (scannedReel.receivedQty || 0));
-                  setConsumedReels(prev => [...prev.filter(r => r.reelNo.trim() !== ''), { reelNo: rNo, weight: availKg > 0 ? String(availKg) : '' }]);
+                  setConsumedReels(prev => [...prev.filter(r => r.reelNo.trim() !== ''), { reelNo: printedId, weight: availKg > 0 ? String(availKg) : '' }]);
                   if (scannedReel.millName && !newRecord.millName) setNewRecord(r => ({ ...r, millName: scannedReel.millName }));
-                  if (addLog) addLog(`Barcode Scanned Reel #${rNo}`);
+                  if (addLog) addLog(`Barcode Scanned Reel #${printedId}`);
                 }
                 setIsBarcodeScanOpen(false);
               }}
@@ -13269,8 +13311,8 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
             {/* Reel Entries List with Auto-Matched Specifications Badge */}
             <div className="space-y-3">
               {consumedReels.map((reel, idx) => {
-                const cleanNo = (reel.reelNo || '').trim().toLowerCase();
-                const matchedStock = cleanNo ? inventory.find(i => String(i.reelNo || '').trim().toLowerCase() === cleanNo || String(i.supplierReelNo || '').trim().toLowerCase() === cleanNo || String(i.uniqueReelId || '').trim().toLowerCase() === cleanNo || i.id === cleanNo) : null;
+                const cleanNo = (reel.reelNo || '').trim();
+                const matchedStock = cleanNo ? findInventoryReel(inventory, cleanNo) : null;
                 const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
 
                 return (
@@ -13292,7 +13334,7 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
                             upd[idx].reelNo = val;
                             
                             // Auto prefill weight from matched reel if current weight is empty
-                            const match = inventory.find(i => String(i.reelNo || '').trim().toLowerCase() === val.trim().toLowerCase() || String(i.supplierReelNo || '').trim().toLowerCase() === val.trim().toLowerCase());
+                            const match = findInventoryReel(inventory, val);
                             if (match && !upd[idx].weight) {
                               const bKg = parseFloat(match.balanceQty !== undefined ? match.balanceQty : (match.receivedQty || 0));
                               if (bKg > 0) upd[idx].weight = String(bKg);
@@ -26624,13 +26666,8 @@ function GateToGateModal({ isOpen, onClose, initialQuery = '', inventory = [], o
 
   const cleanQ = query.trim().toLowerCase();
 
-  // Find matching reel
-  const matchedReel = inventory.find(r => 
-    String(r.reelNo || '').toLowerCase() === cleanQ ||
-    String(r.uniqueReelId || '').toLowerCase() === cleanQ ||
-    String(r.supplierReelNo || '').toLowerCase() === cleanQ ||
-    r.id === cleanQ
-  );
+  // Find matching reel (supports any printed barcode RL-XXXXX or supplier reel number)
+  const matchedReel = findInventoryReel(inventory, query);
 
   // Find matching order
   const matchedOrder = orders.find(o => 
