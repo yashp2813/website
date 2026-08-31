@@ -8739,87 +8739,46 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
   const [customClientName, setCustomClientName] = useState('');
   const [quoteRef, setQuoteRef] = useState(() => `QT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`);
   const [quoteDate, setQuoteDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [defaultPaperRate, setDefaultPaperRate] = useState(40); // ₹/kg
-  const [defaultMarginPct, setDefaultMarginPct] = useState(12); // %
-  const [defaultConvPerPc, setDefaultConvPerPc] = useState(2.5); // ₹/pc
 
-  // Master Multi-SKU State
+  // ── GLOBAL SHARED PAPER SPEC (applies to ALL SKUs unless individually overridden) ──
+  // This is the key concept: set the paper recipe ONCE, then just enter sizes for each SKU.
+  const [globalSpec, setGlobalSpec] = useState({
+    plyCount: 3,
+    fluteType: 'B',
+    blendedPaperRate: 40,         // ₹/kg
+    plyDetails: generatePliesForCount(3, 'B', 40),
+    conversionCostPerPc: 2.5,     // ₹/pc
+    conversionRatePerKg: 0,       // ₹/kg (0 means flat per-pc only)
+    printingCostPerPc: 0.5,       // ₹/pc
+    stitchingGlueCostPerPc: 0.5,  // ₹/pc
+    freightCostPerPc: 0,          // ₹/pc
+    marginPercent: 12,            // %
+  });
+  const [globalSpecExpanded, setGlobalSpecExpanded] = useState(true);
+
+  // ── MASTER MULTI-SKU LIST ──
+  // Each SKU only NEEDS: id, name, size, unit, itemType, targetQty, skuCode
+  // Paper spec comes from globalSpec unless useGlobalSpec = false (custom override)
   const [skus, setSkus] = useState([
-    {
-      id: 'sku_1',
-      skuCode: 'SKU-001',
-      name: 'Master Shipper Carton',
-      itemType: 'Box',
-      size: '12x8x6',
-      unit: 'inch',
-      plyCount: 5,
-      fluteType: 'BC',
-      paperRateMode: 'blended',
-      blendedPaperRate: 42,
-      plyDetails: generatePliesForCount(5, 'BC', 42),
-      conversionRatePerKg: 0,
-      conversionCostPerPc: 3.5,
-      printingCostPerPc: 0.8,
-      stitchingGlueCostPerPc: 0.5,
-      freightCostPerPc: 0,
-      marginPercent: 12,
-      targetQty: 5000,
-      pocketsLength: 3,
-      pocketsWidth: 2,
-      manualOverrideWeightKg: '',
-      calcMode: 'auto',
-      expanded: false
-    },
-    {
-      id: 'sku_2',
-      skuCode: 'SKU-002',
-      name: 'Inner Product Box',
-      itemType: 'Box',
-      size: '6x4x3',
-      unit: 'inch',
-      plyCount: 3,
-      fluteType: 'B',
-      paperRateMode: 'blended',
-      blendedPaperRate: 38,
-      plyDetails: generatePliesForCount(3, 'B', 38),
-      conversionRatePerKg: 0,
-      conversionCostPerPc: 2.0,
-      printingCostPerPc: 0.5,
-      stitchingGlueCostPerPc: 0.3,
-      freightCostPerPc: 0,
-      marginPercent: 12,
-      targetQty: 10000,
-      pocketsLength: 3,
-      pocketsWidth: 2,
-      manualOverrideWeightKg: '',
-      calcMode: 'auto',
-      expanded: false
-    },
-    {
-      id: 'sku_3',
-      skuCode: 'SKU-003',
-      name: 'Partition Divider Set',
-      itemType: 'Partition',
-      size: '12x8x6',
-      unit: 'inch',
-      plyCount: 3,
-      fluteType: 'B',
-      paperRateMode: 'blended',
-      blendedPaperRate: 36,
-      plyDetails: generatePliesForCount(3, 'B', 36),
-      conversionRatePerKg: 0,
-      conversionCostPerPc: 1.8,
-      printingCostPerPc: 0,
-      stitchingGlueCostPerPc: 0,
-      freightCostPerPc: 0,
-      marginPercent: 10,
-      targetQty: 5000,
-      pocketsLength: 4,
-      pocketsWidth: 3,
-      manualOverrideWeightKg: '',
-      calcMode: 'auto',
-      expanded: false
-    }
+    { id: 'sku_1', skuCode: 'SKU-001', name: 'Box Size A', itemType: 'Box',
+      size: '12x8x6', unit: 'inch', targetQty: 5000, useGlobalSpec: true,
+      pocketsLength: 3, pocketsWidth: 2, manualOverrideWeightKg: '', calcMode: 'auto', expanded: false,
+      // own spec fields (only used when useGlobalSpec = false)
+      plyCount: 3, fluteType: 'B', blendedPaperRate: 40, plyDetails: generatePliesForCount(3, 'B', 40),
+      conversionRatePerKg: 0, conversionCostPerPc: 2.5, printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.5, freightCostPerPc: 0, marginPercent: 12 },
+    { id: 'sku_2', skuCode: 'SKU-002', name: 'Box Size B', itemType: 'Box',
+      size: '10x7x5', unit: 'inch', targetQty: 8000, useGlobalSpec: true,
+      pocketsLength: 3, pocketsWidth: 2, manualOverrideWeightKg: '', calcMode: 'auto', expanded: false,
+      plyCount: 3, fluteType: 'B', blendedPaperRate: 40, plyDetails: generatePliesForCount(3, 'B', 40),
+      conversionRatePerKg: 0, conversionCostPerPc: 2.5, printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.5, freightCostPerPc: 0, marginPercent: 12 },
+    { id: 'sku_3', skuCode: 'SKU-003', name: 'Box Size C', itemType: 'Box',
+      size: '8x5x4', unit: 'inch', targetQty: 10000, useGlobalSpec: true,
+      pocketsLength: 3, pocketsWidth: 2, manualOverrideWeightKg: '', calcMode: 'auto', expanded: false,
+      plyCount: 3, fluteType: 'B', blendedPaperRate: 40, plyDetails: generatePliesForCount(3, 'B', 40),
+      conversionRatePerKg: 0, conversionCostPerPc: 2.5, printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.5, freightCostPerPc: 0, marginPercent: 12 },
   ]);
 
   // Report Modal state
@@ -8865,10 +8824,13 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     return 'Valued Client';
   }, [customClientName, selectedCustomerId, selectedCompanyId, customers, companies]);
 
-  // Calculate All SKUs live
+  // Calculate All SKUs live — merges globalSpec for each SKU that has useGlobalSpec=true
   const calculatedSkus = useMemo(() => {
-    return skus.map(s => calculateSkuCost(s));
-  }, [skus]);
+    return skus.map(s => {
+      const effectiveSpec = s.useGlobalSpec ? { ...s, ...globalSpec } : s;
+      return calculateSkuCost(effectiveSpec);
+    });
+  }, [skus, globalSpec]);
 
   // Executive Totals for Multi-SKU Matrix
   const totals = useMemo(() => {
@@ -8901,39 +8863,40 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     };
   }, [calculatedSkus]);
 
-  // Add SKU with preset or defaults
+  // Add SKU — inherits globalSpec by default, sizes are blank for user to enter
   const handleAddSku = (presetId = null) => {
     const count = skus.length + 1;
     const preset = COSTING_PRESETS.find(p => p.id === presetId);
-    
+
     const newSku = {
       id: `sku_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       skuCode: `SKU-${String(count).padStart(3, '0')}`,
-      name: preset ? `${preset.name} (${globalUnit === 'inch' ? '12x8x6 in' : '300x200x150 mm'})` : `Box SKU ${count}`,
+      name: `Box ${count}`,
       itemType: 'Box',
-      size: globalUnit === 'inch' ? '12x8x6' : '300x200x150',
+      size: '',  // user will type this
       unit: globalUnit,
-      plyCount: preset ? preset.plyCount : 3,
-      fluteType: preset ? preset.fluteType : 'B',
-      paperRateMode: 'blended',
-      blendedPaperRate: preset ? preset.paperRate : defaultPaperRate,
-      plyDetails: preset ? [...preset.plies] : generatePliesForCount(3, 'B', defaultPaperRate),
-      conversionRatePerKg: 0,
-      conversionCostPerPc: preset ? preset.conversionCost : defaultConvPerPc,
-      printingCostPerPc: 0.5,
-      stitchingGlueCostPerPc: 0.5,
-      freightCostPerPc: 0,
-      marginPercent: defaultMarginPct,
       targetQty: 5000,
+      useGlobalSpec: !preset, // presets set their own spec; otherwise use global
       pocketsLength: 3,
       pocketsWidth: 2,
       manualOverrideWeightKg: '',
       calcMode: 'auto',
-      expanded: false
+      expanded: false,
+      // Own spec — copied from globalSpec initially (used if useGlobalSpec=false later)
+      plyCount: preset ? preset.plyCount : globalSpec.plyCount,
+      fluteType: preset ? preset.fluteType : globalSpec.fluteType,
+      blendedPaperRate: preset ? preset.paperRate : globalSpec.blendedPaperRate,
+      plyDetails: preset ? [...preset.plies] : generatePliesForCount(globalSpec.plyCount, globalSpec.fluteType, globalSpec.blendedPaperRate),
+      conversionRatePerKg: globalSpec.conversionRatePerKg,
+      conversionCostPerPc: preset ? preset.conversionCost : globalSpec.conversionCostPerPc,
+      printingCostPerPc: globalSpec.printingCostPerPc,
+      stitchingGlueCostPerPc: globalSpec.stitchingGlueCostPerPc,
+      freightCostPerPc: globalSpec.freightCostPerPc,
+      marginPercent: globalSpec.marginPercent,
     };
 
     setSkus([...skus, newSku]);
-    if (addLog) addLog(`Added SKU: ${newSku.name} (${newSku.size} ${newSku.unit})`);
+    if (addLog) addLog(`Added SKU: ${newSku.name} (size: to be entered, ${newSku.unit})`);
   };
 
   // Duplicate SKU
@@ -9021,8 +8984,23 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     setSkus(prev => prev.map(s => {
       if (s.id !== skuId) return s;
       const upd = { ...s, [field]: value };
-      
-      // Auto-regenerate plies if plyCount or fluteType changes
+
+      // When user enables custom spec override for the first time,
+      // seed the SKU's own spec fields with the current globalSpec as a starting point
+      if (field === 'useGlobalSpec' && value === false && s.useGlobalSpec === true) {
+        upd.plyCount = globalSpec.plyCount;
+        upd.fluteType = globalSpec.fluteType;
+        upd.blendedPaperRate = globalSpec.blendedPaperRate;
+        upd.plyDetails = generatePliesForCount(globalSpec.plyCount, globalSpec.fluteType, globalSpec.blendedPaperRate);
+        upd.conversionCostPerPc = globalSpec.conversionCostPerPc;
+        upd.conversionRatePerKg = globalSpec.conversionRatePerKg;
+        upd.printingCostPerPc = globalSpec.printingCostPerPc;
+        upd.stitchingGlueCostPerPc = globalSpec.stitchingGlueCostPerPc;
+        upd.freightCostPerPc = globalSpec.freightCostPerPc;
+        upd.marginPercent = globalSpec.marginPercent;
+      }
+
+      // Auto-regenerate plies if plyCount or fluteType changes in custom-spec mode
       if (field === 'plyCount' || field === 'fluteType') {
         const pCount = field === 'plyCount' ? parseInt(value, 10) : s.plyCount;
         const fType = field === 'fluteType' ? value : s.fluteType;
@@ -9409,8 +9387,229 @@ _Generated via Corrugated Box Smart ERP Engine_`;
             </div>
           </div>
 
+
+          {/* ── GLOBAL PAPER SPEC PANEL ── */}
+          {/* Set your paper recipe ONCE here — all SKUs inherit these specs automatically.
+              Individual SKUs can still override if they use different specs. */}
+          <div className="rounded-2xl border-2 border-emerald-400 shadow-sm overflow-hidden">
+            {/* Panel header — collapsible */}
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white text-left"
+              onClick={() => setGlobalSpecExpanded(e => !e)}
+            >
+              <div className="flex items-center gap-3">
+                <Layers className="w-5 h-5 flex-shrink-0" />
+                <div>
+                  <p className="font-black text-sm tracking-wide">Shared Paper Specification</p>
+                  <p className="text-emerald-200 text-[11px] font-medium mt-0.5">
+                    {globalSpec.plyCount}-Ply · {globalSpec.fluteType}-Flute · ₹{globalSpec.blendedPaperRate}/kg · Conv ₹{globalSpec.conversionCostPerPc}/pc · Margin {globalSpec.marginPercent}%
+                    {' — applies to all SKUs with "✓ Global Spec" badge'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="bg-emerald-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full">
+                  {skus.filter(s => s.useGlobalSpec).length}/{skus.length} SKUs using this
+                </span>
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    // Apply global spec to ALL SKUs
+                    setSkus(prev => prev.map(s => ({
+                      ...s,
+                      useGlobalSpec: true,
+                      plyCount: globalSpec.plyCount,
+                      fluteType: globalSpec.fluteType,
+                      blendedPaperRate: globalSpec.blendedPaperRate,
+                      plyDetails: generatePliesForCount(globalSpec.plyCount, globalSpec.fluteType, globalSpec.blendedPaperRate),
+                      conversionCostPerPc: globalSpec.conversionCostPerPc,
+                      conversionRatePerKg: globalSpec.conversionRatePerKg,
+                      printingCostPerPc: globalSpec.printingCostPerPc,
+                      stitchingGlueCostPerPc: globalSpec.stitchingGlueCostPerPc,
+                      freightCostPerPc: globalSpec.freightCostPerPc,
+                      marginPercent: globalSpec.marginPercent,
+                    })));
+                  }}
+                  className="bg-white/20 hover:bg-white/30 text-white text-[10px] font-black px-3 py-1 rounded-lg border border-white/30 transition"
+                >
+                  ↺ Apply to All SKUs
+                </button>
+                <span className="text-emerald-200 text-sm">{globalSpecExpanded ? '▲' : '▼'}</span>
+              </div>
+            </button>
+
+            {globalSpecExpanded && (
+              <div className="bg-emerald-50 p-5 border-t border-emerald-200">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
+
+                  {/* Quick Preset Selector */}
+                  <div className="sm:col-span-2 lg:col-span-2">
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Load Preset</label>
+                    <select
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-bold bg-white text-stone-800 focus:ring-2 focus:ring-emerald-400 outline-none"
+                      value=""
+                      onChange={e => {
+                        const preset = COSTING_PRESETS.find(p => p.id === e.target.value);
+                        if (preset) {
+                          setGlobalSpec(prev => ({
+                            ...prev,
+                            plyCount: preset.plyCount,
+                            fluteType: preset.fluteType,
+                            blendedPaperRate: preset.paperRate,
+                            plyDetails: [...preset.plies],
+                            conversionCostPerPc: preset.conversionCost,
+                          }));
+                        }
+                        e.target.value = '';
+                      }}
+                    >
+                      <option value="">📋 Load from Preset...</option>
+                      {COSTING_PRESETS.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Ply Count */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Ply</label>
+                    <select
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-bold bg-white text-stone-800"
+                      value={globalSpec.plyCount}
+                      onChange={e => {
+                        const ply = parseInt(e.target.value, 10);
+                        const plies = generatePliesForCount(ply, globalSpec.fluteType, globalSpec.blendedPaperRate);
+                        setGlobalSpec(prev => ({ ...prev, plyCount: ply, plyDetails: plies }));
+                      }}
+                    >
+                      <option value={2}>2-Ply</option>
+                      <option value={3}>3-Ply</option>
+                      <option value={5}>5-Ply</option>
+                      <option value={7}>7-Ply</option>
+                    </select>
+                  </div>
+
+                  {/* Flute Type */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Flute</label>
+                    <select
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-bold bg-white text-stone-800"
+                      value={globalSpec.fluteType}
+                      onChange={e => {
+                        const flute = e.target.value;
+                        const plies = generatePliesForCount(globalSpec.plyCount, flute, globalSpec.blendedPaperRate);
+                        setGlobalSpec(prev => ({ ...prev, fluteType: flute, plyDetails: plies }));
+                      }}
+                    >
+                      <option value="B">B-Flute</option>
+                      <option value="C">C-Flute</option>
+                      <option value="E">E-Flute</option>
+                      <option value="BC">BC-Flute</option>
+                      <option value="AB">AB-Flute</option>
+                    </select>
+                  </div>
+
+                  {/* Paper Rate */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Paper Rate (₹/kg)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-mono font-bold bg-white text-stone-900 focus:ring-2 focus:ring-emerald-400 outline-none"
+                      value={globalSpec.blendedPaperRate}
+                      onChange={e => {
+                        const rate = parseFloat(e.target.value) || 0;
+                        setGlobalSpec(prev => ({
+                          ...prev,
+                          blendedPaperRate: rate,
+                          plyDetails: generatePliesForCount(prev.plyCount, prev.fluteType, rate)
+                        }));
+                      }}
+                    />
+                  </div>
+
+                  {/* Conversion Cost */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Conv. Cost (₹/pc)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-mono font-bold bg-white text-stone-900"
+                      value={globalSpec.conversionCostPerPc}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, conversionCostPerPc: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+
+                  {/* Printing Cost */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Printing (₹/pc)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-mono font-bold bg-white text-stone-900"
+                      value={globalSpec.printingCostPerPc}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, printingCostPerPc: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+
+                  {/* Margin % */}
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">Margin %</label>
+                    <input
+                      type="number"
+                      step="1"
+                      className="w-full p-2 border border-emerald-300 rounded-lg text-xs font-mono font-bold bg-white text-stone-900"
+                      value={globalSpec.marginPercent}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, marginPercent: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+
+                </div>
+
+                {/* Secondary row: Stitching, Freight */}
+                <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-4 pt-3 border-t border-emerald-200">
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-wider mb-1">Stitching/Glue (₹/pc)</label>
+                    <input
+                      type="number" step="0.1"
+                      className="w-full p-1.5 border border-emerald-200 rounded-lg text-xs font-mono font-bold bg-white text-stone-800"
+                      value={globalSpec.stitchingGlueCostPerPc}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, stitchingGlueCostPerPc: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-wider mb-1">Transport/Freight (₹/pc)</label>
+                    <input
+                      type="number" step="0.1"
+                      className="w-full p-1.5 border border-emerald-200 rounded-lg text-xs font-mono font-bold bg-white text-stone-800"
+                      value={globalSpec.freightCostPerPc}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, freightCostPerPc: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-wider mb-1">Conv. Rate (₹/kg)</label>
+                    <input
+                      type="number" step="0.5"
+                      className="w-full p-1.5 border border-emerald-200 rounded-lg text-xs font-mono font-bold bg-white text-stone-800"
+                      value={globalSpec.conversionRatePerKg}
+                      onChange={e => setGlobalSpec(prev => ({ ...prev, conversionRatePerKg: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <p className="text-[10px] text-emerald-700 font-medium leading-snug">
+                      ✅ Any SKU marked <span className="font-black">✓ Global Spec</span> will live-update instantly when you change these values above.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* QUICK PRESET BAR & ACTIONS */}
           <div className="bg-stone-100 p-3.5 rounded-2xl border border-stone-300 flex items-center justify-between flex-wrap gap-3">
+
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold text-stone-500 uppercase tracking-wider mr-1">Quick Add Preset:</span>
               {COSTING_PRESETS.map(p => (
@@ -9462,7 +9661,7 @@ _Generated via Corrugated Box Smart ERP Engine_`;
                   {/* SKU ROW HEADER */}
                   <div className="bg-stone-50 px-4 py-3 border-b border-stone-200 flex flex-wrap justify-between items-center gap-3">
                     <div className="flex items-center gap-3 flex-1 min-w-[280px]">
-                      <span className="bg-stone-800 text-white font-black w-6 h-6 flex items-center justify-center rounded-full text-xs">
+                      <span className="bg-stone-800 text-white font-black w-6 h-6 flex items-center justify-center rounded-full text-xs flex-shrink-0">
                         {index + 1}
                       </span>
                       <input
@@ -9470,11 +9669,29 @@ _Generated via Corrugated Box Smart ERP Engine_`;
                         className="font-bold text-stone-900 bg-white border border-stone-300 rounded-lg px-2.5 py-1 text-sm flex-1 max-w-xs focus:ring-2 focus:ring-amber-500 outline-none"
                         value={sku.name}
                         onChange={e => handleUpdateSku(sku.id, 'name', e.target.value)}
-                        placeholder="SKU Name (e.g. Master Carton)"
+                        placeholder="SKU Name (e.g. Box Size A)"
                       />
                       <span className="font-mono text-xs font-bold text-stone-500 bg-stone-200/80 px-2 py-0.5 rounded">
                         {sku.skuCode}
                       </span>
+                      {/* Global Spec / Custom Override badge */}
+                      {sku.useGlobalSpec ? (
+                        <span
+                          title="Using shared global paper spec — click to override for this SKU individually"
+                          className="flex items-center gap-1 text-[10px] font-black bg-emerald-100 text-emerald-700 border border-emerald-300 px-2 py-0.5 rounded-full cursor-pointer hover:bg-emerald-200 transition select-none"
+                          onClick={() => handleUpdateSku(sku.id, 'useGlobalSpec', false)}
+                        >
+                          ✓ Global Spec
+                        </span>
+                      ) : (
+                        <span
+                          title="This SKU has its own custom paper spec — click to revert to global spec"
+                          className="flex items-center gap-1 text-[10px] font-black bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full cursor-pointer hover:bg-amber-200 transition select-none"
+                          onClick={() => handleUpdateSku(sku.id, 'useGlobalSpec', true)}
+                        >
+                          ✎ Custom Spec — Reset↗
+                        </span>
+                      )}
                     </div>
 
                     {/* Quick SKU Metrics in Header */}
@@ -9525,141 +9742,224 @@ _Generated via Corrugated Box Smart ERP Engine_`;
                     </div>
                   </div>
 
-                  {/* SKU CORE SPECIFICATION GRID */}
-                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end bg-white">
-                    
-                    {/* 1. Item Type */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Item Type</label>
-                      <select
-                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
-                        value={sku.itemType}
-                        onChange={e => handleUpdateSku(sku.id, 'itemType', e.target.value)}
-                      >
-                        <option value="Box">Standard Box (RSC)</option>
-                        <option value="Tray">Tray / Lid</option>
-                        <option value="Partition">Partition (Divider)</option>
-                        <option value="Sheet">Flat Sheet / Plate</option>
-                        <option value="DieCut">Die-Cut Box</option>
-                      </select>
-                    </div>
+                  {/* ── SKU CORE SPECIFICATION GRID ── */}
+                  {sku.useGlobalSpec ? (
+                    /* GLOBAL SPEC MODE — only size, item type, and qty needed */
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 gap-3 items-end bg-white">
 
-                    {/* 2. Dimensions & Unit */}
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
-                          Size ({sku.unit})
-                        </label>
-                        <span className="text-[10px] font-bold text-amber-600 truncate max-w-[80px]" title={altDimText}>
-                          {altDimText}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-amber-500 outline-none"
-                          placeholder={sku.unit === 'inch' ? '12x8x6' : '300x200x150'}
-                          value={sku.size}
-                          onChange={e => handleUpdateSku(sku.id, 'size', e.target.value)}
-                        />
-                        <select
-                          className="p-2 border border-stone-300 rounded-lg text-[10px] font-bold bg-stone-100 text-stone-700"
-                          value={sku.unit}
-                          onChange={e => handleUpdateSku(sku.id, 'unit', e.target.value)}
-                        >
-                          <option value="inch">in</option>
-                          <option value="mm">mm</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* 3. Ply & Flute */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Ply &amp; Flute</label>
-                      <div className="grid grid-cols-2 gap-1">
+                      {/* 1. Item Type */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Item Type</label>
                         <select
                           className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
-                          value={sku.plyCount}
-                          onChange={e => handleUpdateSku(sku.id, 'plyCount', parseInt(e.target.value, 10))}
+                          value={sku.itemType}
+                          onChange={e => handleUpdateSku(sku.id, 'itemType', e.target.value)}
                         >
-                          <option value={2}>2-Ply</option>
-                          <option value={3}>3-Ply</option>
-                          <option value={5}>5-Ply</option>
-                          <option value={7}>7-Ply</option>
-                        </select>
-                        <select
-                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
-                          value={sku.fluteType}
-                          onChange={e => handleUpdateSku(sku.id, 'fluteType', e.target.value)}
-                        >
-                          <option value="B">B-Flute</option>
-                          <option value="C">C-Flute</option>
-                          <option value="E">E-Flute</option>
-                          <option value="BC">BC-Flute</option>
-                          <option value="AB">AB-Flute</option>
+                          <option value="Box">Standard Box (RSC)</option>
+                          <option value="Tray">Tray / Lid</option>
+                          <option value="Partition">Partition (Divider)</option>
+                          <option value="Sheet">Flat Sheet / Plate</option>
+                          <option value="DieCut">Die-Cut Box</option>
                         </select>
                       </div>
-                    </div>
 
-                    {/* 4. Paper Rate (₹/kg) */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Paper Rate (₹/kg)</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
-                        value={sku.blendedPaperRate}
-                        onChange={e => handleUpdateSku(sku.id, 'blendedPaperRate', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
+                      {/* 2. Dimensions & Unit — the MAIN thing to enter */}
+                      <div className="sm:col-span-2">
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
+                            Size (L × W × H) — in {sku.unit}
+                          </label>
+                          <span className="text-[10px] font-bold text-amber-600 truncate max-w-[120px]" title={sku.unit === 'inch' ? sku.parsedDimensions?.textMm : sku.parsedDimensions?.textInch}>
+                            {sku.unit === 'inch' ? sku.parsedDimensions?.textMm : sku.parsedDimensions?.textInch}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            className="w-full p-2 border-2 border-amber-400 rounded-lg text-sm font-mono font-bold bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-stone-900"
+                            placeholder={sku.unit === 'inch' ? '12 x 8 x 6' : '300x200x150'}
+                            value={sku.size}
+                            onChange={e => handleUpdateSku(sku.id, 'size', e.target.value)}
+                            autoFocus={sku.size === ''}
+                          />
+                          <select
+                            className="p-2 border border-stone-300 rounded-lg text-[10px] font-bold bg-stone-100 text-stone-700"
+                            value={sku.unit}
+                            onChange={e => handleUpdateSku(sku.id, 'unit', e.target.value)}
+                          >
+                            <option value="inch">in</option>
+                            <option value="mm">mm</option>
+                          </select>
+                        </div>
+                      </div>
 
-                    {/* 5. Conversion Cost (₹/pc) */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Conv. Cost (₹/pc)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
-                        value={sku.conversionCostPerPc}
-                        onChange={e => handleUpdateSku(sku.id, 'conversionCostPerPc', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-
-                    {/* 6. Order Qty (Pcs) */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Target Qty (Pcs)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        className="w-full p-2 border border-blue-300 bg-blue-50/60 rounded-lg text-xs font-mono font-bold text-blue-900"
-                        value={sku.targetQty}
-                        onChange={e => handleUpdateSku(sku.id, 'targetQty', parseInt(e.target.value, 10) || 1)}
-                      />
-                    </div>
-
-                    {/* 7. Profit Margin % & Total Amount */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
-                        Margin: <span className="font-bold text-stone-900">{sku.marginPercent}%</span>
-                      </label>
-                      <div className="flex items-center gap-1.5">
+                      {/* 3. Order Qty */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Target Qty (Pcs)</label>
                         <input
                           type="number"
-                          step="1"
-                          className="w-14 p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
-                          value={sku.marginPercent}
-                          onChange={e => handleUpdateSku(sku.id, 'marginPercent', parseFloat(e.target.value) || 0)}
+                          min="1"
+                          className="w-full p-2 border border-blue-300 bg-blue-50/60 rounded-lg text-xs font-mono font-bold text-blue-900"
+                          value={sku.targetQty}
+                          onChange={e => handleUpdateSku(sku.id, 'targetQty', parseInt(e.target.value, 10) || 1)}
                         />
-                        <div className="flex-1 bg-stone-900 text-white p-1.5 rounded-lg text-right truncate">
-                          <span className="block text-[9px] text-stone-400 font-bold uppercase">Total Value</span>
-                          <span className="text-xs font-bold font-mono text-emerald-400">
-                            ₹{sku.totalBatchSellingAmount.toLocaleString('en-IN')}
+                      </div>
+
+                      {/* 4. Total Value (read-only) */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+                          Total Value @ {globalSpec.marginPercent}% Margin
+                        </label>
+                        <div className="bg-stone-900 text-white p-2 rounded-lg text-right">
+                          <span className="block text-[9px] text-stone-400 font-bold uppercase">₹{sku.finalSellingRatePerPc?.toFixed(2)}/pc</span>
+                          <span className="text-sm font-bold font-mono text-emerald-400">
+                            ₹{sku.totalBatchSellingAmount?.toLocaleString('en-IN')}
                           </span>
                         </div>
                       </div>
-                    </div>
 
-                  </div>
+                    </div>
+                  ) : (
+                    /* CUSTOM SPEC OVERRIDE MODE — full 7-column spec grid */
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end bg-amber-50/40">
+                      <div className="lg:col-span-7 flex items-center gap-2 mb-1">
+                        <span className="text-[10px] font-black text-amber-700 uppercase tracking-wider">✎ Custom Spec Override for this SKU only:</span>
+                      </div>
+
+                      {/* 1. Item Type */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Item Type</label>
+                        <select
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-white"
+                          value={sku.itemType}
+                          onChange={e => handleUpdateSku(sku.id, 'itemType', e.target.value)}
+                        >
+                          <option value="Box">Standard Box (RSC)</option>
+                          <option value="Tray">Tray / Lid</option>
+                          <option value="Partition">Partition (Divider)</option>
+                          <option value="Sheet">Flat Sheet / Plate</option>
+                          <option value="DieCut">Die-Cut Box</option>
+                        </select>
+                      </div>
+
+                      {/* 2. Dimensions & Unit */}
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
+                            Size ({sku.unit})
+                          </label>
+                          <span className="text-[10px] font-bold text-amber-600 truncate max-w-[80px]" title={sku.unit === 'inch' ? sku.parsedDimensions?.textMm : sku.parsedDimensions?.textInch}>
+                            {sku.unit === 'inch' ? sku.parsedDimensions?.textMm : sku.parsedDimensions?.textInch}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                            placeholder={sku.unit === 'inch' ? '12x8x6' : '300x200x150'}
+                            value={sku.size}
+                            onChange={e => handleUpdateSku(sku.id, 'size', e.target.value)}
+                          />
+                          <select
+                            className="p-2 border border-stone-300 rounded-lg text-[10px] font-bold bg-stone-100 text-stone-700"
+                            value={sku.unit}
+                            onChange={e => handleUpdateSku(sku.id, 'unit', e.target.value)}
+                          >
+                            <option value="inch">in</option>
+                            <option value="mm">mm</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* 3. Ply & Flute */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Ply &amp; Flute</label>
+                        <div className="grid grid-cols-2 gap-1">
+                          <select
+                            className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                            value={sku.plyCount}
+                            onChange={e => handleUpdateSku(sku.id, 'plyCount', parseInt(e.target.value, 10))}
+                          >
+                            <option value={2}>2-Ply</option>
+                            <option value={3}>3-Ply</option>
+                            <option value={5}>5-Ply</option>
+                            <option value={7}>7-Ply</option>
+                          </select>
+                          <select
+                            className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                            value={sku.fluteType}
+                            onChange={e => handleUpdateSku(sku.id, 'fluteType', e.target.value)}
+                          >
+                            <option value="B">B-Flute</option>
+                            <option value="C">C-Flute</option>
+                            <option value="E">E-Flute</option>
+                            <option value="BC">BC-Flute</option>
+                            <option value="AB">AB-Flute</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* 4. Paper Rate (₹/kg) */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Paper Rate (₹/kg)</label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                          value={sku.blendedPaperRate}
+                          onChange={e => handleUpdateSku(sku.id, 'blendedPaperRate', parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+
+                      {/* 5. Conversion Cost (₹/pc) */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Conv. Cost (₹/pc)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                          value={sku.conversionCostPerPc}
+                          onChange={e => handleUpdateSku(sku.id, 'conversionCostPerPc', parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+
+                      {/* 6. Order Qty (Pcs) */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Target Qty (Pcs)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          className="w-full p-2 border border-blue-300 bg-blue-50/60 rounded-lg text-xs font-mono font-bold text-blue-900"
+                          value={sku.targetQty}
+                          onChange={e => handleUpdateSku(sku.id, 'targetQty', parseInt(e.target.value, 10) || 1)}
+                        />
+                      </div>
+
+                      {/* 7. Profit Margin % & Total Amount */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+                          Margin: <span className="font-bold text-stone-900">{sku.marginPercent}%</span>
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            step="1"
+                            className="w-14 p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                            value={sku.marginPercent}
+                            onChange={e => handleUpdateSku(sku.id, 'marginPercent', parseFloat(e.target.value) || 0)}
+                          />
+                          <div className="flex-1 bg-stone-900 text-white p-1.5 rounded-lg text-right truncate">
+                            <span className="block text-[9px] text-stone-400 font-bold uppercase">Total Value</span>
+                            <span className="text-xs font-bold font-mono text-emerald-400">
+                              ₹{sku.totalBatchSellingAmount?.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+
 
                   {/* EXPANDABLE ADVANCED LAYER SUBSTANCE & COMMERCIAL FINISHING */}
                   {sku.expanded && (
