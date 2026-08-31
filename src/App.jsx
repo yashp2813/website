@@ -10393,6 +10393,227 @@ function InventoryMultiSelectDropdown({
   );
 }
 
+// --- INVENTORY WEIGHT FILTER DROPDOWN ---
+function InventoryWeightFilterDropdown({
+  filters,
+  setFilters,
+  weightBracketCounts = {}
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const hasWeightFilter = (filters.weightBracket && filters.weightBracket !== 'All') || filters.minWeight || filters.maxWeight;
+
+  const getLabel = () => {
+    if (filters.minWeight && filters.maxWeight) return `⚖️ ${filters.minWeight}–${filters.maxWeight} kg`;
+    if (filters.minWeight) return `⚖️ ≥ ${filters.minWeight} kg`;
+    if (filters.maxWeight) return `⚖️ ≤ ${filters.maxWeight} kg`;
+    if (filters.weightBracket === '<200') return '⚖️ < 200 kg';
+    if (filters.weightBracket === '200-500') return '⚖️ 200–500 kg';
+    if (filters.weightBracket === '500-800') return '⚖️ 500–800 kg';
+    if (filters.weightBracket === '800-1200') return '⚖️ 800–1200 kg';
+    if (filters.weightBracket === '>1200') return '⚖️ > 1200 kg';
+    return '⚖️ Weight';
+  };
+
+  const selectBracket = (bracket) => {
+    setFilters(f => ({
+      ...f,
+      weightBracket: bracket,
+      minWeight: '',
+      maxWeight: ''
+    }));
+  };
+
+  const clearWeight = () => {
+    setFilters(f => ({
+      ...f,
+      weightBracket: 'All',
+      minWeight: '',
+      maxWeight: ''
+    }));
+  };
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }} ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="apex-btn"
+        style={{
+          width: '100%',
+          height: 36,
+          padding: '0 8px',
+          fontSize: 12,
+          fontWeight: hasWeightFilter ? 700 : 500,
+          background: hasWeightFilter ? '#eff6ff' : '#fff',
+          border: `1.5px solid ${hasWeightFilter ? '#2563eb' : '#cbd5e1'}`,
+          color: hasWeightFilter ? '#1d4ed8' : '#334155',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 4,
+          borderRadius: 6,
+          cursor: 'pointer',
+          transition: 'all 0.15s',
+          boxShadow: hasWeightFilter ? '0 1px 4px rgba(37,99,235,0.18)' : 'none',
+          boxSizing: 'border-box'
+        }}
+        title="Filter by Reel Weight in KG"
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {getLabel()}
+          </span>
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          {hasWeightFilter && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                clearWeight();
+              }}
+              style={{
+                width: 15,
+                height: 15,
+                borderRadius: '50%',
+                background: '#bfdbfe',
+                color: '#1e40af',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 9,
+                fontWeight: 900,
+                cursor: 'pointer'
+              }}
+              title="Clear weight filter"
+            >
+              ✕
+            </span>
+          )}
+          <span style={{ fontSize: 9, color: '#64748b' }}>{isOpen ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {isOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            minWidth: 240,
+            width: 'max-content',
+            background: '#ffffff',
+            border: '1.5px solid #cbd5e1',
+            borderRadius: 8,
+            boxShadow: '0 12px 28px -4px rgba(0, 0, 0, 0.25), 0 6px 12px -2px rgba(0, 0, 0, 0.12)',
+            zIndex: 99999,
+            padding: 10
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Reel Weight Range</span>
+            {hasWeightFilter && (
+              <button
+                type="button"
+                onClick={clearWeight}
+                style={{ border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 }}>
+            {[
+              { id: 'All', label: 'All Weights', icon: '⚖️', count: null },
+              { id: '<200', label: '< 200 kg (Cut / Low)', icon: '⚠️', count: weightBracketCounts['<200'] },
+              { id: '200-500', label: '200 – 500 kg (Small)', icon: '📦', count: weightBracketCounts['200-500'] },
+              { id: '500-800', label: '500 – 800 kg (Medium)', icon: '📦', count: weightBracketCounts['500-800'] },
+              { id: '800-1200', label: '800 – 1,200 kg (Standard)', icon: '📦', count: weightBracketCounts['800-1200'] },
+              { id: '>1200', label: '> 1,200 kg (Jumbo)', icon: '🏋️', count: weightBracketCounts['>1200'] }
+            ].map(b => {
+              const isSelected = (!filters.minWeight && !filters.maxWeight && (filters.weightBracket || 'All') === b.id) || (b.id === 'All' && !hasWeightFilter);
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => {
+                    selectBracket(b.id);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 8px',
+                    borderRadius: 5,
+                    border: 'none',
+                    background: isSelected ? '#eff6ff' : 'transparent',
+                    color: isSelected ? '#1d4ed8' : '#1e293b',
+                    fontWeight: isSelected ? 700 : 500,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    textAlign: 'left'
+                  }}
+                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#f8fafc'; }}
+                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>{b.icon}</span>
+                    <span>{b.label}</span>
+                  </span>
+                  {b.count !== null && b.count !== undefined && (
+                    <span style={{ fontSize: 10, background: isSelected ? '#dbeafe' : '#f1f5f9', color: isSelected ? '#1e40af' : '#64748b', padding: '1px 6px', borderRadius: 10, fontWeight: 700 }}>
+                      {b.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 8, marginTop: 4 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: '#64748b', marginBottom: 6, textTransform: 'uppercase' }}>
+              Custom Weight Range (KG)
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="number"
+                placeholder="Min KG"
+                value={filters.minWeight || ''}
+                onChange={e => setFilters(f => ({ ...f, minWeight: e.target.value, weightBracket: 'Custom' }))}
+                style={{ width: 80, height: 28, padding: '2px 6px', fontSize: 11.5, border: '1px solid #cbd5e1', borderRadius: 4, outline: 'none' }}
+              />
+              <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+              <input
+                type="number"
+                placeholder="Max KG"
+                value={filters.maxWeight || ''}
+                onChange={e => setFilters(f => ({ ...f, maxWeight: e.target.value, weightBracket: 'Custom' }))}
+                style={{ width: 80, height: 28, padding: '2px 6px', fontSize: 11.5, border: '1px solid #cbd5e1', borderRadius: 4, outline: 'none' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- INVENTORY VIEW ---
 function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
   const allowedCompanyId = activeUnitId || 'all';
@@ -10446,6 +10667,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     bf: '', 
     colours: [], 
     colour: '', 
+    minWeight: '',
+    maxWeight: '',
+    weightBracket: 'All',
+    weightField: 'balanceQty',
     status: 'All', 
     startDate: '', 
     endDate: '', 
@@ -10999,6 +11224,19 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     return counts;
   }, [baseAvailableInventory]);
 
+  const weightBracketCounts = useMemo(() => {
+    const counts = { '<200': 0, '200-500': 0, '500-800': 0, '800-1200': 0, '>1200': 0 };
+    baseAvailableInventory.forEach(r => {
+      const wt = parseFloat(r.balanceQty || 0);
+      if (wt < 200) counts['<200']++;
+      else if (wt <= 500) counts['200-500']++;
+      else if (wt <= 800) counts['500-800']++;
+      else if (wt <= 1200) counts['800-1200']++;
+      else counts['>1200']++;
+    });
+    return counts;
+  }, [baseAvailableInventory]);
+
   const filteredInventory = useMemo(() => {
     return inventoryWithUsage.filter(reel => {
       if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
@@ -11044,6 +11282,22 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         if (!filters.colours.some(c => c.toLowerCase() === String(reel.colour || '').toLowerCase())) return false;
       } else if (filters.colour && String(reel.colour || '').toLowerCase() !== filters.colour.toLowerCase()) {
         return false;
+      }
+
+      // Reel Weight Filter (Available Balance KG vs Inward Received KG)
+      const reelWeight = filters.weightField === 'receivedQty'
+        ? parseFloat(reel.receivedQty || 0)
+        : parseFloat(reel.balanceQty || 0);
+
+      if (filters.minWeight && reelWeight < parseFloat(filters.minWeight)) return false;
+      if (filters.maxWeight && reelWeight > parseFloat(filters.maxWeight)) return false;
+
+      if (filters.weightBracket && filters.weightBracket !== 'All' && filters.weightBracket !== 'Custom') {
+        if (filters.weightBracket === '<200' && reelWeight >= 200) return false;
+        if (filters.weightBracket === '200-500' && (reelWeight < 200 || reelWeight > 500)) return false;
+        if (filters.weightBracket === '500-800' && (reelWeight < 500 || reelWeight > 800)) return false;
+        if (filters.weightBracket === '800-1200' && (reelWeight < 800 || reelWeight > 1200)) return false;
+        if (filters.weightBracket === '>1200' && reelWeight <= 1200) return false;
       }
 
       // Global Search
@@ -11829,6 +12083,15 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 />
               </div>
 
+              {/* Weight Filter Dropdown */}
+              <div style={{ flex: '1 1 120px', minWidth: 115 }}>
+                <InventoryWeightFilterDropdown
+                  filters={filters}
+                  setFilters={setFilters}
+                  weightBracketCounts={weightBracketCounts}
+                />
+              </div>
+
               {/* Sort By Selector */}
               <div style={{ flex: '1 1 130px', minWidth: 120 }}>
                 <select
@@ -11871,9 +12134,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     padding: '0 10px',
                     fontSize: 12,
                     fontWeight: 700,
-                    background: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#eff6ff' : '#f8fafc',
-                    border: `1.5px solid ${(filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#2563eb' : '#cbd5e1'}`,
-                    color: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#1d4ed8' : '#334155',
+                    background: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.minWeight || filters.maxWeight || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#eff6ff' : '#f8fafc',
+                    border: `1.5px solid ${(filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.minWeight || filters.maxWeight || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#2563eb' : '#cbd5e1'}`,
+                    color: (filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.minWeight || filters.maxWeight || filters.invoiceNo || filters.vehicleNo || filters.clientId) ? '#1d4ed8' : '#334155',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -11881,13 +12144,13 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     boxSizing: 'border-box'
                   }}
                 >
-                  <span>⚙️ Date &amp; Rates</span>
+                  <span>⚙️ Date, Wt &amp; Rates</span>
                   <span style={{ fontSize: 10 }}>{showAdvancedFilters ? '▲' : '▼'}</span>
                 </button>
               </div>
             </div>
 
-            {/* ROW 3: Expandable Advanced Filters (Inward Date Range, Rate Range, Invoice No, Vehicle No, Client) */}
+            {/* ROW 3: Expandable Advanced Filters (Inward Date Range, Weight Range, Rate Range, Invoice No, Vehicle No, Client) */}
             {showAdvancedFilters && (
               <div style={{ marginTop: 12, padding: '12px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'flex-end' }}>
                 <div>
@@ -11910,6 +12173,45 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     value={filters.endDate}
                     onChange={e => setFilters(f => ({ ...f, endDate: e.target.value }))}
                   />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Min Weight (KG)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    placeholder="Min KG"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.minWeight}
+                    onChange={e => setFilters(f => ({ ...f, minWeight: e.target.value, weightBracket: 'Custom' }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Max Weight (KG)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    placeholder="Max KG"
+                    className="apex-input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.maxWeight}
+                    onChange={e => setFilters(f => ({ ...f, maxWeight: e.target.value, weightBracket: 'Custom' }))}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Weight Basis</label>
+                  <select
+                    className="apex-select"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                    value={filters.weightField || 'balanceQty'}
+                    onChange={e => setFilters(f => ({ ...f, weightField: e.target.value }))}
+                  >
+                    <option value="balanceQty">Available Bal KG</option>
+                    <option value="receivedQty">Total Recv KG</option>
+                  </select>
                 </div>
 
                 <div>
@@ -12028,6 +12330,14 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                   </span>
                 ))}
 
+                {/* Weight Range Chips */}
+                {((filters.weightBracket && filters.weightBracket !== 'All') || filters.minWeight || filters.maxWeight) && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                    ⚖️ {filters.minWeight && filters.maxWeight ? `${filters.minWeight}–${filters.maxWeight} kg` : (filters.minWeight ? `≥ ${filters.minWeight} kg` : (filters.maxWeight ? `≤ ${filters.maxWeight} kg` : `${filters.weightBracket} kg`))} ({filters.weightField === 'receivedQty' ? 'Recv' : 'Bal'})
+                    <button type="button" onClick={() => setFilters(f => ({ ...f, weightBracket: 'All', minWeight: '', maxWeight: '' }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
+                  </span>
+                )}
+
                 {(filters.startDate || filters.endDate) && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
                     📅 {filters.startDate || 'Start'} → {filters.endDate || 'End'}
@@ -12043,7 +12353,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 )}
               </div>
 
-              {((filters.mills && filters.mills.length > 0) || (filters.sizes && filters.sizes.length > 0) || (filters.gsms && filters.gsms.length > 0) || (filters.bfs && filters.bfs.length > 0) || (filters.colours && filters.colours.length > 0) || filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.searchReel || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company || sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
+              {((filters.mills && filters.mills.length > 0) || (filters.sizes && filters.sizes.length > 0) || (filters.gsms && filters.gsms.length > 0) || (filters.bfs && filters.bfs.length > 0) || (filters.colours && filters.colours.length > 0) || (filters.weightBracket && filters.weightBracket !== 'All') || filters.minWeight || filters.maxWeight || filters.stockType !== 'All' || filters.status !== 'All' || filters.clientId || filters.searchReel || filters.startDate || filters.endDate || filters.minRate || filters.maxRate || filters.invoiceNo || filters.vehicleNo || filters.company || sortConfig.key !== 'date' || sortConfig.direction !== 'desc') && (
                 <button
                   type="button"
                   onClick={() => {
