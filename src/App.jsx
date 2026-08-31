@@ -4578,6 +4578,48 @@ const handleCSVImport = async (e, collectionName, getColRef, addLog, transformRo
 // UNIVERSAL CSV & EXCEL IMPORT CENTER
 // (Own Stock Inventory & Job Work Clients)
 // ==========================================
+
+// Helper to check if a reel from import already exists in current inventory database
+function findExistingInventoryReel(importItem, existingInventory = []) {
+  if (!existingInventory || existingInventory.length === 0) return null;
+
+  const normalize = (val) => String(val || '').trim().toLowerCase().replace(/[`'"]/g, '');
+  const rNo = normalize(importItem.supplierReelNo || importItem.reelNo);
+  const sysId = normalize(importItem.systemReelId || importItem.uniqueReelId);
+  const invNo = normalize(importItem.invoiceNo || importItem.inwardChallanNo);
+  const size = String(parseFloat(importItem.size) || '');
+  const gsm = String(parseFloat(importItem.gsm) || '');
+  const wt = parseFloat(importItem.receivedQty || importItem.weight || 0);
+
+  for (const cur of existingInventory) {
+    const curRNo = normalize(cur.supplierReelNo || cur.reelNo);
+    const curSysId = normalize(cur.systemReelId || cur.uniqueReelId);
+    const curInvNo = normalize(cur.invoiceNo || cur.inwardChallanNo);
+    const curSize = String(parseFloat(cur.size) || '');
+    const curGsm = String(parseFloat(cur.gsm) || '');
+    const curWt = parseFloat(cur.receivedQty || cur.weight || 0);
+
+    // 1. Exact system / barcode ID match (e.g. RL-00123)
+    if (sysId && (sysId === curSysId || sysId === curRNo)) {
+      return cur;
+    }
+
+    // 2. Exact supplier reel # match (ignoring leading zeros or case, if non-trivial string)
+    if (rNo && rNo !== '-' && rNo !== '0' && rNo.length >= 2) {
+      if (rNo === curRNo || rNo === curSysId || rNo.replace(/^0+/, '') === curRNo.replace(/^0+/, '')) {
+        return cur;
+      }
+    }
+
+    // 3. Exact Invoice No + Size + GSM + Weight match
+    if (invNo && invNo.length >= 3 && invNo === curInvNo && size && size === curSize && gsm && gsm === curGsm && wt > 0 && Math.abs(wt - curWt) < 0.1) {
+      return cur;
+    }
+  }
+
+  return null;
+}
+
 function UniversalCsvImportModal({
   isOpen,
   onClose,
@@ -4603,6 +4645,8 @@ function UniversalCsvImportModal({
   const [targetUnitId, setTargetUnitId] = useState(activeUnitId || (companies[0]?.id || ''));
   const [selectedJobWorkClient, setSelectedJobWorkClient] = useState('__auto__');
   const [customClientName, setCustomClientName] = useState('');
+  const [skipExisting, setSkipExisting] = useState(true);
+  const [previewFilter, setPreviewFilter] = useState('all'); // 'all' | 'new_only' | 'existing_only'
   const rawRowsRef = useRef([]);
 
   useEffect(() => {
@@ -4616,6 +4660,8 @@ function UniversalCsvImportModal({
       setProgressCount(0);
       setSelectedJobWorkClient('__auto__');
       setCustomClientName('');
+      setSkipExisting(true);
+      setPreviewFilter('all');
       rawRowsRef.current = [];
       if (activeUnitId) setTargetUnitId(activeUnitId);
     }
@@ -4756,7 +4802,7 @@ function UniversalCsvImportModal({
     return String(val).trim();
   };
 
-  // Convert raw rows to normalized ERP objects
+  // Convert raw rows to normalized ERP objects with existing reel duplicate protection
   const processRawRows = (rawRows, currentMode, clientOverride = selectedJobWorkClient, customName = customClientName) => {
     const existingMax = (inventory || []).reduce((max, cur) => {
       const fid = formatSystemReelId(cur, inventory);
@@ -4765,9 +4811,10 @@ function UniversalCsvImportModal({
     }, 0);
 
     const prefix = currentMode === 'job_work_stock' ? 'RL-JW' : 'RL';
+    const seenReelsInBatch = new Set();
+    let newReelIndex = 0;
 
-    return rawRows.map((r, idx) => {
-      const autoUniqueId = `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
+    return rawRows.map((r) => {
       const date = parseDateStr(findVal(r, 'date', 'inwarddate', 'receiptdate', 'invoicedate', 'dcdate'));
       const size = parseSizeCm(findVal(r, 'size', 'sizecm', 'deckle', 'decklecm', 'width', 'sizeinch'));
       const gsm = String(parseNum(findVal(r, 'gsm', 'grammage')) || '');
@@ -4779,12 +4826,42 @@ function UniversalCsvImportModal({
       const vehicleNo = findVal(r, 'vehicleno', 'truckno', 'vehicle', 'lorryno');
       const invoiceNo = findVal(r, 'invoiceno', 'invoicenumber', 'billno', 'challanno', 'dcno', 'dcnumber', 'refno');
       const rate = parseNum(findVal(r, 'rate', 'rateperkg', 'ratepkg', 'price', 'ratekg'));
+      const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
 
       if (currentMode === 'own_stock') {
         const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
-        const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
-        const supplierReelNo = rawSupplierReelNo || autoUniqueId;
-        const uniqueReelId = autoUniqueId;
+
+        // Check if this reel already exists in database
+        const existingReel = findExistingInventoryReel({
+          supplierReelNo: rawSupplierReelNo,
+          reelNo: rawSupplierReelNo,
+          invoiceNo,
+          size,
+          gsm,
+          receivedQty: weight
+        }, inventory);
+
+        const rKey = (rawSupplierReelNo || '').toLowerCase();
+        const isDuplicateInBatch = rKey && seenReelsInBatch.has(rKey);
+        if (rKey) seenReelsInBatch.add(rKey);
+
+        const isExisting = !!existingReel || isDuplicateInBatch;
+        let uniqueReelId = '';
+        let systemReelId = '';
+
+        if (existingReel) {
+          systemReelId = existingReel.systemReelId || existingReel.uniqueReelId || formatSystemReelId(existingReel, inventory);
+          uniqueReelId = systemReelId;
+        } else if (isDuplicateInBatch) {
+          systemReelId = `DUPLICATE-${rawSupplierReelNo}`;
+          uniqueReelId = systemReelId;
+        } else {
+          newReelIndex++;
+          uniqueReelId = `${prefix}-${String(existingMax + newReelIndex).padStart(5, '0')}`;
+          systemReelId = uniqueReelId;
+        }
+
+        const supplierReelNo = rawSupplierReelNo || uniqueReelId;
 
         return {
           type: 'own_stock',
@@ -4792,7 +4869,7 @@ function UniversalCsvImportModal({
           millName,
           supplierReelNo,
           uniqueReelId,
-          systemReelId: uniqueReelId,
+          systemReelId,
           reelNo: supplierReelNo,
           size,
           gsm,
@@ -4806,7 +4883,13 @@ function UniversalCsvImportModal({
           vehicleNo,
           stockType: 'regular',
           category: 'Paper',
-          tallySynced: false
+          tallySynced: false,
+          isExisting,
+          existingReel,
+          existingBarcode: existingReel ? (existingReel.systemReelId || existingReel.uniqueReelId || existingReel.reelNo) : null,
+          existingReason: existingReel 
+            ? `Already in Stock (Barcode: ${existingReel.systemReelId || existingReel.uniqueReelId || 'Reel #' + existingReel.reelNo})` 
+            : (isDuplicateInBatch ? 'Duplicate in this CSV file' : null)
         };
       } else {
         // Job Work Mode:
@@ -4819,12 +4902,10 @@ function UniversalCsvImportModal({
             clientName = foundCust ? foundCust.name : clientOverride;
           }
         } else {
-          // Auto-detect from CSV
           const explicitClient = findVal(r, 'clientname', 'client', 'customer', 'customername', 'jobworkparty', 'partyname', 'party');
           clientName = explicitClient || 'Job Work Client';
         }
 
-        // Mill Name: if an explicit mill column exists, use it. Otherwise, if party column exists, use it.
         const explicitMill = findVal(r, 'millname', 'mill', 'papermill', 'supplier', 'vendor');
         const partyVal = findVal(r, 'partyname', 'party');
         const millName = explicitMill || partyVal || clientName;
@@ -4835,11 +4916,37 @@ function UniversalCsvImportModal({
         const address = findVal(r, 'address', 'billingaddress', 'factoryaddress', 'city', 'location');
         const conversionRate = parseNum(findVal(r, 'conversionrate', 'jobworkrate', 'rate', 'jobworkratepkg'));
 
-        // If weight and size are present, it is a Job Work Client Paper Reel!
         if (weight > 0 || size) {
-          const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
-          const supplierReelNo = rawSupplierReelNo || autoUniqueId;
-          const uniqueReelId = autoUniqueId;
+          const existingReel = findExistingInventoryReel({
+            supplierReelNo: rawSupplierReelNo,
+            reelNo: rawSupplierReelNo,
+            invoiceNo,
+            size,
+            gsm,
+            receivedQty: weight
+          }, inventory);
+
+          const rKey = (rawSupplierReelNo || '').toLowerCase();
+          const isDuplicateInBatch = rKey && seenReelsInBatch.has(rKey);
+          if (rKey) seenReelsInBatch.add(rKey);
+
+          const isExisting = !!existingReel || isDuplicateInBatch;
+          let uniqueReelId = '';
+          let systemReelId = '';
+
+          if (existingReel) {
+            systemReelId = existingReel.systemReelId || existingReel.uniqueReelId || formatSystemReelId(existingReel, inventory);
+            uniqueReelId = systemReelId;
+          } else if (isDuplicateInBatch) {
+            systemReelId = `DUPLICATE-${rawSupplierReelNo}`;
+            uniqueReelId = systemReelId;
+          } else {
+            newReelIndex++;
+            uniqueReelId = `${prefix}-${String(existingMax + newReelIndex).padStart(5, '0')}`;
+            systemReelId = uniqueReelId;
+          }
+
+          const supplierReelNo = rawSupplierReelNo || uniqueReelId;
 
           return {
             type: 'job_work_reel',
@@ -4848,7 +4955,7 @@ function UniversalCsvImportModal({
             millName: millName,
             supplierReelNo,
             uniqueReelId,
-            systemReelId: uniqueReelId,
+            systemReelId,
             reelNo: supplierReelNo,
             size,
             gsm,
@@ -4862,10 +4969,15 @@ function UniversalCsvImportModal({
             vehicleNo,
             stockType: 'job_work',
             category: 'Paper',
-            tallySynced: false
+            tallySynced: false,
+            isExisting,
+            existingReel,
+            existingBarcode: existingReel ? (existingReel.systemReelId || existingReel.uniqueReelId || existingReel.reelNo) : null,
+            existingReason: existingReel 
+              ? `Already in Stock (Barcode: ${existingReel.systemReelId || existingReel.uniqueReelId || 'Reel #' + existingReel.reelNo})` 
+              : (isDuplicateInBatch ? 'Duplicate in this CSV file' : null)
           };
         } else {
-          // It is a Job Work Client Master Directory Record
           return {
             type: 'job_work_client_master',
             name: clientName,
@@ -4878,7 +4990,8 @@ function UniversalCsvImportModal({
             state: 'Maharashtra',
             conversionRate: conversionRate || 0,
             defaultJobWorkType: 'Full Box Conversion',
-            notes: 'Imported from CSV'
+            notes: 'Imported from CSV',
+            isExisting: false
           };
         }
       }
@@ -4923,9 +5036,14 @@ function UniversalCsvImportModal({
     }
   };
 
-  // --- SAVE ALL ROWS DIRECTLY INTO DATABASE ---
+  // --- SAVE FILTERED ROWS DIRECTLY INTO DATABASE ---
   const handleSaveToDatabase = async () => {
-    if (parsedRows.length === 0) return alert("No rows to import.");
+    const rowsToSave = skipExisting ? parsedRows.filter(r => !r.isExisting) : parsedRows;
+    if (rowsToSave.length === 0) {
+      alert("No new rows to import. All detected reels are already in your inventory!");
+      return;
+    }
+
     setIsProcessing(true);
     setProgressCount(0);
 
@@ -4937,8 +5055,8 @@ function UniversalCsvImportModal({
         if (c.name) clientCache[c.name.toLowerCase().trim()] = c.id;
       });
 
-      for (let i = 0; i < parsedRows.length; i++) {
-        const row = parsedRows[i];
+      for (let i = 0; i < rowsToSave.length; i++) {
+        const row = rowsToSave[i];
 
         if (row.type === 'own_stock') {
           const payload = {
@@ -5043,19 +5161,21 @@ function UniversalCsvImportModal({
         setProgressCount(i + 1);
       }
 
-      const totalKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
-      const totalBalanceKg = parsedRows.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+      const totalKg = rowsToSave.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+      const totalBalanceKg = rowsToSave.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
       const totalMt = (totalKg / 1000).toFixed(2);
       const totalBalanceMt = (totalBalanceKg / 1000).toFixed(2);
+      const skippedCount = parsedRows.length - rowsToSave.length;
 
       if (mode === 'own_stock') {
-        if (addLog) addLog(`Imported ${savedCount} own stock paper reels (${totalMt} MT Inward / ${totalBalanceMt} MT Available) directly from CSV`);
+        if (addLog) addLog(`Imported ${savedCount} new own stock paper reels (${totalMt} MT Inward / ${totalBalanceMt} MT Available). Skipped ${skippedCount} existing reels to preserve barcodes.`);
       } else {
-        if (addLog) addLog(`Imported ${savedCount} job work items (${totalMt} MT Inward / ${totalBalanceMt} MT Available, ${newClientsCreated} new clients registered) from CSV`);
+        if (addLog) addLog(`Imported ${savedCount} new job work items (${totalMt} MT Inward / ${totalBalanceMt} MT Available, ${newClientsCreated} new clients). Skipped ${skippedCount} existing items.`);
       }
 
       setImportSummary({
         totalSaved: savedCount,
+        totalSkipped: skippedCount,
         newClientsCreated,
         totalWeightMt: totalMt,
         totalBalanceMt,
@@ -5094,17 +5214,24 @@ function UniversalCsvImportModal({
     document.body.removeChild(link);
   };
 
-  const totalWeightKg = parsedRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
-  const totalBalanceKg = parsedRows.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
-  const totalIssuedKg = parsedRows.reduce((sum, r) => sum + (r.initialIssuedQty || 0), 0);
+  const newRows = parsedRows.filter(r => !r.isExisting);
+  const existingRows = parsedRows.filter(r => r.isExisting);
+  const rowsToSave = skipExisting ? newRows : parsedRows;
+
+  const totalWeightKg = rowsToSave.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+  const totalBalanceKg = rowsToSave.reduce((sum, r) => sum + (r.balanceQty || 0), 0);
+  const totalIssuedKg = rowsToSave.reduce((sum, r) => sum + (r.initialIssuedQty || 0), 0);
   const totalWeightMt = (totalWeightKg / 1000).toFixed(2);
   const totalBalanceMt = (totalBalanceKg / 1000).toFixed(2);
   const totalIssuedMt = (totalIssuedKg / 1000).toFixed(2);
-  const uniqueClients = Array.from(new Set(parsedRows.map(r => r.clientName || r.name).filter(Boolean)));
+
+  const displayedRows = previewFilter === 'new_only' 
+    ? newRows 
+    : (previewFilter === 'existing_only' ? existingRows : parsedRows);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(5px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px 8px' }}>
-      <div style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 940, maxHeight: '95vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
+      <div style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 980, maxHeight: '95vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
         
         {/* Header */}
         <div style={{ padding: '14px 18px', borderBottom: '1.5px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
@@ -5131,14 +5258,19 @@ function UniversalCsvImportModal({
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>
                 Import Completed Successfully!
               </h3>
-              <p style={{ fontSize: 14, color: '#475569', maxWidth: 480, margin: '0 auto 24px auto' }}>
-                Directly saved <strong>{importSummary.totalSaved} records</strong> ({importSummary.totalWeightMt} MT Received · <strong>{importSummary.totalBalanceMt} MT Available Stock</strong>) into the system database.
-                {importSummary.newClientsCreated > 0 && (
-                  <span style={{ display: 'block', marginTop: 6, color: '#4338ca', fontWeight: 700 }}>
-                    ✨ Auto-registered {importSummary.newClientsCreated} new Job Work Client(s) in your Client Directory!
-                  </span>
-                )}
+              <p style={{ fontSize: 14, color: '#475569', maxWidth: 520, margin: '0 auto 20px auto' }}>
+                Successfully added <strong>{importSummary.totalSaved} new records</strong> ({importSummary.totalWeightMt} MT Received · <strong>{importSummary.totalBalanceMt} MT Available Stock</strong>) into the system database.
               </p>
+              {importSummary.totalSkipped > 0 && (
+                <div style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e', padding: '10px 16px', borderRadius: 8, maxWidth: 520, margin: '0 auto 20px auto', fontSize: 13, fontWeight: 700 }}>
+                  🛡️ <strong>{importSummary.totalSkipped} existing reels skipped</strong> — their previously printed barcodes and IDs remain safely preserved!
+                </div>
+              )}
+              {importSummary.newClientsCreated > 0 && (
+                <p style={{ fontSize: 13, color: '#4338ca', fontWeight: 700, margin: '0 auto 24px auto' }}>
+                  ✨ Auto-registered {importSummary.newClientsCreated} new Job Work Client(s) in your Client Directory!
+                </p>
+              )}
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                 <button onClick={onClose} className="apex-btn apex-btn-primary" style={{ background: '#16a34a', padding: '10px 28px', fontWeight: 800 }}>
                   Done &amp; Return to ERP
@@ -5335,40 +5467,94 @@ function UniversalCsvImportModal({
               {/* Data Preview Table */}
               {parsedRows.length > 0 && (
                 <div>
-                  {/* Summary Bar */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '10px 16px', borderRadius: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: '#166534' }}>
-                        ✅ {parsedRows.length} Reels Detected
-                      </span>
-                      {totalWeightKg > 0 && (
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 6 }}>
-                          Received: {totalWeightKg.toLocaleString()} KG ({totalWeightMt} MT)
+                  {/* Duplicate & Inward Status Summary Bar */}
+                  <div style={{ background: '#f8fafc', border: '1.5px solid #cbd5e1', padding: '12px 16px', borderRadius: 10, marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>
+                          📊 CSV Parse Results:
                         </span>
-                      )}
-                      {totalIssuedKg > 0 && (
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#b91c1c', background: '#fee2e2', padding: '2px 8px', borderRadius: 6 }}>
-                          Issued: {totalIssuedKg.toLocaleString()} KG ({totalIssuedMt} MT)
+                        <span style={{ fontSize: 12, fontWeight: 800, color: '#15803d', background: '#dcfce7', border: '1px solid #bbf7d0', padding: '3px 10px', borderRadius: 20 }}>
+                          ✨ {newRows.length} Brand New Reels
                         </span>
-                      )}
-                      {totalBalanceKg > 0 && (
-                        <span style={{ fontSize: 11.5, fontWeight: 800, color: '#0f172a', background: '#fef08a', padding: '2px 8px', borderRadius: 6 }}>
-                          Live Stock Balance: {totalBalanceKg.toLocaleString()} KG ({totalBalanceMt} MT)
-                        </span>
+                        {existingRows.length > 0 && (
+                          <span style={{ fontSize: 12, fontWeight: 800, color: '#b45309', background: '#fef3c7', border: '1px solid #fde68a', padding: '3px 10px', borderRadius: 20 }}>
+                            ⏭️ {existingRows.length} Existing Reels in Database
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Protection Checkbox */}
+                      {existingRows.length > 0 && (
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: skipExisting ? '#fef3c7' : '#f1f5f9', border: `1.5px solid ${skipExisting ? '#f59e0b' : '#cbd5e1'}`, padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 700, color: skipExisting ? '#92400e' : '#475569' }}>
+                          <input
+                            type="checkbox"
+                            checked={skipExisting}
+                            onChange={e => setSkipExisting(e.target.checked)}
+                            style={{ width: 14, height: 14, cursor: 'pointer', accentColor: '#d97706' }}
+                          />
+                          🛡️ Skip existing reels (Don't generate duplicate barcodes)
+                        </label>
                       )}
                     </div>
 
-                    <span style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>
-                      Previewing first 10 rows
+                    {/* Weight Metrics for rows to be saved */}
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 11.5, color: '#475569', borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                      <span>Rows to Import: <strong style={{ color: '#0f172a' }}>{rowsToSave.length}</strong> of {parsedRows.length}</span>
+                      {totalWeightKg > 0 && (
+                        <span>· Inward Wt: <strong style={{ color: '#0284c7' }}>{totalWeightKg.toLocaleString()} KG ({totalWeightMt} MT)</strong></span>
+                      )}
+                      {totalBalanceKg > 0 && (
+                        <span>· Available Stock: <strong style={{ color: '#16a34a' }}>{totalBalanceKg.toLocaleString()} KG ({totalBalanceMt} MT)</strong></span>
+                      )}
+                      {existingRows.length > 0 && skipExisting && (
+                        <span style={{ color: '#d97706', fontWeight: 600 }}>
+                          · 🛡️ {existingRows.length} reels with existing barcodes will remain untouched
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Filter Sub-Tabs for Preview */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 4, background: '#e2e8f0', padding: 2, borderRadius: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewFilter('all')}
+                        style={{ padding: '3px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: previewFilter === 'all' ? '#1e293b' : 'transparent', color: previewFilter === 'all' ? '#fff' : '#475569' }}
+                      >
+                        All Rows ({parsedRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewFilter('new_only')}
+                        style={{ padding: '3px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: previewFilter === 'new_only' ? '#15803d' : 'transparent', color: previewFilter === 'new_only' ? '#fff' : '#475569' }}
+                      >
+                        ✨ New Only ({newRows.length})
+                      </button>
+                      {existingRows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewFilter('existing_only')}
+                          style={{ padding: '3px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: previewFilter === 'existing_only' ? '#b45309' : 'transparent', color: previewFilter === 'existing_only' ? '#fff' : '#475569' }}
+                        >
+                          ⏭️ Existing / Skipped ({existingRows.length})
+                        </button>
+                      )}
+                    </div>
+
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      Showing {Math.min(displayedRows.length, 15)} of {displayedRows.length} rows
                     </span>
                   </div>
 
                   {/* Preview Table */}
-                  <div className="apex-table-wrap" style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: 8, marginBottom: 20 }}>
+                  <div className="apex-table-wrap" style={{ maxHeight: 250, overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: 8, marginBottom: 20 }}>
                     <table className="apex-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                       <thead>
                         <tr style={{ background: '#1e293b', color: '#fff' }}>
                           <th style={{ padding: '6px 8px', textAlign: 'center' }}>#</th>
+                          <th style={{ padding: '6px 8px' }}>Barcode / Status</th>
                           {mode === 'job_work_stock' ? (
                             <>
                               <th style={{ padding: '6px 8px' }}>Job Work Client</th>
@@ -5377,8 +5563,7 @@ function UniversalCsvImportModal({
                           ) : (
                             <th style={{ padding: '6px 8px' }}>Party / Mill</th>
                           )}
-                          <th style={{ padding: '6px 8px' }}>System ID</th>
-                          <th style={{ padding: '6px 8px' }}>Supplier Reel No</th>
+                          <th style={{ padding: '6px 8px' }}>Supplier Reel #</th>
                           <th style={{ padding: '6px 8px' }}>Size</th>
                           <th style={{ padding: '6px 8px' }}>GSM</th>
                           <th style={{ padding: '6px 8px' }}>BF</th>
@@ -5392,9 +5577,20 @@ function UniversalCsvImportModal({
                         </tr>
                       </thead>
                       <tbody>
-                        {parsedRows.slice(0, 10).map((row, idx) => (
-                          <tr key={idx} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                        {displayedRows.slice(0, 15).map((row, idx) => (
+                          <tr key={idx} style={{ background: row.isExisting ? '#fffbeb' : (idx % 2 === 0 ? '#fff' : '#f8fafc'), borderBottom: '1px solid #e2e8f0', opacity: (row.isExisting && skipExisting) ? 0.75 : 1 }}>
                             <td style={{ padding: '6px 8px', textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
+                            <td style={{ padding: '6px 8px' }}>
+                              {row.isExisting ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 800 }}>
+                                  {skipExisting ? '⏭️ SKIP (Existing: ' + (row.systemReelId || row.reelNo) + ')' : '⚠️ DUPLICATE (' + (row.systemReelId || row.reelNo) + ')'}
+                                </span>
+                              ) : (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0', padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: 'monospace' }}>
+                                  ✨ NEW ({row.uniqueReelId})
+                                </span>
+                              )}
+                            </td>
                             {mode === 'job_work_stock' ? (
                               <>
                                 <td style={{ padding: '6px 8px', fontWeight: 800, color: '#6d28d9' }}>
@@ -5409,7 +5605,6 @@ function UniversalCsvImportModal({
                                 {row.millName || row.name || '-'}
                               </td>
                             )}
-                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 800, color: '#2563eb' }}>{row.uniqueReelId || '-'}</td>
                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{row.supplierReelNo || row.reelNo || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.size || '-'}</td>
                             <td style={{ padding: '6px 8px' }}>{row.gsm || '-'}</td>
@@ -5430,19 +5625,19 @@ function UniversalCsvImportModal({
                   </div>
 
                   {/* Action Commit Button */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                     <div>
                       {isProcessing && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <div style={{ width: 18, height: 18, border: '2.5px solid #cbd5e1', borderTopColor: '#2563eb', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
                           <span style={{ fontSize: 12, fontWeight: 700, color: '#2563eb' }}>
-                            Saving {progressCount} of {parsedRows.length} records to database...
+                            Saving {progressCount} of {rowsToSave.length} records to database...
                           </span>
                         </div>
                       )}
                     </div>
 
-                    <div style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                       <button
                         type="button"
                         onClick={() => { setParsedRows([]); setPasteText(''); setFileName(''); }}
@@ -5454,7 +5649,7 @@ function UniversalCsvImportModal({
                       <button
                         type="button"
                         onClick={handleSaveToDatabase}
-                        disabled={isProcessing}
+                        disabled={isProcessing || rowsToSave.length === 0}
                         className="apex-btn apex-btn-primary"
                         style={{
                           background: mode === 'own_stock' ? '#2563eb' : '#4f46e5',
@@ -5463,10 +5658,11 @@ function UniversalCsvImportModal({
                           fontSize: 13,
                           display: 'flex',
                           alignItems: 'center',
-                          gap: 8
+                          gap: 8,
+                          opacity: rowsToSave.length === 0 ? 0.5 : 1
                         }}
                       >
-                        <span>⚡</span> Confirm &amp; Save All {parsedRows.length} Rows into ERP
+                        <span>⚡</span> Confirm &amp; Save {rowsToSave.length} {skipExisting && existingRows.length > 0 ? 'New' : ''} Rows into ERP
                       </button>
                     </div>
                   </div>
@@ -6207,12 +6403,26 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   const handleImportPastedRows = async (rows) => {
     const today = new Date().toISOString().split('T')[0];
     let count = 0;
+    let skipped = 0;
 
     for (const r of rows) {
       if (!r.reelNo) continue;
+      const existing = findExistingInventoryReel({
+        supplierReelNo: r.reelNo,
+        reelNo: r.reelNo,
+        size: r.size,
+        gsm: r.gsm,
+        receivedQty: r.receivedQty
+      }, inventory);
+
+      if (existing) {
+        skipped++;
+        continue;
+      }
+
       await addDoc('inventory', {
         ...r,
-        date: today,
+        date: r.date || today,
         category: 'Paper',
         tallySynced: false,
         receivedQty: parseFloat(r.receivedQty) || 0,
@@ -6224,8 +6434,8 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
       count++;
     }
 
-    if (addLog) addLog(`Excel Import: Added ${count} new reels into inventory.`);
-    alert(`Imported ${count} reels directly into inventory!`);
+    if (addLog) addLog(`Excel Import: Added ${count} new reels into inventory (${skipped} existing reels skipped).`);
+    alert(`Imported ${count} new reels directly into inventory!${skipped > 0 ? ` (${skipped} existing reels were skipped to preserve barcodes)` : ''}`);
   };
 
   const sortedInventory = useMemo(() => {
