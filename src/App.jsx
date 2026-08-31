@@ -8602,6 +8602,7 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
   const [selectedCompany, setSelectedCompany] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : '');
   const [selectedItem, setSelectedItem] = useState('');
   const [quantity, setQuantity] = useState('');
+  const [calcWastage, setCalcWastage] = useState(0);
   
   const [commonPerSet, setCommonPerSet] = useState(5);
   const [smallPerSet, setSmallPerSet] = useState(4);
@@ -8678,6 +8679,9 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
       paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
 
+      const wastagePct = Math.max(0, parseFloat(calcWastage) || 0);
+      const grossPaperKg = paperRequiredKg * (1 + wastagePct / 100);
+
       setResult({
         isPpc: true, 
         targetSheets, 
@@ -8688,7 +8692,9 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
         boardWidthSmall: boardWidthSmall.toFixed(2),
         boardLengthSmall: boardLengthSmall.toFixed(2),
         totalArea: totalSqMeters.toFixed(2), 
-        paperRequired: paperRequiredKg.toFixed(2), 
+        netPaperRequired: paperRequiredKg.toFixed(2),
+        paperRequired: grossPaperKg.toFixed(2),
+        wastagePercent: wastagePct,
         itemDetails: item,
         cNeeded, 
         sNeeded
@@ -8725,12 +8731,17 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
       paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
 
+      const wastagePct = Math.max(0, parseFloat(calcWastage) || 0);
+      const grossPaperKg = paperRequiredKg * (1 + wastagePct / 100);
+
       setResult({
         isPpc: false, 
         boardLength: boardLength.toFixed(2), 
         boardWidth: boardWidth.toFixed(2), 
         totalArea: totalSqMeters.toFixed(2), 
-        paperRequired: paperRequiredKg.toFixed(2), 
+        netPaperRequired: paperRequiredKg.toFixed(2),
+        paperRequired: grossPaperKg.toFixed(2),
+        wastagePercent: wastagePct,
         itemDetails: item 
       });
     }
@@ -8837,6 +8848,25 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
             )}
 
             <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block text-sm font-medium text-stone-700">Trimming / Sheet Wastage %</label>
+                <span className="text-[11px] font-bold text-stone-500 font-mono">(Adds % to gross paper needed)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-mono font-bold"
+                  value={calcWastage}
+                  onChange={(e) => setCalcWastage(e.target.value)}
+                  placeholder="e.g. 10"
+                />
+                <span className="font-bold text-stone-600">%</span>
+              </div>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-stone-700 mb-1">{isPPC ? 'Order Quantity (Sets)' : 'Order Quantity'}</label>
               <input type="number" min="1" className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 5000" required />
             </div>
@@ -8889,7 +8919,7 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
-                  <div><p className="text-stone-400 text-sm">Board Size Needed</p><p className="font-mono text-lg">{result.boardLength} mm x {result.boardWidth} mm</p></div>
+                  <div><p className="text-stone-400 text-sm">Board / Sheet Size Needed</p><p className="font-mono text-lg">{result.boardLength} mm x {result.boardWidth} mm</p></div>
                   <div><p className="text-stone-400 text-sm">Total Area (sq.m)</p><p className="font-mono text-lg">{result.totalArea}</p></div>
                 </div>
               )}
@@ -8897,6 +8927,11 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
               <div className="pt-4 border-t border-stone-700">
                 <p className="text-stone-400 text-sm">Estimated Paper Required</p>
                 <p className="text-3xl font-bold text-white">{result.paperRequired} <span className="text-lg font-normal text-stone-400">kg</span></p>
+                {result.wastagePercent > 0 && (
+                  <p className="text-xs text-amber-400 font-bold mt-1">
+                    Includes +{result.wastagePercent}% wastage ({result.netPaperRequired} kg net theoretical)
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -10045,10 +10080,10 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         value={part.itemType}
                         onChange={e => handlePartChange(part.id, 'itemType', e.target.value)}
                       >
-                        <option value="Box">Standard Box (RSC)</option>
-                        <option value="Tray">Tray / Lid</option>
+                        <option value="Sheet">Corrugated Sheet / Board (Deckle × Cutting)</option>
+                        <option value="Box">Standard Box (RSC - L × W × H)</option>
+                        <option value="Tray">Tray / Lid (L × W × H)</option>
                         <option value="Partition">Partition (Divider)</option>
-                        <option value="Sheet">Flat Sheet / Plate</option>
                       </select>
                     </div>
 
@@ -10056,7 +10091,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                     <div className="md:col-span-2">
                       <div className="flex justify-between items-center mb-1">
                         <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
-                          Dimensions (L × W × H) in {part.unit || globalUnit}
+                          {part.itemType === 'Sheet' ? `Sheet Dimensions (Deckle × Cutting) in ${part.unit || globalUnit}` : `Dimensions (L × W × H) in ${part.unit || globalUnit}`}
                         </label>
                         <span className="text-[10px] font-bold text-amber-700 font-mono">
                           {dimSecondary}
@@ -10066,7 +10101,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         <input
                           type="text"
                           className="w-full p-2 border-2 border-amber-400 rounded-xl text-sm font-mono font-bold bg-amber-50/70 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none text-stone-900"
-                          placeholder={part.unit === 'inch' ? 'e.g. 12x8x6 or 12.5x8.25x6.5' : 'e.g. 300x200x150'}
+                          placeholder={part.itemType === 'Sheet' ? (part.unit === 'inch' ? 'e.g. 52x36 (Deckle x Cutting in)' : 'e.g. 1320x915 (Deckle x Cutting mm)') : (part.unit === 'inch' ? 'e.g. 12x8x6 or 12.5x8.25x6.5' : 'e.g. 300x200x150')}
                           value={part.size}
                           onChange={e => handlePartChange(part.id, 'size', e.target.value)}
                         />
@@ -10083,7 +10118,9 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
 
                     {/* 3. Order Quantity */}
                     <div>
-                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Order Qty (Pcs)</label>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+                        {part.itemType === 'Sheet' ? 'Sheet Qty (Pcs)' : 'Order Qty (Pcs)'}
+                      </label>
                       <input
                         type="number"
                         min="1"
@@ -10096,7 +10133,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                     {/* 4. Calculated Blank & Board Area */}
                     <div className="bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-[11px] font-mono">
                       <div className="flex justify-between">
-                        <span className="text-stone-500">Blank:</span>
+                        <span className="text-stone-500">{part.itemType === 'Sheet' ? 'Sheet Size:' : 'Blank:'}</span>
                         <strong className="text-stone-900">
                           {part.blankDeckleMm} × {part.blankCutLengthMm} mm
                         </strong>
