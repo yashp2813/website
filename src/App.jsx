@@ -5091,6 +5091,7 @@ function UniversalCsvImportModal({
 
           if (!customerId) {
             // Auto-create new Job Work Client
+            const nowIso = new Date().toISOString();
             const newClientPayload = {
               name: normClient,
               code: normClient.substring(0, 4).toUpperCase() + '-JW',
@@ -5103,7 +5104,9 @@ function UniversalCsvImportModal({
               contactPerson: '',
               conversionRate: 0,
               defaultJobWorkType: 'Full Box Conversion',
-              notes: 'Auto-created via Job Work CSV import'
+              notes: 'Auto-created via Job Work CSV import',
+              createdAt: nowIso,
+              updatedAt: nowIso
             };
             const docRef = await addDoc(getColRef('customers'), newClientPayload);
             customerId = docRef?.id || normClient;
@@ -5139,6 +5142,7 @@ function UniversalCsvImportModal({
           await addDoc(getColRef('inventory'), payload);
           savedCount++;
         } else if (row.type === 'job_work_client_master') {
+          const nowIso2 = new Date().toISOString();
           const payload = {
             name: row.name,
             code: row.code,
@@ -5152,7 +5156,9 @@ function UniversalCsvImportModal({
             gstin: row.gstin || '',
             conversionRate: row.conversionRate || 0,
             defaultJobWorkType: row.defaultJobWorkType || 'Full Box Conversion',
-            notes: row.notes || 'Imported via CSV'
+            notes: row.notes || 'Imported via CSV',
+            createdAt: nowIso2,
+            updatedAt: nowIso2
           };
           await addDoc(getColRef('customers'), payload);
           savedCount++;
