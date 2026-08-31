@@ -67,49 +67,142 @@ export const getBoardCaliperMm = (ply, flute) => {
   return 3.0;
 };
 
-// Global High-Precision Dimension Parser supporting Inches (e.g. 12x8x6, 12.5x8.25x6), Millimeters, and Centimeters
-export const parseDimensionString = (sizeStr, defaultUnit = 'inch') => {
-  if (!sizeStr || typeof sizeStr !== 'string') {
-    return { unit: defaultUnit, L: 0, W: 0, H: 0, L_mm: 0, W_mm: 0, H_mm: 0, L_in: 0, W_in: 0, H_in: 0, textMm: '0 × 0 × 0 mm', textInch: '0 × 0 × 0 in' };
+// Helper to format dimension numbers cleanly without useless trailing zeroes (e.g. 12.5 instead of 12.50, 12 instead of 12.0)
+export const formatDimNum = (num, maxDecimals = 2) => {
+  if (num === null || num === undefined || isNaN(num) || num === 0) return '0';
+  const n = Number(num);
+  if (Number.isInteger(n)) return String(n);
+  const fixed = n.toFixed(maxDecimals);
+  return fixed.replace(/\.?0+$/, '');
+};
+
+// High-precision single value parser: handles decimals ("12.5", ".75"), pure fractions ("1/2", "3/4"), and mixed fractions ("12 1/2", "12-1/2")
+export const parseSingleDimValue = (valStr) => {
+  if (valStr === null || valStr === undefined) return 0;
+  if (typeof valStr === 'number') return isNaN(valStr) ? 0 : valStr;
+  const s = String(valStr).trim().replace(/["']/g, '');
+  if (!s) return 0;
+
+  // Handle mixed fractions like "12 1/2", "12-1/2", "12+1/2", "12_1/2"
+  const mixedMatch = s.match(/^(\d+(?:\.\d+)?)(?:\s+|-|_|\+)(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
+  if (mixedMatch) {
+    const whole = parseFloat(mixedMatch[1]) || 0;
+    const num = parseFloat(mixedMatch[2]) || 0;
+    const den = parseFloat(mixedMatch[3]) || 1;
+    return whole + (den !== 0 ? num / den : 0);
   }
-  const rawStr = sizeStr.trim();
-  let unit = defaultUnit;
-  if (rawStr.includes('"') || /\bin(?:ch(?:es)?)?\b/i.test(rawStr)) {
+
+  // Handle pure fractions like "1/2", "3/4", "5/8"
+  const fractionMatch = s.match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
+  if (fractionMatch) {
+    const num = parseFloat(fractionMatch[1]) || 0;
+    const den = parseFloat(fractionMatch[2]) || 1;
+    return den !== 0 ? num / den : 0;
+  }
+
+  // Handle normal numbers (e.g. "12.5", "8.25", "300")
+  const cleanNum = s.replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(cleanNum);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
+// Global High-Precision Dimension Parser supporting Inches (e.g. 12x8x6, 12.5x8.25x6.5, 12 1/2 x 8 1/4 x 6), Millimeters, and Centimeters
+export const parseDimensionString = (sizeStr, defaultUnit = 'inch') => {
+  if (!sizeStr || (typeof sizeStr !== 'string' && typeof sizeStr !== 'number')) {
+    return {
+      unit: defaultUnit || 'inch',
+      L: 0, W: 0, H: 0,
+      L_mm: 0, W_mm: 0, H_mm: 0,
+      L_in: 0, W_in: 0, H_in: 0,
+      textMm: '0 × 0 × 0 mm',
+      textInch: '0" × 0" × 0"'
+    };
+  }
+
+  const rawStr = String(sizeStr).trim();
+  if (!rawStr) {
+    return {
+      unit: defaultUnit || 'inch',
+      L: 0, W: 0, H: 0,
+      L_mm: 0, W_mm: 0, H_mm: 0,
+      L_in: 0, W_in: 0, H_in: 0,
+      textMm: '0 × 0 × 0 mm',
+      textInch: '0" × 0" × 0"'
+    };
+  }
+
+  // 1. Detect unit if explicitly mentioned in the string
+  let unit = defaultUnit || 'inch';
+  if (/\b(?:inch(?:es)?|in)\b/i.test(rawStr) || rawStr.includes('"')) {
     unit = 'inch';
-  } else if (/\bmm\b/i.test(rawStr)) {
+  } else if (/\b(?:millimeter(?:s)?|mm)\b/i.test(rawStr)) {
     unit = 'mm';
-  } else if (/\bcm\b/i.test(rawStr)) {
+  } else if (/\b(?:centimeter(?:s)?|cm)\b/i.test(rawStr)) {
     unit = 'cm';
   }
 
-  const cleaned = rawStr.replace(/["'a-zA-Z]/g, '').replace(/[*×]/g, 'x');
-  const parts = cleaned.split('x').map(s => parseFloat(s.trim()) || 0);
-  const L_raw = parts[0] || 0;
-  const W_raw = parts[1] || 0;
-  const H_raw = parts[2] !== undefined ? parts[2] : (parts.length === 2 ? 0 : 0);
+  // 2. Strip unit keywords while PRESERVING dimension delimiters like 'x', 'X', '*', '×', etc.
+  let cleaned = rawStr
+    .replace(/\b(?:inches|inch|in|millimeters|millimeter|mm|centimeters|centimeter|cm)\b/gi, '')
+    .replace(/["']/g, '')
+    .trim();
+
+  // 3. Normalize all dimensional separators ('x', 'X', '*', '×', ',', ';', or spaced dash ' - ') to a single delimiter 'x'
+  cleaned = cleaned
+    .replace(/[*×]/g, 'x')
+    .replace(/\s*[xX]\s*/g, 'x')
+    .replace(/\s*[,;]\s*/g, 'x')
+    .replace(/\s+-\s+/g, 'x');
+
+  let rawParts = cleaned.split('x').map(s => s.trim()).filter(s => s.length > 0);
+
+  // Fallback: If no 'x' was found but string has multiple numbers separated by whitespace (e.g. "12.5 8.25 6.5")
+  if (rawParts.length <= 1 && /\s+/.test(cleaned.trim())) {
+    const spaceParts = cleaned.trim().split(/\s+/).filter(p => !isNaN(parseFloat(p)));
+    if (spaceParts.length >= 2) {
+      rawParts = spaceParts;
+    }
+  }
+
+  const L_raw = parseSingleDimValue(rawParts[0]);
+  const W_raw = parseSingleDimValue(rawParts[1]);
+  const H_raw = rawParts.length >= 3 ? parseSingleDimValue(rawParts[2]) : 0;
 
   let L_mm = 0, W_mm = 0, H_mm = 0;
   let L_in = 0, W_in = 0, H_in = 0;
 
   if (unit === 'inch') {
-    L_in = L_raw; W_in = W_raw; H_in = H_raw;
-    L_mm = parseFloat((L_raw * 25.4).toFixed(1));
-    W_mm = parseFloat((W_raw * 25.4).toFixed(1));
-    H_mm = parseFloat((H_raw * 25.4).toFixed(1));
+    L_in = L_raw;
+    W_in = W_raw;
+    H_in = H_raw;
+    // 1 inch = 25.4 mm exactly
+    L_mm = Math.round(L_raw * 25.4 * 100) / 100;
+    W_mm = Math.round(W_raw * 25.4 * 100) / 100;
+    H_mm = Math.round(H_raw * 25.4 * 100) / 100;
   } else if (unit === 'cm') {
-    L_mm = parseFloat((L_raw * 10).toFixed(1));
-    W_mm = parseFloat((W_raw * 10).toFixed(1));
-    H_mm = parseFloat((H_raw * 10).toFixed(1));
-    L_in = parseFloat((L_mm / 25.4).toFixed(2));
-    W_in = parseFloat((W_mm / 25.4).toFixed(2));
-    H_in = parseFloat((H_mm / 25.4).toFixed(2));
+    L_mm = Math.round(L_raw * 10 * 100) / 100;
+    W_mm = Math.round(W_raw * 10 * 100) / 100;
+    H_mm = Math.round(H_raw * 10 * 100) / 100;
+    L_in = Math.round((L_mm / 25.4) * 1000) / 1000;
+    W_in = Math.round((W_mm / 25.4) * 1000) / 1000;
+    H_in = Math.round((H_mm / 25.4) * 1000) / 1000;
   } else {
     // mm
-    L_mm = L_raw; W_mm = W_raw; H_mm = H_raw;
-    L_in = parseFloat((L_raw / 25.4).toFixed(2));
-    W_in = parseFloat((W_raw / 25.4).toFixed(2));
-    H_in = parseFloat((H_raw / 25.4).toFixed(2));
+    L_mm = L_raw;
+    W_mm = W_raw;
+    H_mm = H_raw;
+    L_in = Math.round((L_raw / 25.4) * 1000) / 1000;
+    W_in = Math.round((W_raw / 25.4) * 1000) / 1000;
+    H_in = Math.round((H_raw / 25.4) * 1000) / 1000;
   }
+
+  const textMm = H_mm > 0
+    ? `${formatDimNum(L_mm, 2)} × ${formatDimNum(W_mm, 2)} × ${formatDimNum(H_mm, 2)} mm`
+    : (L_mm > 0 && W_mm > 0 ? `${formatDimNum(L_mm, 2)} × ${formatDimNum(W_mm, 2)} mm` : '0 mm');
+
+  const textInch = H_in > 0
+    ? `${formatDimNum(L_in, 2)}" × ${formatDimNum(W_in, 2)}" × ${formatDimNum(H_in, 2)}"`
+    : (L_in > 0 && W_in > 0 ? `${formatDimNum(L_in, 2)}" × ${formatDimNum(W_in, 2)}"` : '0 in');
 
   return {
     unit,
@@ -118,8 +211,8 @@ export const parseDimensionString = (sizeStr, defaultUnit = 'inch') => {
     H: unit === 'inch' ? H_in : H_mm,
     L_mm, W_mm, H_mm,
     L_in, W_in, H_in,
-    textMm: H_mm > 0 ? `${L_mm.toFixed(0)} × ${W_mm.toFixed(0)} × ${H_mm.toFixed(0)} mm` : `${L_mm.toFixed(0)} × ${W_mm.toFixed(0)} mm`,
-    textInch: H_in > 0 ? `${L_in.toFixed(2)}" × ${W_in.toFixed(2)}" × ${H_in.toFixed(2)}"` : `${L_in.toFixed(2)}" × ${W_in.toFixed(2)}"`
+    textMm,
+    textInch
   };
 };
 
@@ -237,6 +330,7 @@ export const generatePliesForCount = (count = 3, flute = 'B', baseRate = 40) => 
 };
 
 export const calculateSkuCost = (sku = {}) => {
+  if (!sku) return null;
   const {
     name = 'Standard Box',
     itemType = 'Box',
@@ -267,36 +361,37 @@ export const calculateSkuCost = (sku = {}) => {
   let blankDeckleMm = 0;
   let boardAreaSqM = 0;
 
-  if (itemType === 'Partition') {
-    const pL = parseInt(pocketsLength, 10) || 1;
-    const pW = parseInt(pocketsWidth, 10) || 1;
-    const latPieces = Math.max(0, pL - 1);
-    const longPieces = Math.max(0, pW - 1);
-    boardAreaSqM = ((latPieces * W_mm * H_mm) + (longPieces * L_mm * H_mm)) / 1e6;
-    blankCutLengthMm = L_mm;
-    blankDeckleMm = W_mm;
-  } else if (itemType === 'Tray' || itemType === 'Lid') {
-    blankCutLengthMm = L_mm + (2 * H_mm) + 15;
-    blankDeckleMm = W_mm + (2 * H_mm) + 15;
-    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
-  } else if (itemType === 'Sheet' || itemType === 'Plate') {
-    blankCutLengthMm = L_mm;
-    blankDeckleMm = W_mm;
-    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
-  } else if (itemType === 'DieCut') {
-    blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 50;
-    blankDeckleMm = W_mm + H_mm + 25;
-    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
-  } else {
-    // Standard RSC Box: Blank Length = (2L + 2W) + 40mm, Blank Width = (W + H) + 15mm
-    blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 40;
-    blankDeckleMm = W_mm + H_mm + 15;
-    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+  if (L_mm > 0 && W_mm > 0) {
+    if (itemType === 'Partition') {
+      const pL = parseInt(pocketsLength, 10) || 1;
+      const pW = parseInt(pocketsWidth, 10) || 1;
+      const latPieces = Math.max(0, pL - 1);
+      const longPieces = Math.max(0, pW - 1);
+      boardAreaSqM = ((latPieces * W_mm * (H_mm > 0 ? H_mm : W_mm)) + (longPieces * L_mm * (H_mm > 0 ? H_mm : W_mm))) / 1e6;
+      blankCutLengthMm = L_mm;
+      blankDeckleMm = W_mm;
+    } else if (itemType === 'Tray' || itemType === 'Lid') {
+      blankCutLengthMm = L_mm + (2 * H_mm) + 15;
+      blankDeckleMm = W_mm + (2 * H_mm) + 15;
+      boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+    } else if (itemType === 'Sheet' || itemType === 'Plate') {
+      blankCutLengthMm = L_mm;
+      blankDeckleMm = W_mm;
+      boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+    } else if (itemType === 'DieCut') {
+      blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 50;
+      blankDeckleMm = W_mm + H_mm + 25;
+      boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+    } else {
+      blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 40;
+      blankDeckleMm = W_mm + H_mm + 15;
+      boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+    }
   }
 
-  const blankCutLengthIn = parseFloat((blankCutLengthMm / 25.4).toFixed(2));
-  const blankDeckleIn = parseFloat((blankDeckleMm / 25.4).toFixed(2));
-  const boardAreaSqFt = parseFloat((boardAreaSqM * 10.7639).toFixed(3));
+  const blankCutLengthIn = blankCutLengthMm > 0 ? Math.round((blankCutLengthMm / 25.4) * 100) / 100 : 0;
+  const blankDeckleIn = blankDeckleMm > 0 ? Math.round((blankDeckleMm / 25.4) * 100) / 100 : 0;
+  const boardAreaSqFt = Math.round(boardAreaSqM * 10.7639 * 1000) / 1000;
 
   let singleWeightKg = 0;
   let singleMaterialCost = 0;
@@ -304,7 +399,7 @@ export const calculateSkuCost = (sku = {}) => {
   if (calcMode === 'manual' && parseFloat(manualOverrideWeightKg) > 0) {
     singleWeightKg = parseFloat(manualOverrideWeightKg) || 0;
     singleMaterialCost = singleWeightKg * (parseFloat(blendedPaperRate) || 40);
-  } else {
+  } else if (boardAreaSqM > 0) {
     const plies = Array.isArray(plyDetails) && plyDetails.length > 0
       ? plyDetails
       : generatePliesForCount(plyCount, fluteType, blendedPaperRate);
@@ -319,43 +414,45 @@ export const calculateSkuCost = (sku = {}) => {
     });
   }
 
-  const singleWeightGrams = parseFloat((singleWeightKg * 1000).toFixed(1));
+  const singleWeightGrams = Math.round(singleWeightKg * 1000 * 10) / 10;
   const convByKg = parseFloat(conversionRatePerKg || 0) * singleWeightKg;
-  const convFixed = parseFloat(conversionCostPerPc || 0);
+  const convFixed = boardAreaSqM > 0 ? parseFloat(conversionCostPerPc || 0) : 0;
   const totalConversionPerPc = convByKg + convFixed;
 
-  const totalFinishingPerPc = parseFloat(printingCostPerPc || 0) + parseFloat(stitchingGlueCostPerPc || 0) + parseFloat(freightCostPerPc || 0);
+  const totalFinishingPerPc = boardAreaSqM > 0
+    ? (parseFloat(printingCostPerPc || 0) + parseFloat(stitchingGlueCostPerPc || 0) + parseFloat(freightCostPerPc || 0))
+    : 0;
   const netBaseCostPerPc = singleMaterialCost + totalConversionPerPc + totalFinishingPerPc;
   const marginPct = parseFloat(marginPercent || 0);
   const marginAmountPerPc = netBaseCostPerPc * (marginPct / 100);
   const finalSellingRatePerPc = netBaseCostPerPc + marginAmountPerPc;
 
   const qty = parseInt(targetQty, 10) || 1;
-  const totalBatchWeightKg = parseFloat((singleWeightKg * qty).toFixed(2));
-  const totalBatchWeightMT = parseFloat((totalBatchWeightKg / 1000).toFixed(3));
-  const totalBatchMaterialCost = parseFloat((singleMaterialCost * qty).toFixed(2));
-  const totalBatchConversionCost = parseFloat((totalConversionPerPc * qty).toFixed(2));
-  const totalBatchNetCost = parseFloat((netBaseCostPerPc * qty).toFixed(2));
-  const totalBatchSellingAmount = parseFloat((finalSellingRatePerPc * qty).toFixed(2));
-  const effectiveSellingRatePerKg = singleWeightKg > 0 ? parseFloat((finalSellingRatePerPc / singleWeightKg).toFixed(2)) : 0;
+  const totalBatchWeightKg = Math.round(singleWeightKg * qty * 100) / 100;
+  const totalBatchWeightMT = Math.round((totalBatchWeightKg / 1000) * 1000) / 1000;
+  const totalBatchMaterialCost = Math.round(singleMaterialCost * qty * 100) / 100;
+  const totalBatchConversionCost = Math.round(totalConversionPerPc * qty * 100) / 100;
+  const totalBatchNetCost = Math.round(netBaseCostPerPc * qty * 100) / 100;
+  const totalBatchSellingAmount = Math.round(finalSellingRatePerPc * qty * 100) / 100;
+  const effectiveSellingRatePerKg = singleWeightKg > 0 ? Math.round((finalSellingRatePerPc / singleWeightKg) * 100) / 100 : 0;
 
   return {
     ...sku,
     parsedDimensions: parsed,
-    blankCutLengthMm: parseFloat(blankCutLengthMm.toFixed(1)),
-    blankDeckleMm: parseFloat(blankDeckleMm.toFixed(1)),
+    blankCutLengthMm: Math.round(blankCutLengthMm * 10) / 10,
+    blankDeckleMm: Math.round(blankDeckleMm * 10) / 10,
     blankCutLengthIn,
     blankDeckleIn,
-    boardAreaSqM: parseFloat(boardAreaSqM.toFixed(4)),
+    boardAreaSqM: Math.round(boardAreaSqM * 10000) / 10000,
     boardAreaSqFt,
-    singleWeightKg: parseFloat(singleWeightKg.toFixed(3)),
+    singleWeightKg: Math.round(singleWeightKg * 1000) / 1000,
     singleWeightGrams,
-    singleMaterialCost: parseFloat(singleMaterialCost.toFixed(2)),
-    totalConversionPerPc: parseFloat(totalConversionPerPc.toFixed(2)),
-    totalFinishingPerPc: parseFloat(totalFinishingPerPc.toFixed(2)),
-    netBaseCostPerPc: parseFloat(netBaseCostPerPc.toFixed(2)),
-    marginAmountPerPc: parseFloat(marginAmountPerPc.toFixed(2)),
-    finalSellingRatePerPc: parseFloat(finalSellingRatePerPc.toFixed(2)),
+    singleMaterialCost: Math.round(singleMaterialCost * 100) / 100,
+    totalConversionPerPc: Math.round(totalConversionPerPc * 100) / 100,
+    totalFinishingPerPc: Math.round(totalFinishingPerPc * 100) / 100,
+    netBaseCostPerPc: Math.round(netBaseCostPerPc * 100) / 100,
+    marginAmountPerPc: Math.round(marginAmountPerPc * 100) / 100,
+    finalSellingRatePerPc: Math.round(finalSellingRatePerPc * 100) / 100,
     qty,
     totalBatchWeightKg,
     totalBatchWeightMT,
@@ -432,11 +529,10 @@ export const generateDefaultLayers = (plyStr = '3', flute = 'B') => {
 };
 
 export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm = 450, outerBoxWeight = 0) => {
-  const raw = String(boxDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
-  const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
-  const L = dims[0] || 350;
-  const W = dims[1] || 250;
-  const H = dims[2] || 90;
+  const parsed = parseDimensionString(boxDimensions, 'mm');
+  const L = parsed.L_mm || 350;
+  const W = parsed.W_mm || 250;
+  const H = parsed.H_mm || 90;
 
   const cellRows = parseInt(ppcConfig.cellRows || 4);
   const cellCols = parseInt(ppcConfig.cellCols || 3);
@@ -480,11 +576,10 @@ export const calculatePpcMatrix = (boxDimensions, ppcConfig = {}, totalBoardGsm 
 };
 
 export const calculateCadBlank = (idDimensions, plyStr = '3', flute = 'B', itemType = 'Box', jointType = 'Stitching (35mm)', layers = null, defaultGsm = 140, ppcConfig = null) => {
-  const raw = String(idDimensions || '0x0x0').toLowerCase().replace(/\*/g, 'x');
-  const dims = raw.split('x').map(s => parseFloat(s.trim()) || 0);
-  const L = dims[0] || 0;
-  const W = dims[1] || 0;
-  const H = dims[2] || 0;
+  const parsed = parseDimensionString(idDimensions, 'mm');
+  const L = parsed.L_mm || 0;
+  const W = parsed.W_mm || 0;
+  const H = parsed.H_mm || 0;
 
   const ply = parseInt(plyStr, 10) || 3;
   const odAllowance = 4;
@@ -8985,6 +9080,18 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       if (s.id !== skuId) return s;
       const upd = { ...s, [field]: value };
 
+      // Convert size string when unit changes on a specific SKU
+      if (field === 'unit' && value !== s.unit && s.size) {
+        const parsed = parseDimensionString(s.size, s.unit);
+        if (parsed.L > 0 && parsed.W > 0) {
+          if (value === 'inch') {
+            upd.size = parsed.H_in > 0 ? `${formatDimNum(parsed.L_in, 2)}x${formatDimNum(parsed.W_in, 2)}x${formatDimNum(parsed.H_in, 2)}` : `${formatDimNum(parsed.L_in, 2)}x${formatDimNum(parsed.W_in, 2)}`;
+          } else {
+            upd.size = parsed.H_mm > 0 ? `${formatDimNum(parsed.L_mm, 2)}x${formatDimNum(parsed.W_mm, 2)}x${formatDimNum(parsed.H_mm, 2)}` : `${formatDimNum(parsed.L_mm, 2)}x${formatDimNum(parsed.W_mm, 2)}`;
+          }
+        }
+      }
+
       // When user enables custom spec override for the first time,
       // seed the SKU's own spec fields with the current globalSpec as a starting point
       if (field === 'useGlobalSpec' && value === false && s.useGlobalSpec === true) {
@@ -9031,10 +9138,12 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     setSkus(prev => prev.map(s => {
       const parsed = parseDimensionString(s.size, s.unit);
       let newSize = s.size;
-      if (newUnit === 'inch') {
-        newSize = parsed.H_in > 0 ? `${parsed.L_in}x${parsed.W_in}x${parsed.H_in}` : `${parsed.L_in}x${parsed.W_in}`;
-      } else {
-        newSize = parsed.H_mm > 0 ? `${parsed.L_mm}x${parsed.W_mm}x${parsed.H_mm}` : `${parsed.L_mm}x${parsed.W_mm}`;
+      if (parsed.L > 0 && parsed.W > 0) {
+        if (newUnit === 'inch') {
+          newSize = parsed.H_in > 0 ? `${formatDimNum(parsed.L_in, 2)}x${formatDimNum(parsed.W_in, 2)}x${formatDimNum(parsed.H_in, 2)}` : `${formatDimNum(parsed.L_in, 2)}x${formatDimNum(parsed.W_in, 2)}`;
+        } else {
+          newSize = parsed.H_mm > 0 ? `${formatDimNum(parsed.L_mm, 2)}x${formatDimNum(parsed.W_mm, 2)}x${formatDimNum(parsed.H_mm, 2)}` : `${formatDimNum(parsed.L_mm, 2)}x${formatDimNum(parsed.W_mm, 2)}`;
+        }
       }
       return { ...s, unit: newUnit, size: newSize };
     }));
