@@ -6310,6 +6310,134 @@ function ExcelPasteModal({ isOpen, onClose, onImportRows }) {
   );
 }
 
+// ==========================================
+// HIGH-PERFORMANCE INVENTORY PAGINATION
+// ==========================================
+function InventoryPaginationControls({
+  totalItems,
+  pageSize,
+  setPageSize,
+  currentPage,
+  setCurrentPage,
+  itemName = 'reels'
+}) {
+  const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(totalItems / (parseInt(pageSize) || 100)));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const startItem = totalItems === 0 ? 0 : (pageSize === 'all' ? 1 : (safePage - 1) * pageSize + 1);
+  const endItem = pageSize === 'all' ? totalItems : Math.min(totalItems, safePage * pageSize);
+
+  const handlePageChange = (p) => {
+    const target = Math.min(Math.max(1, p), totalPages);
+    setCurrentPage(target);
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 12,
+      padding: '8px 14px',
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#334155',
+      margin: '8px 0'
+    }}>
+      {/* Left: Showing range & total count */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: '#64748b' }}>
+          Showing <strong style={{ color: '#0f172a' }}>{startItem.toLocaleString()}–{endItem.toLocaleString()}</strong> of <strong style={{ color: '#0f172a' }}>{totalItems.toLocaleString()}</strong> {itemName}
+        </span>
+      </div>
+
+      {/* Center: Page size quick selector */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.04em' }}>Per Page:</span>
+        {[50, 100, 250, 500, 'all'].map((size) => (
+          <button
+            key={size}
+            type="button"
+            onClick={() => {
+              setPageSize(size);
+              setCurrentPage(1);
+              try { localStorage.setItem('apex_inventory_page_size', String(size)); } catch(e) {}
+            }}
+            style={{
+              padding: '2px 8px',
+              borderRadius: 5,
+              fontSize: 11,
+              fontWeight: 800,
+              border: pageSize === size ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
+              background: pageSize === size ? '#2563eb' : '#fff',
+              color: pageSize === size ? '#fff' : '#475569',
+              cursor: 'pointer',
+              transition: 'all .15s'
+            }}
+          >
+            {size === 'all' ? 'All' : size}
+          </button>
+        ))}
+      </div>
+
+      {/* Right: Page Navigation */}
+      {pageSize !== 'all' && totalPages > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            type="button"
+            onClick={() => handlePageChange(1)}
+            disabled={safePage <= 1}
+            className="apex-btn apex-btn-secondary apex-btn-sm"
+            style={{ padding: '2px 7px', fontSize: 11, opacity: safePage <= 1 ? 0.35 : 1 }}
+            title="First Page"
+          >
+            ⏮ First
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePageChange(safePage - 1)}
+            disabled={safePage <= 1}
+            className="apex-btn apex-btn-secondary apex-btn-sm"
+            style={{ padding: '2px 7px', fontSize: 11, opacity: safePage <= 1 ? 0.35 : 1 }}
+            title="Previous Page"
+          >
+            ◀ Prev
+          </button>
+
+          <span style={{ fontSize: 11.5, padding: '0 6px', color: '#0f172a' }}>
+            Page <strong>{safePage}</strong> / <strong>{totalPages}</strong>
+          </span>
+
+          <button
+            type="button"
+            onClick={() => handlePageChange(safePage + 1)}
+            disabled={safePage >= totalPages}
+            className="apex-btn apex-btn-secondary apex-btn-sm"
+            style={{ padding: '2px 7px', fontSize: 11, opacity: safePage >= totalPages ? 0.35 : 1 }}
+            title="Next Page"
+          >
+            Next ▶
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePageChange(totalPages)}
+            disabled={safePage >= totalPages}
+            className="apex-btn apex-btn-secondary apex-btn-sm"
+            style={{ padding: '2px 7px', fontSize: 11, opacity: safePage >= totalPages ? 0.35 : 1 }}
+            title="Last Page"
+          >
+            Last ⏭
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, getDocRef, deleteDoc, addDoc, addLog, lowStockThreshold, onPrintBarcode, onOpenCsvImport }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null); // { id, field }
@@ -6321,6 +6449,21 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
 
   const [batchModal, setBatchModal] = useState(null); // 'rate' | 'mill' | 'location'
   const [batchVal, setBatchVal] = useState('');
+
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const saved = localStorage.getItem('apex_inventory_page_size');
+      return saved === 'all' ? 'all' : (parseInt(saved) || 100);
+    } catch {
+      return 100;
+    }
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset page when inventory size or sort order changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [inventory.length, sortConfig.key, sortConfig.direction]);
 
   const toggleSelectAll = () => {
     if (selectedIds.size === inventory.length) {
@@ -6357,9 +6500,12 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
       return;
     }
 
+    const prevVal = targetReel[field] !== undefined && targetReel[field] !== null ? targetReel[field] : '-';
+    const reelTag = targetReel.systemReelId || targetReel.uniqueReelId || targetReel.reelNo || targetReel.supplierReelNo || id;
+
     try {
       await updateDoc(getDocRef('inventory', id), { [field]: updatedVal, updatedAt: new Date().toISOString() });
-      if (addLog) addLog(`Excel Edit: Updated Reel #${targetReel.reelNo} ${field} to ${updatedVal}`);
+      if (addLog) addLog(`Edited Stock Reel [${reelTag}]: changed ${field} from "${prevVal}" to "${updatedVal}"`);
       setSavedCell({ id, field });
       setTimeout(() => setSavedCell(null), 1200);
     } catch(e) {
@@ -6384,10 +6530,12 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     const val = batchModal === 'rate' ? parseFloat(batchVal) : batchVal.trim();
 
     try {
+      const selectedReels = inventory.filter(r => selectedIds.has(r.id));
+      const reelSummaries = selectedReels.map(r => r.systemReelId || r.reelNo || r.id).slice(0, 5).join(', ');
       await Promise.all(Array.from(selectedIds).map(id => 
-        updateDoc(getDocRef('inventory', id), { [targetField]: val })
+        updateDoc(getDocRef('inventory', id), { [targetField]: val, updatedAt: new Date().toISOString() })
       ));
-      if (addLog) addLog(`Batch updated ${targetField} for ${selectedIds.size} reels`);
+      if (addLog) addLog(`Batch Updated ${targetField} to "${val}" for ${selectedIds.size} reels (${reelSummaries}${selectedIds.size > 5 ? '...' : ''})`);
       alert(`Updated ${selectedIds.size} reels successfully!`);
       setSelectedIds(new Set());
       setBatchModal(null);
@@ -6400,9 +6548,19 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) return;
     if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected inventory rows?`)) {
+      const deletedReels = inventory.filter(r => selectedIds.has(r.id));
+      const reelSummaries = deletedReels.map(r => r.systemReelId || r.reelNo || r.id).slice(0, 5).join(', ');
       await Promise.all(Array.from(selectedIds).map(id => deleteDoc(getDocRef('inventory', id))));
-      if (addLog) addLog(`Batch deleted ${selectedIds.size} inventory rows`);
+      if (addLog) addLog(`Batch Deleted ${selectedIds.size} inventory reels (${reelSummaries}${selectedIds.size > 5 ? '...' : ''})`);
       setSelectedIds(new Set());
+    }
+  };
+
+  const handleDeleteSingle = async (r) => {
+    const reelTag = r.systemReelId || r.uniqueReelId || r.reelNo || r.supplierReelNo || r.id;
+    if (window.confirm(`Delete stock reel #${reelTag} (${r.millName || ''} Size ${r.size}cm, ${r.gsm} GSM, ${(r.balanceQty || r.receivedQty || 0)} kg)?`)) {
+      await deleteDoc(getDocRef('inventory', r.id));
+      if (addLog) addLog(`Deleted Stock Reel [${reelTag}]: ${r.millName || ''} Size ${r.size}cm, ${r.gsm} GSM, ${(r.balanceQty || r.receivedQty || 0)} kg`);
     }
   };
 
@@ -6466,6 +6624,13 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     });
   }, [inventory, sortConfig]);
 
+  // Paginated slice of inventory for high performance 60fps rendering
+  const pagedInventory = useMemo(() => {
+    if (pageSize === 'all') return sortedInventory;
+    const start = (currentPage - 1) * pageSize;
+    return sortedInventory.slice(start, start + pageSize);
+  }, [sortedInventory, currentPage, pageSize]);
+
   const requestSort = (key) => {
     if (sortConfig.key !== key) {
       setSortConfig({ key, direction: 'asc' });
@@ -6517,7 +6682,6 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     };
   }, [sortedInventory]);
 
-
   return (
     <div style={{ position: 'relative' }}>
       {remnantReelItem && (
@@ -6532,10 +6696,12 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                   receivedQty: updated.balanceQty,
                   balanceQty: updated.balanceQty,
                   remnantStatus: 'returned_from_floor',
-                  returnedDate: updated.returnedDate
+                  returnedDate: updated.returnedDate,
+                  updatedAt: new Date().toISOString()
                 });
               }
-              if (addLog) addLog(`Remnant Roll Return: Reel #${remnantReelItem.reelNo} re-weighed at ${updated.balanceQty} kg`);
+              const reelTag = remnantReelItem.systemReelId || remnantReelItem.uniqueReelId || remnantReelItem.reelNo;
+              if (addLog) addLog(`Remnant Roll Return: Reel [${reelTag}] re-weighed and returned with balance ${updated.balanceQty} kg`);
             } catch(e) {}
             setRemnantReelItem(null);
             if (onPrintBarcode) onPrintBarcode(updated);
@@ -6557,7 +6723,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           <span>AVG BF: <strong style={{ color: '#cbd5e1' }}>{avgBf}</strong></span>
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : setIsPasteOpen(true)} className="apex-btn" style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span>📥</span> Import CSV / Excel File
@@ -6588,6 +6754,15 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           💡 <em>Click any column header to sort. Click cell to edit inline. Press Enter / Tab to save instantly.</em>
         </div>
       </div>
+
+      {/* Top Pagination Bar */}
+      <InventoryPaginationControls
+        totalItems={sortedInventory.length}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+      />
 
       <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', overflowX: 'auto' }}>
         <table className="apex-table" style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -6626,7 +6801,8 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
               </tr>
             )}
 
-            {sortedInventory.map((r, idx) => {
+            {pagedInventory.map((r, idx) => {
+              const rowIndex = (pageSize === 'all' ? 0 : (currentPage - 1) * pageSize) + idx + 1;
               const isSelected = selectedIds.has(r.id);
               const isAvailable = (r.balanceQty || 0) > 0;
               const isLow = isAvailable && (r.balanceQty || 0) < lowStockThreshold;
@@ -6687,7 +6863,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                   <td style={{ textAlign: 'center', padding: 4 }}>
                     <input type="checkbox" checked={isSelected} onChange={() => toggleSelectRow(r.id)} />
                   </td>
-                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
+                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{rowIndex}</td>
                   <td>{renderCell('date', r.date, 'date')}</td>
                   <td>
                     {renderCell('millName', r.millName)}
@@ -6741,17 +6917,26 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                     <button
                       onClick={() => setRemnantReelItem(r)}
                       title="Return from Floor & Print Remnant Tag"
-                      style={{ background: '#d97706', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 800, cursor: 'pointer', marginRight: 4 }}
+                      style={{ background: '#d97706', color: '#fff', border: 'none', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 800, cursor: 'pointer', marginRight: 4 }}
                     >
                       🔄 Remnant
                     </button>
                     <button
                       onClick={() => onPrintBarcode && onPrintBarcode(r)}
                       title="Print Barcode Tag"
-                      style={{ background: '#334155', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                      style={{ background: '#334155', color: '#fff', border: 'none', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', marginRight: 4 }}
                     >
                       🖨️ Tag
                     </button>
+                    {role === 'admin' && (
+                      <button
+                        onClick={() => handleDeleteSingle(r)}
+                        title="Delete this reel from inventory"
+                        style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        🗑️
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -6759,6 +6944,15 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           </tbody>
         </table>
       </div>
+
+      {/* Bottom Pagination Bar */}
+      <InventoryPaginationControls
+        totalItems={sortedInventory.length}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+      />
 
       <div style={{ marginTop: 12, padding: '10px 16px', background: '#0f172a', color: '#fff', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: 'var(--font-mono)' }}>
         <div style={{ display: 'flex', gap: 16 }}>
@@ -11162,8 +11356,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
     if (editingId) {
       const singleReel = reelsInput[0];
-      await updateDoc(getDocRef('inventory', editingId), { ...finalCommon, ...singleReel, category: 'Paper', tallySynced: false });
-      if(addLog) addLog(`Updated inventory reel: ${singleReel.reelNo}`);
+      const prevReel = inventory.find(r => r.id === editingId);
+      const reelTag = prevReel?.systemReelId || prevReel?.uniqueReelId || singleReel.reelNo || editingId;
+      await updateDoc(getDocRef('inventory', editingId), { ...finalCommon, ...singleReel, category: 'Paper', tallySynced: false, updatedAt: new Date().toISOString() });
+      if(addLog) addLog(`Updated inventory reel [${reelTag}]: Size ${singleReel.size}cm, ${singleReel.gsm} GSM, ${singleReel.bf} BF, ${singleReel.receivedQty} kg, Mill: ${finalCommon.millName || '-'}`);
       setEditingId(null);
       setReelsInput([{...emptyReel}]);
     } else {
@@ -11175,7 +11371,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const supNo = reel.supplierReelNo || reel.reelNo;
         if (!supNo && !reel.size && !reel.gsm) return;
         const existingMax = (inventory || []).reduce((max, cur) => {
-          const fid = formatSystemReelId(cur, inventory);
+          const fid = cur.systemReelId || formatSystemReelId(cur, inventory);
           const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
           return !isNaN(n) && n > max ? n : max;
         }, 0);
@@ -11185,6 +11381,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const newId = generateId();
         const newDocRef = { table: 'inventory', id: newId };
         
+        const nowIso = new Date().toISOString();
         const reelDoc = {
           ...finalCommon,
           ...reel,
@@ -11194,7 +11391,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
           supplierReelNo: finalSupNo,
           reelNo: finalSupNo,
           category: 'Paper',
-          tallySynced: false
+          tallySynced: false,
+          createdAt: nowIso,
+          updatedAt: nowIso
         };
 
         batch.set(newDocRef, reelDoc);
@@ -11203,7 +11402,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       });
 
       await batch.commit();
-      if(addLog) addLog(`Added ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'}`);
+      const reelSummaries = createdReelsList.map(r => r.systemReelId || r.reelNo).slice(0, 5).join(', ');
+      if(addLog) addLog(`Inwarded ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'} (${reelSummaries}${count > 5 ? '...' : ''})`);
       setReelsInput([{...emptyReel}]); 
 
       if (shouldPrintBarcodes && createdReelsList.length > 0) {
@@ -11230,9 +11430,12 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   };
   
   const handleDelete = async (id, nameStr) => { 
-    if(window.confirm(`Delete inventory record for ${nameStr}?`)) { 
+    const targetReel = inventory.find(r => r.id === id);
+    const reelTag = targetReel?.systemReelId || targetReel?.uniqueReelId || targetReel?.reelNo || nameStr || id;
+    const details = targetReel ? ` (${targetReel.millName || ''} Size ${targetReel.size}cm, ${targetReel.gsm} GSM, ${targetReel.balanceQty || targetReel.receivedQty || 0} kg)` : '';
+    if(window.confirm(`Delete inventory record for ${reelTag}${details}?`)) { 
         await deleteDoc(getDocRef('inventory', id)); 
-        if(addLog) addLog(`Deleted inventory record: ${nameStr}`); 
+        if(addLog) addLog(`Deleted inventory reel [${reelTag}]${details}`); 
     } 
   };
   
@@ -11253,8 +11456,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
   const handleBulkDelete = async () => {
     if (role !== 'admin') return;
     if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected records?`)) {
+        const deletedReels = inventory.filter(r => selectedIds.has(r.id));
+        const reelSummaries = deletedReels.map(r => r.systemReelId || r.reelNo || r.id).slice(0, 5).join(', ');
         await Promise.all(Array.from(selectedIds).map(id => deleteDoc(getDocRef('inventory', id))));
-        if(addLog) addLog(`Bulk deleted ${selectedIds.size} inventory records`);
+        if(addLog) addLog(`Bulk deleted ${selectedIds.size} inventory records (${reelSummaries}${selectedIds.size > 5 ? '...' : ''})`);
         setSelectedIds(new Set());
     }
   };
@@ -11268,8 +11473,9 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         return;
     }
     if (window.confirm("FINAL WARNING: Are you absolutely sure you want to wipe the entire inventory database? This cannot be undone.")) {
+        const totalWiped = inventory.length;
         await Promise.all(inventory.map(reel => deleteDoc(getDocRef('inventory', reel.id))));
-        if(addLog) addLog("WIPED entire inventory database");
+        if(addLog) addLog(`WIPED entire inventory database (${totalWiped} reels permanently removed)`);
         alert("Inventory database completely wiped.");
         setSelectedIds(new Set());
     }
@@ -11281,7 +11487,8 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     const usageStats = {}; 
     const reelNoToIds = {}; 
 
-    paperInventoryData.forEach(reel => {
+    for (let i = 0; i < paperInventoryData.length; i++) {
+      const reel = paperInventoryData[i];
       const id = reel.id;
       const rNo = String(reel.reelNo || '').trim().toLowerCase();
       const initialIssued = parseFloat(reel.initialIssuedQty || 0);
@@ -11296,71 +11503,79 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         if (!reelNoToIds[rNo]) reelNoToIds[rNo] = [];
         reelNoToIds[rNo].push(id);
       }
-    });
+    }
 
-    const sortedProd = [...(production || [])].sort((a,b) => {
-      const dateA = new Date(a.date || 0).getTime();
-      const dateB = new Date(b.date || 0).getTime();
-      return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-    });
-    
-    sortedProd.forEach(p => {
-      const consumed = getConsumedReels(p);
-      if (consumed.length > 0) {
-        consumed.forEach(cr => {
-          const rNo = String(cr.reelNo || '').trim().toLowerCase();
-          let remainingDeduct = parseFloat(cr.weight || 0);
-          
-          if (remainingDeduct > 0 && reelNoToIds[rNo]) {
-            for (const id of reelNoToIds[rNo]) {
-              if (remainingDeduct <= 0) break;
-              const available = balances[id] || 0;
-              if (available > 0) {
-                const deduct = Math.min(available, remainingDeduct);
-                balances[id] -= deduct;
-                usageStats[id].issued += deduct;
-                usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-                remainingDeduct -= deduct;
+    if (production && production.length > 0) {
+      const sortedProd = [...production].sort((a,b) => {
+        const dateA = new Date(a.date || 0).getTime();
+        const dateB = new Date(b.date || 0).getTime();
+        return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+      });
+      
+      for (let pIdx = 0; pIdx < sortedProd.length; pIdx++) {
+        const p = sortedProd[pIdx];
+        const consumed = getConsumedReels(p);
+        if (consumed.length > 0) {
+          for (let cIdx = 0; cIdx < consumed.length; cIdx++) {
+            const cr = consumed[cIdx];
+            const rNo = String(cr.reelNo || '').trim().toLowerCase();
+            let remainingDeduct = parseFloat(cr.weight || 0);
+            
+            if (remainingDeduct > 0 && reelNoToIds[rNo]) {
+              const ids = reelNoToIds[rNo];
+              for (let idIdx = 0; idIdx < ids.length; idIdx++) {
+                const id = ids[idIdx];
+                if (remainingDeduct <= 0) break;
+                const available = balances[id] || 0;
+                if (available > 0) {
+                  const deduct = Math.min(available, remainingDeduct);
+                  balances[id] -= deduct;
+                  usageStats[id].issued += deduct;
+                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                  remainingDeduct -= deduct;
+                }
+              }
+              if (remainingDeduct > 0) {
+                const lastId = ids[ids.length - 1];
+                balances[lastId] -= remainingDeduct;
+                usageStats[lastId].issued += remainingDeduct;
+                usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
               }
             }
-            if (remainingDeduct > 0) {
-              const lastId = reelNoToIds[rNo][reelNoToIds[rNo].length - 1];
-              balances[lastId] -= remainingDeduct;
-              usageStats[lastId].issued += remainingDeduct;
-              usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
+          }
+        } else if (p.reelNos && p.useKg) {
+          const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(Boolean);
+          if (pReels.length > 0) {
+            let remainingUse = parseFloat(p.useKg || 0);
+            for (let index = 0; index < pReels.length; index++) {
+              const rNo = pReels[index];
+              if (remainingUse <= 0 || !reelNoToIds[rNo]) continue;
+              const isLast = (index === pReels.length - 1);
+              const ids = reelNoToIds[rNo];
+              
+              for (let idIdx = 0; idIdx < ids.length; idIdx++) {
+                const id = ids[idIdx];
+                if (remainingUse <= 0) break;
+                const available = balances[id] || 0;
+                let deduct = 0;
+                if (isLast) {
+                  deduct = remainingUse; 
+                } else {
+                  if (available <= 0) continue;
+                  deduct = Math.min(available, remainingUse);
+                }
+                if (deduct > 0) {
+                  balances[id] -= deduct;
+                  usageStats[id].issued += deduct;
+                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                  remainingUse -= deduct;
+                }
+              }
             }
           }
-        });
-      } else {
-        if (!p.reelNos || !p.useKg) return;
-        const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(r => r);
-        if (pReels.length === 0) return;
-        let remainingUse = parseFloat(p.useKg || 0);
-        
-        pReels.forEach((rNo, index) => {
-          if (remainingUse <= 0 || !reelNoToIds[rNo]) return;
-          const isLast = (index === pReels.length - 1);
-          
-          for (const id of reelNoToIds[rNo]) {
-            if (remainingUse <= 0) break;
-            const available = balances[id] || 0;
-            let deduct = 0;
-            if (isLast) {
-              deduct = remainingUse; 
-            } else {
-              if (available <= 0) continue;
-              deduct = Math.min(available, remainingUse);
-            }
-            if (deduct > 0) {
-              balances[id] -= deduct;
-              usageStats[id].issued += deduct;
-              usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-              remainingUse -= deduct;
-            }
-          }
-        });
+        }
       }
-    });
+    }
 
     return paperInventoryData.map((reel) => {
       const id = reel.id;
@@ -11371,7 +11586,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       const balanceQty = Math.max(0, received - issuedQty);
       const rate = parseFloat(reel.ratePerKg || 0);
       const value = balanceQty * rate;
-      const systemReelId = formatSystemReelId(reel, paperInventoryData);
+      const systemReelId = reel.systemReelId || formatSystemReelId(reel, paperInventoryData);
       return { ...reel, systemReelId, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log || [] };
     });
   }, [inventory, production]);
@@ -11394,63 +11609,80 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     });
   }, [inventoryWithUsage, allowedCompanyId, filters.stockType, filters.clientId, filters.status, lowStockThreshold]);
 
-  const uniqueMills = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.millName).filter(Boolean))).sort(), [baseAvailableInventory]);
-  const uniqueSizes = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.size).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
-  const uniqueGsms = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.gsm).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
-  const uniqueBfs = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.bf).filter(Boolean))).sort((a,b) => parseFloat(a) - parseFloat(b)), [baseAvailableInventory]);
-  const uniqueColours = useMemo(() => Array.from(new Set(baseAvailableInventory.map(r => r.colour).filter(Boolean))).sort(), [baseAvailableInventory]);
+  // Single-pass extraction of all unique parameter values and counts for instant responsiveness
+  const {
+    uniqueMills,
+    uniqueSizes,
+    uniqueGsms,
+    uniqueBfs,
+    uniqueColours,
+    millCounts,
+    sizeCounts,
+    gsmCounts,
+    bfCounts,
+    colourCounts,
+    weightBracketCounts
+  } = useMemo(() => {
+    const millsSet = new Set();
+    const sizesSet = new Set();
+    const gsmsSet = new Set();
+    const bfsSet = new Set();
+    const coloursSet = new Set();
+    const mCounts = {};
+    const sCounts = {};
+    const gCounts = {};
+    const bCounts = {};
+    const cCounts = {};
+    const wCounts = { '<200': 0, '200-500': 0, '500-800': 0, '800-1200': 0, '>1200': 0 };
 
-  const millCounts = useMemo(() => {
-    const counts = {};
-    baseAvailableInventory.forEach(r => {
-      if (r.millName) counts[String(r.millName)] = (counts[String(r.millName)] || 0) + 1;
-    });
-    return counts;
-  }, [baseAvailableInventory]);
-
-  const sizeCounts = useMemo(() => {
-    const counts = {};
-    baseAvailableInventory.forEach(r => {
-      if (r.size) counts[String(r.size)] = (counts[String(r.size)] || 0) + 1;
-    });
-    return counts;
-  }, [baseAvailableInventory]);
-
-  const gsmCounts = useMemo(() => {
-    const counts = {};
-    baseAvailableInventory.forEach(r => {
-      if (r.gsm) counts[String(r.gsm)] = (counts[String(r.gsm)] || 0) + 1;
-    });
-    return counts;
-  }, [baseAvailableInventory]);
-
-  const bfCounts = useMemo(() => {
-    const counts = {};
-    baseAvailableInventory.forEach(r => {
-      if (r.bf) counts[String(r.bf)] = (counts[String(r.bf)] || 0) + 1;
-    });
-    return counts;
-  }, [baseAvailableInventory]);
-
-  const colourCounts = useMemo(() => {
-    const counts = {};
-    baseAvailableInventory.forEach(r => {
-      if (r.colour) counts[String(r.colour)] = (counts[String(r.colour)] || 0) + 1;
-    });
-    return counts;
-  }, [baseAvailableInventory]);
-
-  const weightBracketCounts = useMemo(() => {
-    const counts = { '<200': 0, '200-500': 0, '500-800': 0, '800-1200': 0, '>1200': 0 };
-    baseAvailableInventory.forEach(r => {
+    for (let i = 0; i < baseAvailableInventory.length; i++) {
+      const r = baseAvailableInventory[i];
+      if (r.millName) {
+        const m = String(r.millName);
+        millsSet.add(m);
+        mCounts[m] = (mCounts[m] || 0) + 1;
+      }
+      if (r.size) {
+        const s = String(r.size);
+        sizesSet.add(s);
+        sCounts[s] = (sCounts[s] || 0) + 1;
+      }
+      if (r.gsm) {
+        const g = String(r.gsm);
+        gsmsSet.add(g);
+        gCounts[g] = (gCounts[g] || 0) + 1;
+      }
+      if (r.bf) {
+        const b = String(r.bf);
+        bfsSet.add(b);
+        bCounts[b] = (bCounts[b] || 0) + 1;
+      }
+      if (r.colour) {
+        const c = String(r.colour);
+        coloursSet.add(c);
+        cCounts[c] = (cCounts[c] || 0) + 1;
+      }
       const wt = parseFloat(r.balanceQty || 0);
-      if (wt < 200) counts['<200']++;
-      else if (wt <= 500) counts['200-500']++;
-      else if (wt <= 800) counts['500-800']++;
-      else if (wt <= 1200) counts['800-1200']++;
-      else counts['>1200']++;
-    });
-    return counts;
+      if (wt < 200) wCounts['<200']++;
+      else if (wt <= 500) wCounts['200-500']++;
+      else if (wt <= 800) wCounts['500-800']++;
+      else if (wt <= 1200) wCounts['800-1200']++;
+      else wCounts['>1200']++;
+    }
+
+    return {
+      uniqueMills: Array.from(millsSet).sort(),
+      uniqueSizes: Array.from(sizesSet).sort((a, b) => parseFloat(a) - parseFloat(b)),
+      uniqueGsms: Array.from(gsmsSet).sort((a, b) => parseFloat(a) - parseFloat(b)),
+      uniqueBfs: Array.from(bfsSet).sort((a, b) => parseFloat(a) - parseFloat(b)),
+      uniqueColours: Array.from(coloursSet).sort(),
+      millCounts: mCounts,
+      sizeCounts: sCounts,
+      gsmCounts: gCounts,
+      bfCounts: bCounts,
+      colourCounts: cCounts,
+      weightBracketCounts: wCounts
+    };
   }, [baseAvailableInventory]);
 
   const filteredInventory = useMemo(() => {
@@ -11578,6 +11810,27 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       return strA.localeCompare(strB) * dir;
     });
   }, [filteredInventory, sortConfig, companies]);
+
+  // Classic view mode pagination
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const saved = localStorage.getItem('apex_inventory_page_size');
+      return saved === 'all' ? 'all' : (parseInt(saved) || 100);
+    } catch {
+      return 100;
+    }
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, sortConfig.key, sortConfig.direction]);
+
+  const pagedFilteredInventory = useMemo(() => {
+    if (pageSize === 'all') return sortedFilteredInventory;
+    const start = (currentPage - 1) * pageSize;
+    return sortedFilteredInventory.slice(start, start + pageSize);
+  }, [sortedFilteredInventory, currentPage, pageSize]);
 
   const toggleSelection = (id) => {
     const newSet = new Set(selectedIds);
@@ -12604,108 +12857,124 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <PrintBarcodeLabelModal isOpen={!!printTagData} onClose={() => setPrintTagData(null)} type={printTagData?.type} data={printTagData?.data} allInventory={inventoryWithUsage} addLog={addLog} />
             </>
           ) : (
-            <div className="apex-table-wrap">
-            <table className="apex-table" style={{ minWidth: 1100 }}>
-              <thead>
-                <tr>
-                  {role === 'admin' && <th style={{ width: 36, paddingLeft: 14 }}><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === sortedFilteredInventory.length && sortedFilteredInventory.length > 0} /></th>}
-                  <th onClick={() => requestSort('company')} style={{ cursor: 'pointer', userSelect: 'none' }}>Company {sortConfig.key === 'company' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('date')} style={{ cursor: 'pointer', userSelect: 'none' }}>Date &amp; Ref {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('millName')} style={{ cursor: 'pointer', userSelect: 'none' }}>Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('reelNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Specs (Size/GSM/BF) {['size', 'gsm', 'bf'].includes(sortConfig.key) ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Received {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('issuedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Issued {sortConfig.key === 'issuedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Balance {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate &amp; Value {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                  <th>Usage History</th>
-                  {role === 'admin' && <th style={{ textAlign: 'right' }}>Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {sortedFilteredInventory.length === 0 && (
-                  <tr><td colSpan="12" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontStyle: 'italic' }}>No inventory records match the current filters.</td></tr>
-                )}
-                {sortedFilteredInventory.map(reel => {
-                  const isAvailable = (reel.balanceQty || 0) > 0;
-                  const isLow = isAvailable && (reel.balanceQty || 0) < lowStockThreshold;
-                  const compName = companies.find(c => c.id === reel.companyId)?.name || 'Unassigned';
-                  return (
-                    <tr key={reel.id} style={{ opacity: !isAvailable ? 0.6 : 1 }}>
-                      {role === 'admin' && <td style={{ paddingLeft: 14 }}><input type="checkbox" checked={selectedIds.has(reel.id)} onChange={() => toggleSelection(reel.id)} /></td>}
-                      <td>
-                        <span style={{ fontWeight: 600, fontSize: 12.5 }}>{compName}</span>
-                      </td>
-                      <td>
-                        <div style={{ fontWeight: 500, fontSize: 12.5 }}>{reel.date || '-'}</div>
-                        {reel.invoiceNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 1 }}>#{reel.invoiceNo}</div>}
-                        {reel.vehicleNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Veh: {reel.vehicleNo}</div>}
-                      </td>
-                      <td>
-                        <div style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.millName || '-'}</div>
-                        {reel.stockType === 'job_work' ? (
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 3, display: 'inline-block' }}>
-                            🤝 JW: {reel.clientName || 'Client Stock'}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, marginTop: 3, display: 'inline-block' }}>
-                            🏭 Factory Stock
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, color: isAvailable ? '#1d4ed8' : 'var(--text-muted)' }}>{reel.reelNo || '-'}</span>
-                          {!isAvailable && <span className="apex-badge apex-badge-stone" style={{ fontSize: 9.5 }}>EMPTY</span>}
-                          {isLow && <span className="apex-badge apex-badge-amber" style={{ fontSize: 9.5 }}>LOW</span>}
-                        </div>
-                      </td>
-                      <td>
-                        <div style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.size || '-'} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>cm</span></div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{reel.gsm || '-'} GSM · {reel.bf || '-'} BF · {reel.colour || '-'}</div>
-                      </td>
-                      <td style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.receivedQty || 0} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>kg</span></td>
-                      <td style={{ color: '#c2410c', fontWeight: 600, fontSize: 12.5 }}>{(reel.issuedQty || 0) > 0 ? `${(reel.issuedQty||0).toFixed(1)} kg` : <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>—</span>}</td>
-                      <td>
-                        <span style={{ fontWeight: 800, fontSize: 14, color: isAvailable ? '#15803d' : 'var(--text-muted)' }}>{(reel.balanceQty || 0).toFixed(1)}</span>
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 3 }}>kg</span>
-                      </td>
-                      <td>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>₹{parseFloat(reel.ratePerKg||0).toFixed(2)}/kg</div>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>₹{parseFloat(reel.value||0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                      </td>
-                      <td>
-                        {(reel.usageLog || []).length === 0
-                          ? <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Not yet used</span>
-                          : <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                              {(reel.usageLog || []).slice(0, 3).map((log, i) => (
-                                <div key={i} style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{log.date || '-'}</span>
-                                  <span style={{ fontSize: 10.5, fontWeight: 500 }}>{log.usedFor || '-'}</span>
-                                  <span className="apex-badge apex-badge-orange" style={{ fontSize: 9.5 }}>{log.kg || 0} kg</span>
-                                </div>
-                              ))}
-                              {(reel.usageLog || []).length > 3 && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{(reel.usageLog||[]).length - 3} more</span>}
-                            </div>
-                        }
-                      </td>
-                      {role === 'admin' && (
-                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <button onClick={() => handleEdit(reel)} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ marginRight: 4 }}>
-                            <Edit2 style={{ width: 12, height: 12 }} /> Edit
-                          </button>
-                          <button onClick={() => handleDelete(reel.id, reel.reelNo)} className="apex-btn apex-btn-danger apex-btn-sm">
-                            <Trash2 style={{ width: 12, height: 12 }} /> Del
-                          </button>
+            <>
+              <InventoryPaginationControls
+                totalItems={sortedFilteredInventory.length}
+                pageSize={pageSize}
+                setPageSize={setPageSize}
+                currentPage={currentPage}
+                setCurrentPage={setCurrentPage}
+              />
+              <div className="apex-table-wrap">
+              <table className="apex-table" style={{ minWidth: 1100 }}>
+                <thead>
+                  <tr>
+                    {role === 'admin' && <th style={{ width: 36, paddingLeft: 14 }}><input type="checkbox" onChange={toggleAll} checked={selectedIds.size === sortedFilteredInventory.length && sortedFilteredInventory.length > 0} /></th>}
+                    <th onClick={() => requestSort('company')} style={{ cursor: 'pointer', userSelect: 'none' }}>Company {sortConfig.key === 'company' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('date')} style={{ cursor: 'pointer', userSelect: 'none' }}>Date &amp; Ref {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('millName')} style={{ cursor: 'pointer', userSelect: 'none' }}>Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('reelNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Specs (Size/GSM/BF) {['size', 'gsm', 'bf'].includes(sortConfig.key) ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Received {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('issuedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Issued {sortConfig.key === 'issuedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Balance {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate &amp; Value {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th>Usage History</th>
+                    {role === 'admin' && <th style={{ textAlign: 'right' }}>Actions</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedFilteredInventory.length === 0 && (
+                    <tr><td colSpan="12" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontStyle: 'italic' }}>No inventory records match the current filters.</td></tr>
+                  )}
+                  {pagedFilteredInventory.map(reel => {
+                    const isAvailable = (reel.balanceQty || 0) > 0;
+                    const isLow = isAvailable && (reel.balanceQty || 0) < lowStockThreshold;
+                    const compName = companies.find(c => c.id === reel.companyId)?.name || 'Unassigned';
+                    return (
+                      <tr key={reel.id} style={{ opacity: !isAvailable ? 0.6 : 1 }}>
+                        {role === 'admin' && <td style={{ paddingLeft: 14 }}><input type="checkbox" checked={selectedIds.has(reel.id)} onChange={() => toggleSelection(reel.id)} /></td>}
+                        <td>
+                          <span style={{ fontWeight: 600, fontSize: 12.5 }}>{compName}</span>
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        <td>
+                          <div style={{ fontWeight: 500, fontSize: 12.5 }}>{reel.date || '-'}</div>
+                          {reel.invoiceNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 1 }}>#{reel.invoiceNo}</div>}
+                          {reel.vehicleNo && <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Veh: {reel.vehicleNo}</div>}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.millName || '-'}</div>
+                          {reel.stockType === 'job_work' ? (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 3, display: 'inline-block' }}>
+                              🤝 JW: {reel.clientName || 'Client Stock'}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, marginTop: 3, display: 'inline-block' }}>
+                              🏭 Factory Stock
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, color: isAvailable ? '#1d4ed8' : 'var(--text-muted)' }}>{reel.reelNo || '-'}</span>
+                            {!isAvailable && <span className="apex-badge apex-badge-stone" style={{ fontSize: 9.5 }}>EMPTY</span>}
+                            {isLow && <span className="apex-badge apex-badge-amber" style={{ fontSize: 9.5 }}>LOW</span>}
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.size || '-'} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>cm</span></div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{reel.gsm || '-'} GSM · {reel.bf || '-'} BF · {reel.colour || '-'}</div>
+                        </td>
+                        <td style={{ fontWeight: 600, fontSize: 12.5 }}>{reel.receivedQty || 0} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>kg</span></td>
+                        <td style={{ color: '#c2410c', fontWeight: 600, fontSize: 12.5 }}>{(reel.issuedQty || 0) > 0 ? `${(reel.issuedQty||0).toFixed(1)} kg` : <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>—</span>}</td>
+                        <td>
+                          <span style={{ fontWeight: 800, fontSize: 14, color: isAvailable ? '#15803d' : 'var(--text-muted)' }}>{(reel.balanceQty || 0).toFixed(1)}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 3 }}>kg</span>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>₹{parseFloat(reel.ratePerKg||0).toFixed(2)}/kg</div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>₹{parseFloat(reel.value||0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+                        </td>
+                        <td>
+                          {(reel.usageLog || []).length === 0
+                            ? <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Not yet used</span>
+                            : <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                {(reel.usageLog || []).slice(0, 3).map((log, i) => (
+                                  <div key={i} style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{log.date || '-'}</span>
+                                    <span style={{ fontSize: 10.5, fontWeight: 500 }}>{log.usedFor || '-'}</span>
+                                    <span className="apex-badge apex-badge-orange" style={{ fontSize: 9.5 }}>{log.kg || 0} kg</span>
+                                  </div>
+                                ))}
+                                {(reel.usageLog || []).length > 3 && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{(reel.usageLog||[]).length - 3} more</span>}
+                              </div>
+                          }
+                        </td>
+                        {role === 'admin' && (
+                          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <button onClick={() => handleEdit(reel)} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ marginRight: 4 }}>
+                              <Edit2 style={{ width: 12, height: 12 }} /> Edit
+                            </button>
+                            <button onClick={() => handleDelete(reel.id, reel.reelNo)} className="apex-btn apex-btn-danger apex-btn-sm">
+                              <Trash2 style={{ width: 12, height: 12 }} /> Del
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              </div>
+              <InventoryPaginationControls
+                totalItems={sortedFilteredInventory.length}
+                pageSize={pageSize}
+                setPageSize={setPageSize}
+                currentPage={currentPage}
+                setCurrentPage={setCurrentPage}
+              />
+            </>
+          )}
         </>
       ) : (
         <>
@@ -26128,8 +26397,8 @@ function LogsView({ logs = [], currentUser }) {
   const getActionCategory = (action = '') => {
     const act = action.toLowerCase();
     if (act.includes('delete') || act.includes('wipe')) return 'Deleted';
-    if (act.includes('add') || act.includes('create') || act.includes('inward')) return 'Added';
-    if (act.includes('update') || act.includes('edit') || act.includes('cell')) return 'Updated';
+    if (act.includes('add') || act.includes('create') || act.includes('inward') || act.includes('import')) return 'Added';
+    if (act.includes('update') || act.includes('edit') || act.includes('cell') || act.includes('re-weighed') || act.includes('return')) return 'Updated';
     if (act.includes('dispatch')) return 'Dispatched';
     if (act.includes('wip') || act.includes('advance') || act.includes('stage') || act.includes('plan') || act.includes('drag')) return 'WIP & Planning';
     if (act.includes('scan') || act.includes('barcode')) return 'Scanner';
@@ -26185,6 +26454,19 @@ function LogsView({ logs = [], currentUser }) {
     const tB = new Date(b.time || 0).getTime();
     return tB - tA;
   });
+
+  const [pageSize, setPageSize] = useState(100);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterUser, filterCategory, dateFrom, dateTo]);
+
+  const pagedLogs = useMemo(() => {
+    if (pageSize === 'all') return sortedLogs;
+    const start = (currentPage - 1) * pageSize;
+    return sortedLogs.slice(start, start + pageSize);
+  }, [sortedLogs, currentPage, pageSize]);
 
   const todayLogsCount = logs.filter(l => l.time && l.time.startsWith(todayStr)).length;
 
@@ -26310,6 +26592,15 @@ function LogsView({ logs = [], currentUser }) {
         </div>
       </div>
 
+      <InventoryPaginationControls
+        totalItems={sortedLogs.length}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+        itemName="logs"
+      />
+
       {/* Excel Sheet Table */}
       <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', overflowX: 'auto' }}>
         <table className="apex-table" style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -26327,7 +26618,8 @@ function LogsView({ logs = [], currentUser }) {
             {sortedLogs.length === 0 && (
               <tr><td colSpan="6" style={{ textAlign: 'center', padding: 36, color: '#94a3b8', fontStyle: 'italic' }}>No activity logs recorded matching criteria.</td></tr>
             )}
-            {sortedLogs.map((log, idx) => {
+            {pagedLogs.map((log, idx) => {
+              const rowIndex = (pageSize === 'all' ? 0 : (currentPage - 1) * pageSize) + idx + 1;
               const cat = getActionCategory(log.action);
               const badgeStyle = getCategoryBadgeStyle(cat);
               const dateDisplay = log.time ? new Date(log.time).toLocaleString('en-IN', {
@@ -26337,7 +26629,7 @@ function LogsView({ logs = [], currentUser }) {
 
               return (
                 <tr key={log.id || idx} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{idx + 1}</td>
+                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{rowIndex}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: '#475569', whiteSpace: 'nowrap' }}>
                     {dateDisplay}
                   </td>
@@ -26369,6 +26661,15 @@ function LogsView({ logs = [], currentUser }) {
           </tbody>
         </table>
       </div>
+
+      <InventoryPaginationControls
+        totalItems={sortedLogs.length}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+        itemName="logs"
+      />
     </div>
   );
 }
