@@ -341,6 +341,7 @@ export const calculateSkuCost = (sku = {}) => {
     paperRateMode = 'blended',
     blendedPaperRate = 40,
     plyDetails = [],
+    wastagePercent = 0,
     conversionRatePerKg = 0,
     conversionCostPerPc = 2.5,
     printingCostPerPc = 0.5,
@@ -393,12 +394,12 @@ export const calculateSkuCost = (sku = {}) => {
   const blankDeckleIn = blankDeckleMm > 0 ? Math.round((blankDeckleMm / 25.4) * 100) / 100 : 0;
   const boardAreaSqFt = Math.round(boardAreaSqM * 10.7639 * 1000) / 1000;
 
-  let singleWeightKg = 0;
-  let singleMaterialCost = 0;
+  let netWeightKg = 0;
+  let netMaterialCost = 0;
 
   if (calcMode === 'manual' && parseFloat(manualOverrideWeightKg) > 0) {
-    singleWeightKg = parseFloat(manualOverrideWeightKg) || 0;
-    singleMaterialCost = singleWeightKg * (parseFloat(blendedPaperRate) || 40);
+    netWeightKg = parseFloat(manualOverrideWeightKg) || 0;
+    netMaterialCost = netWeightKg * (parseFloat(blendedPaperRate) || 40);
   } else if (boardAreaSqM > 0) {
     const plies = Array.isArray(plyDetails) && plyDetails.length > 0
       ? plyDetails
@@ -409,12 +410,19 @@ export const calculateSkuCost = (sku = {}) => {
       const factor = parseFloat(ply.factor) || (ply.isFlute ? (FLUTE_FACTORS[fluteType] || 1.35) : 1.0);
       const plyRate = paperRateMode === 'detailed' ? (parseFloat(ply.rate) || blendedPaperRate) : blendedPaperRate;
       const plyWt = (boardAreaSqM * gsm * factor) / 1000;
-      singleWeightKg += plyWt;
-      singleMaterialCost += (plyWt * plyRate);
+      netWeightKg += plyWt;
+      netMaterialCost += (plyWt * plyRate);
     });
   }
 
+  const wastagePct = Math.max(0, parseFloat(wastagePercent) || 0);
+  const wastageMultiplier = 1 + (wastagePct / 100);
+
+  const singleWeightKg = netWeightKg * wastageMultiplier;
+  const singleMaterialCost = netMaterialCost * wastageMultiplier;
   const singleWeightGrams = Math.round(singleWeightKg * 1000 * 10) / 10;
+  const netWeightGrams = Math.round(netWeightKg * 1000 * 10) / 10;
+
   const convByKg = parseFloat(conversionRatePerKg || 0) * singleWeightKg;
   const convFixed = boardAreaSqM > 0 ? parseFloat(conversionCostPerPc || 0) : 0;
   const totalConversionPerPc = convByKg + convFixed;
@@ -445,6 +453,9 @@ export const calculateSkuCost = (sku = {}) => {
     blankDeckleIn,
     boardAreaSqM: Math.round(boardAreaSqM * 10000) / 10000,
     boardAreaSqFt,
+    netWeightKg: Math.round(netWeightKg * 1000) / 1000,
+    netWeightGrams,
+    wastagePercent: wastagePct,
     singleWeightKg: Math.round(singleWeightKg * 1000) / 1000,
     singleWeightGrams,
     singleMaterialCost: Math.round(singleMaterialCost * 100) / 100,
@@ -9245,6 +9256,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
   const [globalSpec, setGlobalSpec] = useState({
     plyCount: 3,
     fluteType: 'B',
+    wastagePercent: 0,
     conversionCostPerPc: 2.5,
     conversionRatePerKg: 0,
     printingCostPerPc: 0.5,
@@ -9302,6 +9314,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       manualRate: '',
       pocketsLength: 3,
       pocketsWidth: 2,
+      wastagePercent: 0,
       conversionCost: 2.5,
       marginPercent: 12,
       plyCount: 3,
@@ -9329,6 +9342,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
         manualRate: '',
         pocketsLength: 3,
         pocketsWidth: 2,
+        wastagePercent: globalSpec.wastagePercent || 0,
         conversionCost: globalSpec.conversionCostPerPc,
         marginPercent: globalSpec.marginPercent,
         plyCount: globalSpec.plyCount,
@@ -9374,7 +9388,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     }));
   };
 
-  // ── CORE MATH ENGINE (ACCURATE INCH & MM CONVERSION) ──
+  // ── CORE MATH ENGINE (ACCURATE INCH & MM CONVERSION WITH EXACT DECKLE & CUTTING PRESERVED) ──
   const calculatedParts = useMemo(() => {
     return parts.map(part => {
       const qty = parseInt(part.qtyPerSet, 10) || 1;
@@ -9382,10 +9396,20 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
 
       // 1. DIRECT MANUAL WEIGHT ENTRY
       if (part.calcMode === 'manual') {
-        const singleWeightKg = parseFloat(part.manualWeight) || 0;
-        const singleWeightGrams = Math.round(singleWeightKg * 1000 * 10) / 10;
+        const netWeightKg = parseFloat(part.manualWeight) || 0;
         const rate = parseFloat(part.manualRate) || sharedBlendedRate || 40;
-        const singleMaterialCost = singleWeightKg * rate;
+        const netMaterialCost = netWeightKg * rate;
+        
+        const wastagePct = part.useGlobalSpec
+          ? (parseFloat(globalSpec.wastagePercent) || 0)
+          : (parseFloat(part.wastagePercent) || 0);
+        const wastageMultiplier = 1 + (Math.max(0, wastagePct) / 100);
+
+        const singleWeightKg = netWeightKg * wastageMultiplier;
+        const singleMaterialCost = netMaterialCost * wastageMultiplier;
+        const singleWeightGrams = Math.round(singleWeightKg * 1000 * 10) / 10;
+        const netWeightGrams = Math.round(netWeightKg * 1000 * 10) / 10;
+
         const conv = parseFloat(part.conversionCost) || 0;
         const singleTotalCost = singleMaterialCost + conv;
         const margin = parseFloat(part.marginPercent || 0);
@@ -9396,6 +9420,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
           parsedDimensions: { L_in: 0, W_in: 0, H_in: 0, L_mm: 0, W_mm: 0, H_mm: 0, textInch: 'Manual', textMm: 'Manual' },
           blankCutLengthMm: 0, blankDeckleMm: 0, blankCutLengthIn: 0, blankDeckleIn: 0,
           boardAreaSqM: 0, boardAreaSqFt: 0,
+          netWeightKg, netWeightGrams, wastagePercent: wastagePct,
           singleWeightKg, singleWeightGrams, singleMaterialCost, singleTotalCost, quotedRate,
           totalWeightKg: singleWeightKg * qty, totalCost: singleTotalCost * qty, totalQuotedValue: quotedRate * qty,
           effectivePlies: []
@@ -9442,10 +9467,10 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       const blankDeckleIn = blankDeckleMm > 0 ? Math.round((blankDeckleMm / 25.4) * 100) / 100 : 0;
       const boardAreaSqFt = Math.round(boardAreaSqM * 10.7639 * 1000) / 1000;
 
-      // 3. LAYER-BY-LAYER WEIGHT & COST CALCULATION
+      // 3. LAYER-BY-LAYER WEIGHT & COST CALCULATION (USING EXACT DECKLE & CUTTING BLANK SIZE)
       const effectivePlies = part.useGlobalSpec ? globalSpec.plyDetails : (part.plyDetails || globalSpec.plyDetails);
-      let singleWeightKg = 0;
-      let singleMaterialCost = 0;
+      let netWeightKg = 0;
+      let netMaterialCost = 0;
 
       if (boardAreaSqM > 0) {
         effectivePlies.forEach(ply => {
@@ -9453,12 +9478,22 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
           const factor = parseFloat(ply.factor) || (ply.isFlute ? 1.35 : 1.0);
           const rate = parseFloat(ply.rate) || 40;
           const layerWt = (boardAreaSqM * gsm * factor) / 1000;
-          singleWeightKg += layerWt;
-          singleMaterialCost += (layerWt * rate);
+          netWeightKg += layerWt;
+          netMaterialCost += (layerWt * rate);
         });
       }
 
+      // 4. APPLY TRIMMING / PRODUCTION WASTAGE % ACCORDING TO DECKLE & CUTTING
+      const wastagePct = part.useGlobalSpec
+        ? (parseFloat(globalSpec.wastagePercent) || 0)
+        : (parseFloat(part.wastagePercent) || 0);
+      const wastageMultiplier = 1 + (Math.max(0, wastagePct) / 100);
+
+      const singleWeightKg = netWeightKg * wastageMultiplier;
+      const singleMaterialCost = netMaterialCost * wastageMultiplier;
       const singleWeightGrams = Math.round(singleWeightKg * 1000 * 10) / 10;
+      const netWeightGrams = Math.round(netWeightKg * 1000 * 10) / 10;
+
       const convCost = part.useGlobalSpec
         ? (parseFloat(globalSpec.conversionCostPerPc) || 0)
         : (parseFloat(part.conversionCost) || 0);
@@ -9482,6 +9517,9 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
         blankDeckleIn,
         boardAreaSqM: Math.round(boardAreaSqM * 10000) / 10000,
         boardAreaSqFt,
+        netWeightKg: Math.round(netWeightKg * 1000) / 1000,
+        netWeightGrams,
+        wastagePercent: wastagePct,
         singleWeightKg: Math.round(singleWeightKg * 1000) / 1000,
         singleWeightGrams,
         singleMaterialCost: Math.round(singleMaterialCost * 100) / 100,
@@ -9526,7 +9564,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       'Item / Box Name', 'Type', 'Input Size', 'Unit',
       'Length (in)', 'Width (in)', 'Height (in)', 'Length (mm)', 'Width (mm)', 'Height (mm)',
       'Blank Cut (mm)', 'Blank Deckle (mm)', 'Blank Cut (in)', 'Blank Deckle (in)', 'Board Area (m²)',
-      'Box Weight (g)', 'Box Weight (kg)',
+      'Net Weight (g)', 'Wastage (%)', 'Gross Weight (g)', 'Gross Weight (kg)',
       'Paper Cost (₹)', 'Conversion (₹)', 'Net Cost (₹)', 'Quoted Rate (₹)',
       'Order Qty (pcs)', 'Total Weight (kg)', 'Total Value (₹)'
     ];
@@ -9536,7 +9574,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       p.parsedDimensions.L_in, p.parsedDimensions.W_in, p.parsedDimensions.H_in,
       p.parsedDimensions.L_mm, p.parsedDimensions.W_mm, p.parsedDimensions.H_mm,
       p.blankCutLengthMm, p.blankDeckleMm, p.blankCutLengthIn, p.blankDeckleIn, p.boardAreaSqM,
-      p.singleWeightGrams, p.singleWeightKg,
+      p.netWeightGrams, p.wastagePercent || 0, p.singleWeightGrams, p.singleWeightKg,
       p.singleMaterialCost, p.conversionCost || globalSpec.conversionCostPerPc,
       p.singleTotalCost, p.quotedRate,
       p.qtyPerSet, p.totalWeightKg, p.totalQuotedValue
@@ -9577,6 +9615,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
           const gsm = parseFloat(get(row, 'gsm')) || 140;
           const rate = parseFloat(get(row, 'rate', 'price', '₹')) || 40;
           const conv = parseFloat(get(row, 'conv', 'conversion', 'mfg')) || 2.5;
+          const wastage = parseFloat(get(row, 'wastage', 'trim', 'scrap', 'waste')) || 0;
           const qty = parseInt(get(row, 'qty', 'quantity'), 10) || 1000;
 
           let boardAreaSqM = 0;
@@ -9588,12 +9627,13 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
 
           const numFlutes = Math.floor(ply / 2);
           const numLiners = Math.ceil(ply / 2);
-          const weightKg = (boardAreaSqM * numLiners * gsm * 1.0 / 1000) + (boardAreaSqM * numFlutes * gsm * 1.35 / 1000);
+          const netWeightKg = (boardAreaSqM * numLiners * gsm * 1.0 / 1000) + (boardAreaSqM * numFlutes * gsm * 1.35 / 1000);
+          const weightKg = netWeightKg * (1 + (Math.max(0, wastage) / 100));
           const materialCost = weightKg * rate;
           const totalCost = materialCost + conv;
 
           results.push({
-            name, type, size: size || `${parsed.L}x${parsed.W}x${parsed.H}`, unit, ply, gsm, rate, conv, qty,
+            name, type, size: size || `${parsed.L}x${parsed.W}x${parsed.H}`, unit, ply, gsm, rate, conv, wastage, qty,
             boardAreaSqM: boardAreaSqM.toFixed(4), weightKg: weightKg.toFixed(3),
             unitCost: totalCost.toFixed(2), totalCost: (totalCost * qty).toFixed(2)
           });
@@ -9763,6 +9803,22 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                       <option value="BC">BC-Flute (Double Wall 7mm)</option>
                       <option value="AB">AB-Flute (Heavy Wall 8mm)</option>
                     </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-emerald-900 uppercase tracking-wider mb-1">Trimming Wastage %</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        className="w-full p-2 border border-emerald-300 rounded-xl text-xs font-mono font-bold bg-white text-stone-900"
+                        value={globalSpec.wastagePercent ?? 0}
+                        onChange={e => setGlobalSpec(prev => ({ ...prev, wastagePercent: parseFloat(e.target.value) || 0 }))}
+                        placeholder="e.g. 10"
+                      />
+                      <span className="text-xs font-bold text-emerald-900">%</span>
+                    </div>
                   </div>
 
                   <div>
@@ -9945,6 +10001,11 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         <span className="font-mono font-extrabold text-orange-600">
                           {part.singleWeightGrams}g ({part.singleWeightKg} kg)
                         </span>
+                        {part.wastagePercent > 0 && (
+                          <span className="ml-1.5 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-md" title={`Theoretical Net Weight: ${part.netWeightGrams}g + ${part.wastagePercent}% wastage`}>
+                            +{part.wastagePercent}% Waste ({part.netWeightGrams}g net)
+                          </span>
+                        )}
                       </div>
                       <div>
                         <span className="text-stone-500 font-bold text-[10px] uppercase mr-1">Quoted Rate:</span>
@@ -10070,7 +10131,19 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         </label>
 
                         {!part.useGlobalSpec && (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-1 bg-white border border-stone-300 rounded px-2 py-0.5">
+                              <span className="text-[10px] font-bold text-stone-600">Wastage:</span>
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                className="w-14 text-xs font-mono font-bold text-center outline-none"
+                                value={part.wastagePercent ?? 0}
+                                onChange={e => handlePartChange(part.id, 'wastagePercent', parseFloat(e.target.value) || 0)}
+                              />
+                              <span className="text-[10px] font-bold text-stone-500">%</span>
+                            </div>
                             <select
                               className="p-1 border rounded text-xs bg-white font-bold"
                               value={part.plyCount}
