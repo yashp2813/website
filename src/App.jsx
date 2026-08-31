@@ -2,7 +2,7 @@ import './App.css';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key, Menu, X
+  Calculator, Flame, GanttChart, AlertTriangle, Package, Building2, Users, History, LogOut, Plus, Trash2, Lock, ShieldAlert, CheckCircle2, Download, Upload, Factory, Coins, PieChart, ShoppingCart, Edit2, Archive, Search, Truck, ScanLine, IndianRupee, LayoutDashboard, BarChart3, CalendarDays, Box, ArrowDown, ArrowUp, FileText, DatabaseBackup, ClipboardList, Store, ReceiptText, TrendingUp, CreditCard, Star, FileJson, BarChart2, AlertCircle, RefreshCw, ArrowLeftRight, Mic, MicOff, Sparkles, Key, Menu, X, Copy, Printer, FileSpreadsheet, Share2, Layers
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
@@ -65,6 +65,306 @@ export const getBoardCaliperMm = (ply, flute) => {
   }
   if (plyNum >= 7) return 10.5;
   return 3.0;
+};
+
+// Global High-Precision Dimension Parser supporting Inches (e.g. 12x8x6, 12.5x8.25x6), Millimeters, and Centimeters
+export const parseDimensionString = (sizeStr, defaultUnit = 'inch') => {
+  if (!sizeStr || typeof sizeStr !== 'string') {
+    return { unit: defaultUnit, L: 0, W: 0, H: 0, L_mm: 0, W_mm: 0, H_mm: 0, L_in: 0, W_in: 0, H_in: 0, textMm: '0 × 0 × 0 mm', textInch: '0 × 0 × 0 in' };
+  }
+  const rawStr = sizeStr.trim();
+  let unit = defaultUnit;
+  if (rawStr.includes('"') || /\bin(?:ch(?:es)?)?\b/i.test(rawStr)) {
+    unit = 'inch';
+  } else if (/\bmm\b/i.test(rawStr)) {
+    unit = 'mm';
+  } else if (/\bcm\b/i.test(rawStr)) {
+    unit = 'cm';
+  }
+
+  const cleaned = rawStr.replace(/["'a-zA-Z]/g, '').replace(/[*×]/g, 'x');
+  const parts = cleaned.split('x').map(s => parseFloat(s.trim()) || 0);
+  const L_raw = parts[0] || 0;
+  const W_raw = parts[1] || 0;
+  const H_raw = parts[2] !== undefined ? parts[2] : (parts.length === 2 ? 0 : 0);
+
+  let L_mm = 0, W_mm = 0, H_mm = 0;
+  let L_in = 0, W_in = 0, H_in = 0;
+
+  if (unit === 'inch') {
+    L_in = L_raw; W_in = W_raw; H_in = H_raw;
+    L_mm = parseFloat((L_raw * 25.4).toFixed(1));
+    W_mm = parseFloat((W_raw * 25.4).toFixed(1));
+    H_mm = parseFloat((H_raw * 25.4).toFixed(1));
+  } else if (unit === 'cm') {
+    L_mm = parseFloat((L_raw * 10).toFixed(1));
+    W_mm = parseFloat((W_raw * 10).toFixed(1));
+    H_mm = parseFloat((H_raw * 10).toFixed(1));
+    L_in = parseFloat((L_mm / 25.4).toFixed(2));
+    W_in = parseFloat((W_mm / 25.4).toFixed(2));
+    H_in = parseFloat((H_mm / 25.4).toFixed(2));
+  } else {
+    // mm
+    L_mm = L_raw; W_mm = W_raw; H_mm = H_raw;
+    L_in = parseFloat((L_raw / 25.4).toFixed(2));
+    W_in = parseFloat((W_raw / 25.4).toFixed(2));
+    H_in = parseFloat((H_raw / 25.4).toFixed(2));
+  }
+
+  return {
+    unit,
+    L: unit === 'inch' ? L_in : L_mm,
+    W: unit === 'inch' ? W_in : W_mm,
+    H: unit === 'inch' ? H_in : H_mm,
+    L_mm, W_mm, H_mm,
+    L_in, W_in, H_in,
+    textMm: H_mm > 0 ? `${L_mm.toFixed(0)} × ${W_mm.toFixed(0)} × ${H_mm.toFixed(0)} mm` : `${L_mm.toFixed(0)} × ${W_mm.toFixed(0)} mm`,
+    textInch: H_in > 0 ? `${L_in.toFixed(2)}" × ${W_in.toFixed(2)}" × ${H_in.toFixed(2)}"` : `${L_in.toFixed(2)}" × ${W_in.toFixed(2)}"`
+  };
+};
+
+export const COSTING_PRESETS = [
+  {
+    id: '3ply_kraft_std',
+    name: '3-Ply Standard Kraft',
+    desc: '150K / 120F / 150K (B-Flute)',
+    plyCount: 3,
+    fluteType: 'B',
+    paperRate: 38,
+    conversionCost: 2.2,
+    plies: [
+      { id: 0, name: 'Top Liner', gsm: 150, bf: 18, factor: 1.0, rate: 39, type: 'Kraft' },
+      { id: 1, name: 'Fluting Medium', gsm: 120, bf: 16, factor: 1.35, rate: 36, type: 'Semi-Chemical', isFlute: true },
+      { id: 2, name: 'Bottom Liner', gsm: 150, bf: 18, factor: 1.0, rate: 39, type: 'Kraft' }
+    ]
+  },
+  {
+    id: '3ply_golden_heavy',
+    name: '3-Ply Heavy Golden',
+    desc: '180G / 140F / 180K (B-Flute)',
+    plyCount: 3,
+    fluteType: 'B',
+    paperRate: 42,
+    conversionCost: 2.5,
+    plies: [
+      { id: 0, name: 'Top Liner (Golden)', gsm: 180, bf: 20, factor: 1.0, rate: 44, type: 'Golden' },
+      { id: 1, name: 'Fluting Medium', gsm: 140, bf: 18, factor: 1.35, rate: 39, type: 'Kraft', isFlute: true },
+      { id: 2, name: 'Bottom Liner', gsm: 180, bf: 20, factor: 1.0, rate: 43, type: 'Kraft' }
+    ]
+  },
+  {
+    id: '5ply_export_master',
+    name: '5-Ply Master Export',
+    desc: '180G / 140F / 140K / 140F / 180K (BC-Flute)',
+    plyCount: 5,
+    fluteType: 'BC',
+    paperRate: 43,
+    conversionCost: 3.8,
+    plies: [
+      { id: 0, name: 'Top Liner (Golden)', gsm: 180, bf: 20, factor: 1.0, rate: 44, type: 'Golden' },
+      { id: 1, name: 'Fluting 1 (C-Flute)', gsm: 140, bf: 18, factor: 1.43, rate: 39, type: 'Kraft', isFlute: true },
+      { id: 2, name: 'Middle Liner', gsm: 140, bf: 18, factor: 1.0, rate: 40, type: 'Kraft' },
+      { id: 3, name: 'Fluting 2 (B-Flute)', gsm: 140, bf: 18, factor: 1.35, rate: 39, type: 'Kraft', isFlute: true },
+      { id: 4, name: 'Bottom Liner', gsm: 180, bf: 20, factor: 1.0, rate: 43, type: 'Kraft' }
+    ]
+  },
+  {
+    id: '5ply_industrial_heavy',
+    name: '5-Ply Industrial Heavy',
+    desc: '230G / 150F / 180K / 150F / 230K (BC-Flute)',
+    plyCount: 5,
+    fluteType: 'BC',
+    paperRate: 46,
+    conversionCost: 4.5,
+    plies: [
+      { id: 0, name: 'Top Liner (High BF)', gsm: 230, bf: 24, factor: 1.0, rate: 48, type: 'Golden' },
+      { id: 1, name: 'Fluting 1 (C-Flute)', gsm: 150, bf: 20, factor: 1.43, rate: 42, type: 'Kraft', isFlute: true },
+      { id: 2, name: 'Middle Liner', gsm: 180, bf: 20, factor: 1.0, rate: 44, type: 'Kraft' },
+      { id: 3, name: 'Fluting 2 (B-Flute)', gsm: 150, bf: 20, factor: 1.35, rate: 42, type: 'Kraft', isFlute: true },
+      { id: 4, name: 'Bottom Liner', gsm: 230, bf: 24, factor: 1.0, rate: 48, type: 'Kraft' }
+    ]
+  },
+  {
+    id: '7ply_heavy_machinery',
+    name: '7-Ply Heavy Machinery',
+    desc: '230G / 150F / 180K / 150F / 180K / 150F / 230K',
+    plyCount: 7,
+    fluteType: 'BC',
+    paperRate: 48,
+    conversionCost: 6.5,
+    plies: [
+      { id: 0, name: 'Top Liner (Golden)', gsm: 230, bf: 24, factor: 1.0, rate: 50, type: 'Golden' },
+      { id: 1, name: 'Fluting 1 (C-Flute)', gsm: 150, bf: 20, factor: 1.43, rate: 44, type: 'Kraft', isFlute: true },
+      { id: 2, name: 'Middle Liner 1', gsm: 180, bf: 20, factor: 1.0, rate: 46, type: 'Kraft' },
+      { id: 3, name: 'Fluting 2 (B-Flute)', gsm: 150, bf: 20, factor: 1.35, rate: 44, type: 'Kraft', isFlute: true },
+      { id: 4, name: 'Middle Liner 2', gsm: 180, bf: 20, factor: 1.0, rate: 46, type: 'Kraft' },
+      { id: 5, name: 'Fluting 3 (E-Flute)', gsm: 150, bf: 20, factor: 1.27, rate: 44, type: 'Kraft', isFlute: true },
+      { id: 6, name: 'Bottom Liner', gsm: 230, bf: 24, factor: 1.0, rate: 50, type: 'Kraft' }
+    ]
+  }
+];
+
+export const generatePliesForCount = (count = 3, flute = 'B', baseRate = 40) => {
+  const plies = [];
+  const c = parseInt(count, 10) || 3;
+  const fType = flute || 'B';
+  const fFactor = FLUTE_FACTORS[fType] || 1.35;
+
+  for (let i = 0; i < c; i++) {
+    const isFlute = i % 2 !== 0;
+    let factor = 1.0;
+    if (isFlute) {
+      if (fType === 'BC') factor = (i === 1 ? 1.43 : 1.35);
+      else if (fType === 'AB') factor = (i === 1 ? 1.52 : 1.35);
+      else factor = fFactor;
+    }
+    const name = isFlute 
+      ? `Fluting ${Math.ceil(i / 2)}` 
+      : (i === 0 ? 'Top Liner' : (i === c - 1 ? 'Bottom Liner' : `Middle Liner ${Math.floor(i / 2)}`));
+    
+    plies.push({
+      id: i,
+      name,
+      gsm: isFlute ? 120 : (i === 0 ? 180 : 150),
+      bf: isFlute ? 16 : 18,
+      type: i === 0 ? 'Golden' : 'Kraft',
+      factor,
+      rate: isFlute ? Math.max(20, baseRate - 3) : baseRate,
+      isFlute
+    });
+  }
+  return plies;
+};
+
+export const calculateSkuCost = (sku = {}) => {
+  const {
+    name = 'Standard Box',
+    itemType = 'Box',
+    size = '12x8x6',
+    unit = 'inch',
+    plyCount = 3,
+    fluteType = 'B',
+    paperRateMode = 'blended',
+    blendedPaperRate = 40,
+    plyDetails = [],
+    conversionRatePerKg = 0,
+    conversionCostPerPc = 2.5,
+    printingCostPerPc = 0.5,
+    stitchingGlueCostPerPc = 0.5,
+    freightCostPerPc = 0,
+    marginPercent = 12,
+    targetQty = 1000,
+    pocketsLength = 3,
+    pocketsWidth = 2,
+    manualOverrideWeightKg = '',
+    calcMode = 'auto'
+  } = sku;
+
+  const parsed = parseDimensionString(size, unit);
+  const { L_mm, W_mm, H_mm, L_in, W_in, H_in } = parsed;
+
+  let blankCutLengthMm = 0;
+  let blankDeckleMm = 0;
+  let boardAreaSqM = 0;
+
+  if (itemType === 'Partition') {
+    const pL = parseInt(pocketsLength, 10) || 1;
+    const pW = parseInt(pocketsWidth, 10) || 1;
+    const latPieces = Math.max(0, pL - 1);
+    const longPieces = Math.max(0, pW - 1);
+    boardAreaSqM = ((latPieces * W_mm * H_mm) + (longPieces * L_mm * H_mm)) / 1e6;
+    blankCutLengthMm = L_mm;
+    blankDeckleMm = W_mm;
+  } else if (itemType === 'Tray' || itemType === 'Lid') {
+    blankCutLengthMm = L_mm + (2 * H_mm) + 15;
+    blankDeckleMm = W_mm + (2 * H_mm) + 15;
+    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+  } else if (itemType === 'Sheet' || itemType === 'Plate') {
+    blankCutLengthMm = L_mm;
+    blankDeckleMm = W_mm;
+    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+  } else if (itemType === 'DieCut') {
+    blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 50;
+    blankDeckleMm = W_mm + H_mm + 25;
+    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+  } else {
+    // Standard RSC Box: Blank Length = (2L + 2W) + 40mm, Blank Width = (W + H) + 15mm
+    blankCutLengthMm = (2 * L_mm) + (2 * W_mm) + 40;
+    blankDeckleMm = W_mm + H_mm + 15;
+    boardAreaSqM = (blankCutLengthMm * blankDeckleMm) / 1e6;
+  }
+
+  const blankCutLengthIn = parseFloat((blankCutLengthMm / 25.4).toFixed(2));
+  const blankDeckleIn = parseFloat((blankDeckleMm / 25.4).toFixed(2));
+  const boardAreaSqFt = parseFloat((boardAreaSqM * 10.7639).toFixed(3));
+
+  let singleWeightKg = 0;
+  let singleMaterialCost = 0;
+
+  if (calcMode === 'manual' && parseFloat(manualOverrideWeightKg) > 0) {
+    singleWeightKg = parseFloat(manualOverrideWeightKg) || 0;
+    singleMaterialCost = singleWeightKg * (parseFloat(blendedPaperRate) || 40);
+  } else {
+    const plies = Array.isArray(plyDetails) && plyDetails.length > 0
+      ? plyDetails
+      : generatePliesForCount(plyCount, fluteType, blendedPaperRate);
+
+    plies.forEach(ply => {
+      const gsm = parseFloat(ply.gsm) || 120;
+      const factor = parseFloat(ply.factor) || (ply.isFlute ? (FLUTE_FACTORS[fluteType] || 1.35) : 1.0);
+      const plyRate = paperRateMode === 'detailed' ? (parseFloat(ply.rate) || blendedPaperRate) : blendedPaperRate;
+      const plyWt = (boardAreaSqM * gsm * factor) / 1000;
+      singleWeightKg += plyWt;
+      singleMaterialCost += (plyWt * plyRate);
+    });
+  }
+
+  const singleWeightGrams = parseFloat((singleWeightKg * 1000).toFixed(1));
+  const convByKg = parseFloat(conversionRatePerKg || 0) * singleWeightKg;
+  const convFixed = parseFloat(conversionCostPerPc || 0);
+  const totalConversionPerPc = convByKg + convFixed;
+
+  const totalFinishingPerPc = parseFloat(printingCostPerPc || 0) + parseFloat(stitchingGlueCostPerPc || 0) + parseFloat(freightCostPerPc || 0);
+  const netBaseCostPerPc = singleMaterialCost + totalConversionPerPc + totalFinishingPerPc;
+  const marginPct = parseFloat(marginPercent || 0);
+  const marginAmountPerPc = netBaseCostPerPc * (marginPct / 100);
+  const finalSellingRatePerPc = netBaseCostPerPc + marginAmountPerPc;
+
+  const qty = parseInt(targetQty, 10) || 1;
+  const totalBatchWeightKg = parseFloat((singleWeightKg * qty).toFixed(2));
+  const totalBatchWeightMT = parseFloat((totalBatchWeightKg / 1000).toFixed(3));
+  const totalBatchMaterialCost = parseFloat((singleMaterialCost * qty).toFixed(2));
+  const totalBatchConversionCost = parseFloat((totalConversionPerPc * qty).toFixed(2));
+  const totalBatchNetCost = parseFloat((netBaseCostPerPc * qty).toFixed(2));
+  const totalBatchSellingAmount = parseFloat((finalSellingRatePerPc * qty).toFixed(2));
+  const effectiveSellingRatePerKg = singleWeightKg > 0 ? parseFloat((finalSellingRatePerPc / singleWeightKg).toFixed(2)) : 0;
+
+  return {
+    ...sku,
+    parsedDimensions: parsed,
+    blankCutLengthMm: parseFloat(blankCutLengthMm.toFixed(1)),
+    blankDeckleMm: parseFloat(blankDeckleMm.toFixed(1)),
+    blankCutLengthIn,
+    blankDeckleIn,
+    boardAreaSqM: parseFloat(boardAreaSqM.toFixed(4)),
+    boardAreaSqFt,
+    singleWeightKg: parseFloat(singleWeightKg.toFixed(3)),
+    singleWeightGrams,
+    singleMaterialCost: parseFloat(singleMaterialCost.toFixed(2)),
+    totalConversionPerPc: parseFloat(totalConversionPerPc.toFixed(2)),
+    totalFinishingPerPc: parseFloat(totalFinishingPerPc.toFixed(2)),
+    netBaseCostPerPc: parseFloat(netBaseCostPerPc.toFixed(2)),
+    marginAmountPerPc: parseFloat(marginAmountPerPc.toFixed(2)),
+    finalSellingRatePerPc: parseFloat(finalSellingRatePerPc.toFixed(2)),
+    qty,
+    totalBatchWeightKg,
+    totalBatchWeightMT,
+    totalBatchMaterialCost,
+    totalBatchConversionCost,
+    totalBatchNetCost,
+    totalBatchSellingAmount,
+    effectiveSellingRatePerKg
+  };
 };
 
 export const normalizeLayers = (layers = [], flute = 'B') => {
@@ -7392,7 +7692,7 @@ export default function App() {
       <main className={`apex-main ${activeTab === 'dashboard' ? 'dash-mode' : ''}`}>
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
         {activeTab === 'calculator'      && canAccess(currentErpUser.role,'calculator')      && <CalculatorView companies={companies} items={unitItems} addLog={addLog} currentUser={currentErpUser} activeUnitId={uid} />}
-        {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} getColRef={getColRef} addLog={addLog} costings={costings} />}
+        {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} customers={unitCustomers} getColRef={getColRef} addLog={addLog} costings={costings} currentUser={currentErpUser} />}
         {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
         {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} wipStages={unitWipStages} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
         {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
@@ -7812,10 +8112,10 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
 
     const qty = parseInt(quantity);
     const sizeString = String(item.size || item.Size_mm || '0x0x0');
-    const dimensions = sizeString.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
-    const L = dimensions[0] || 0;
-    const W = dimensions[1] || 0;
-    const H = dimensions[2] || 0; 
+    const parsedDim = parseDimensionString(sizeString, item.unit || 'mm');
+    const L = parsedDim.L_mm;
+    const W = parsedDim.W_mm;
+    const H = parsedDim.H_mm; 
     
     const ply = parseInt(item.ply || item.Ply || 3);
     const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120); 
@@ -8425,49 +8725,490 @@ export function BoardCrossSectionDiagram({ layers = [], ply = 3, flute = 'B' }) 
   );
 }
 
-// --- COSTING VIEW ---
-function CostingView({ items = [], companies = [], getColRef, addLog, costings = [] }) {
-  // Helper to generate default plies
-  const generatePlies = (count) => {
-    const plies = [];
-    for (let i = 0; i < count; i++) {
-      const isFlute = i % 2 !== 0; 
-      plies.push({
-        id: i,
-        name: isFlute ? `Fluting ${Math.ceil(i/2)}` : (i === 0 ? 'Top Liner' : (i === count - 1 ? 'Bottom Liner' : `Middle Liner ${Math.floor(i/2)}`)),
-        gsm: isFlute ? 120 : 150,
-        bf: 18,
-        factor: isFlute ? 1.4 : 1.0,
-        rate: isFlute ? 35 : 40
-      });
-    }
-    return plies;
-  };
+// --- COSTING VIEW (MULTI-SKU COST CALCULATOR & SMART REPORT GENERATOR) ---
+function CostingView({ items = [], companies = [], customers = [], getColRef, addLog, costings = [], currentUser }) {
+  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
+  const visibleCustomers = allowedCompanyId === 'all' ? customers : customers.filter(c => c.companyId === allowedCompanyId || !c.companyId);
 
-  // Master State: Array of parts making up the Set
+  // Mode: 'matrix' (Multi-SKU Company Matrix) | 'set' (Composite Set Costing) | 'csv' (Batch CSV Costing)
+  const [activeMode, setActiveMode] = useState('matrix');
+  const [globalUnit, setGlobalUnit] = useState('inch'); // 'inch' | 'mm'
+  const [selectedCompanyId, setSelectedCompanyId] = useState(visibleCompanies[0]?.id || '');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [customClientName, setCustomClientName] = useState('');
+  const [quoteRef, setQuoteRef] = useState(() => `QT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`);
+  const [quoteDate, setQuoteDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [defaultPaperRate, setDefaultPaperRate] = useState(40); // ₹/kg
+  const [defaultMarginPct, setDefaultMarginPct] = useState(12); // %
+  const [defaultConvPerPc, setDefaultConvPerPc] = useState(2.5); // ₹/pc
+
+  // Master Multi-SKU State
+  const [skus, setSkus] = useState([
+    {
+      id: 'sku_1',
+      skuCode: 'SKU-001',
+      name: 'Master Shipper Carton',
+      itemType: 'Box',
+      size: '12x8x6',
+      unit: 'inch',
+      plyCount: 5,
+      fluteType: 'BC',
+      paperRateMode: 'blended',
+      blendedPaperRate: 42,
+      plyDetails: generatePliesForCount(5, 'BC', 42),
+      conversionRatePerKg: 0,
+      conversionCostPerPc: 3.5,
+      printingCostPerPc: 0.8,
+      stitchingGlueCostPerPc: 0.5,
+      freightCostPerPc: 0,
+      marginPercent: 12,
+      targetQty: 5000,
+      pocketsLength: 3,
+      pocketsWidth: 2,
+      manualOverrideWeightKg: '',
+      calcMode: 'auto',
+      expanded: false
+    },
+    {
+      id: 'sku_2',
+      skuCode: 'SKU-002',
+      name: 'Inner Product Box',
+      itemType: 'Box',
+      size: '6x4x3',
+      unit: 'inch',
+      plyCount: 3,
+      fluteType: 'B',
+      paperRateMode: 'blended',
+      blendedPaperRate: 38,
+      plyDetails: generatePliesForCount(3, 'B', 38),
+      conversionRatePerKg: 0,
+      conversionCostPerPc: 2.0,
+      printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.3,
+      freightCostPerPc: 0,
+      marginPercent: 12,
+      targetQty: 10000,
+      pocketsLength: 3,
+      pocketsWidth: 2,
+      manualOverrideWeightKg: '',
+      calcMode: 'auto',
+      expanded: false
+    },
+    {
+      id: 'sku_3',
+      skuCode: 'SKU-003',
+      name: 'Partition Divider Set',
+      itemType: 'Partition',
+      size: '12x8x6',
+      unit: 'inch',
+      plyCount: 3,
+      fluteType: 'B',
+      paperRateMode: 'blended',
+      blendedPaperRate: 36,
+      plyDetails: generatePliesForCount(3, 'B', 36),
+      conversionRatePerKg: 0,
+      conversionCostPerPc: 1.8,
+      printingCostPerPc: 0,
+      stitchingGlueCostPerPc: 0,
+      freightCostPerPc: 0,
+      marginPercent: 10,
+      targetQty: 5000,
+      pocketsLength: 4,
+      pocketsWidth: 3,
+      manualOverrideWeightKg: '',
+      calcMode: 'auto',
+      expanded: false
+    }
+  ]);
+
+  // Report Modal state
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [saveMsg, setSaveMsg] = useState('');
+  const [copiedMsg, setCopiedMsg] = useState('');
+  const [isSavingDb, setIsSavingDb] = useState(false);
+
+  // Composite Set State (Single Multi-Part Box Set)
   const [parts, setParts] = useState([{
     id: Date.now(),
-    partName: 'Main Box',
+    partName: 'Main Outer Box',
     qtyPerSet: 1,
-    calcMode: 'auto', // 'auto' or 'manual'
+    calcMode: 'auto',
     manualWeight: '',
     manualRate: '',
     itemType: 'Box',
-    size: '',
-    plyCount: 3,
-    conversionCost: 0,
+    size: '12x8x6',
+    unit: 'inch',
+    plyCount: 5,
+    fluteType: 'BC',
+    conversionCost: 3.5,
     pocketsLength: 3,
     pocketsWidth: 2,
-    plyDetails: generatePlies(3)
+    plyDetails: generatePliesForCount(5, 'BC', 42)
   }]);
 
-  const [saveTarget, setSaveTarget] = useState({ companyId: '', itemId: '' });
-  const [saveMsg, setSaveMsg] = useState('');
-  const [batchCostMode, setBatchCostMode] = useState(false);
+  // Batch CSV state
   const [batchCostResults, setBatchCostResults] = useState([]);
   const [batchCostError, setBatchCostError] = useState('');
 
-  // ── BATCH CSV COST CALCULATOR ──
+  // Determine Effective Client Name
+  const effectiveCompanyName = useMemo(() => {
+    if (customClientName.trim()) return customClientName.trim();
+    if (selectedCustomerId) {
+      const cust = customers.find(c => c.id === selectedCustomerId);
+      if (cust?.name) return cust.name;
+    }
+    if (selectedCompanyId) {
+      const comp = companies.find(c => c.id === selectedCompanyId);
+      if (comp?.name) return comp.name;
+    }
+    return 'Valued Client';
+  }, [customClientName, selectedCustomerId, selectedCompanyId, customers, companies]);
+
+  // Calculate All SKUs live
+  const calculatedSkus = useMemo(() => {
+    return skus.map(s => calculateSkuCost(s));
+  }, [skus]);
+
+  // Executive Totals for Multi-SKU Matrix
+  const totals = useMemo(() => {
+    const totalSkusCount = calculatedSkus.length;
+    const totalQuantityPcs = calculatedSkus.reduce((sum, s) => sum + s.qty, 0);
+    const totalWeightKg = calculatedSkus.reduce((sum, s) => sum + s.totalBatchWeightKg, 0);
+    const totalWeightMT = parseFloat((totalWeightKg / 1000).toFixed(3));
+    const totalMaterialCost = calculatedSkus.reduce((sum, s) => sum + s.totalBatchMaterialCost, 0);
+    const totalConversionCost = calculatedSkus.reduce((sum, s) => sum + s.totalBatchConversionCost, 0);
+    const totalNetCost = calculatedSkus.reduce((sum, s) => sum + s.totalBatchNetCost, 0);
+    const totalQuotationAmount = calculatedSkus.reduce((sum, s) => sum + s.totalBatchSellingAmount, 0);
+    const averageRatePerBox = totalQuantityPcs > 0 ? parseFloat((totalQuotationAmount / totalQuantityPcs).toFixed(2)) : 0;
+    const blendedRatePerKg = totalWeightKg > 0 ? parseFloat((totalQuotationAmount / totalWeightKg).toFixed(2)) : 0;
+    const overallMarginAmount = totalQuotationAmount - totalNetCost;
+    const overallMarginPct = totalNetCost > 0 ? parseFloat(((overallMarginAmount / totalNetCost) * 100).toFixed(1)) : 0;
+
+    return {
+      totalSkusCount,
+      totalQuantityPcs,
+      totalWeightKg: parseFloat(totalWeightKg.toFixed(2)),
+      totalWeightMT,
+      totalMaterialCost: parseFloat(totalMaterialCost.toFixed(2)),
+      totalConversionCost: parseFloat(totalConversionCost.toFixed(2)),
+      totalNetCost: parseFloat(totalNetCost.toFixed(2)),
+      totalQuotationAmount: parseFloat(totalQuotationAmount.toFixed(2)),
+      averageRatePerBox,
+      blendedRatePerKg,
+      overallMarginAmount: parseFloat(overallMarginAmount.toFixed(2)),
+      overallMarginPct
+    };
+  }, [calculatedSkus]);
+
+  // Add SKU with preset or defaults
+  const handleAddSku = (presetId = null) => {
+    const count = skus.length + 1;
+    const preset = COSTING_PRESETS.find(p => p.id === presetId);
+    
+    const newSku = {
+      id: `sku_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      skuCode: `SKU-${String(count).padStart(3, '0')}`,
+      name: preset ? `${preset.name} (${globalUnit === 'inch' ? '12x8x6 in' : '300x200x150 mm'})` : `Box SKU ${count}`,
+      itemType: 'Box',
+      size: globalUnit === 'inch' ? '12x8x6' : '300x200x150',
+      unit: globalUnit,
+      plyCount: preset ? preset.plyCount : 3,
+      fluteType: preset ? preset.fluteType : 'B',
+      paperRateMode: 'blended',
+      blendedPaperRate: preset ? preset.paperRate : defaultPaperRate,
+      plyDetails: preset ? [...preset.plies] : generatePliesForCount(3, 'B', defaultPaperRate),
+      conversionRatePerKg: 0,
+      conversionCostPerPc: preset ? preset.conversionCost : defaultConvPerPc,
+      printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.5,
+      freightCostPerPc: 0,
+      marginPercent: defaultMarginPct,
+      targetQty: 5000,
+      pocketsLength: 3,
+      pocketsWidth: 2,
+      manualOverrideWeightKg: '',
+      calcMode: 'auto',
+      expanded: false
+    };
+
+    setSkus([...skus, newSku]);
+    if (addLog) addLog(`Added SKU: ${newSku.name} (${newSku.size} ${newSku.unit})`);
+  };
+
+  // Duplicate SKU
+  const handleDuplicateSku = (skuId) => {
+    const original = skus.find(s => s.id === skuId);
+    if (!original) return;
+    const count = skus.length + 1;
+    const copy = {
+      ...original,
+      id: `sku_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      skuCode: `SKU-${String(count).padStart(3, '0')}`,
+      name: `${original.name} (Copy)`,
+      plyDetails: original.plyDetails.map(p => ({ ...p }))
+    };
+    setSkus([...skus, copy]);
+  };
+
+  // Remove SKU
+  const handleRemoveSku = (skuId) => {
+    if (skus.length <= 1) {
+      alert("At least one SKU must be present in the cost calculator.");
+      return;
+    }
+    setSkus(skus.filter(s => s.id !== skuId));
+  };
+
+  // Import SKU from Item Master database
+  const handleImportFromItems = (itemId) => {
+    if (!itemId) return;
+    const item = items.find(i => i.id === itemId);
+    if (!item) return;
+
+    const count = skus.length + 1;
+    const itemUnit = item.unit || 'mm';
+    const itemSize = item.size || item.Size_mm || '300x200x150';
+    const ply = parseInt(item.ply || item.Ply, 10) || 3;
+    const flute = item.fluteType || item.Flute || 'B';
+
+    let plies = generatePliesForCount(ply, flute, defaultPaperRate);
+    if (Array.isArray(item.paperLayers) && item.paperLayers.length > 0) {
+      plies = item.paperLayers.map((l, idx) => ({
+        id: idx,
+        name: l.name || `Layer ${idx + 1}`,
+        gsm: parseFloat(l.gsm) || 120,
+        bf: parseFloat(l.bf) || 18,
+        factor: parseFloat(l.takeUp || (l.isFlute ? (FLUTE_FACTORS[flute] || 1.35) : 1.0)),
+        rate: parseFloat(l.rate || defaultPaperRate),
+        type: l.type || l.colour || 'Kraft',
+        isFlute: !!l.isFlute
+      }));
+    }
+
+    const importedSku = {
+      id: `sku_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      skuCode: item.itemCode || `SKU-${String(count).padStart(3, '0')}`,
+      name: item.name || item.Item_Name || `Imported Box ${count}`,
+      itemType: item.itemType || item.Item_Type || 'Box',
+      size: itemSize,
+      unit: itemUnit,
+      plyCount: ply,
+      fluteType: flute,
+      paperRateMode: 'blended',
+      blendedPaperRate: defaultPaperRate,
+      plyDetails: plies,
+      conversionRatePerKg: 0,
+      conversionCostPerPc: parseFloat(item.conversionCost || defaultConvPerPc),
+      printingCostPerPc: 0.5,
+      stitchingGlueCostPerPc: 0.5,
+      freightCostPerPc: 0,
+      marginPercent: defaultMarginPct,
+      targetQty: 5000,
+      pocketsLength: 3,
+      pocketsWidth: 2,
+      manualOverrideWeightKg: item.unitWeightKg || '',
+      calcMode: 'auto',
+      expanded: false
+    };
+
+    setSkus([...skus, importedSku]);
+    if (addLog) addLog(`Imported ${importedSku.name} from Item Master`);
+  };
+
+  // Update field on SKU
+  const handleUpdateSku = (skuId, field, value) => {
+    setSkus(prev => prev.map(s => {
+      if (s.id !== skuId) return s;
+      const upd = { ...s, [field]: value };
+      
+      // Auto-regenerate plies if plyCount or fluteType changes
+      if (field === 'plyCount' || field === 'fluteType') {
+        const pCount = field === 'plyCount' ? parseInt(value, 10) : s.plyCount;
+        const fType = field === 'fluteType' ? value : s.fluteType;
+        upd.plyDetails = generatePliesForCount(pCount, fType, upd.blendedPaperRate);
+      }
+      return upd;
+    }));
+  };
+
+  // Update specific ply layer
+  const handleUpdatePly = (skuId, plyIndex, field, value) => {
+    setSkus(prev => prev.map(s => {
+      if (s.id !== skuId) return s;
+      const newPlies = [...s.plyDetails];
+      newPlies[plyIndex] = {
+        ...newPlies[plyIndex],
+        [field]: (field === 'name' || field === 'type') ? value : (parseFloat(value) || 0)
+      };
+      return { ...s, plyDetails: newPlies };
+    }));
+  };
+
+  // Toggle Global Unit (inch <-> mm) and optionally convert existing sizes
+  const handleToggleGlobalUnit = (newUnit) => {
+    if (newUnit === globalUnit) return;
+    setGlobalUnit(newUnit);
+    // Convert all SKU sizes so physical size remains the same
+    setSkus(prev => prev.map(s => {
+      const parsed = parseDimensionString(s.size, s.unit);
+      let newSize = s.size;
+      if (newUnit === 'inch') {
+        newSize = parsed.H_in > 0 ? `${parsed.L_in}x${parsed.W_in}x${parsed.H_in}` : `${parsed.L_in}x${parsed.W_in}`;
+      } else {
+        newSize = parsed.H_mm > 0 ? `${parsed.L_mm}x${parsed.W_mm}x${parsed.H_mm}` : `${parsed.L_mm}x${parsed.W_mm}`;
+      }
+      return { ...s, unit: newUnit, size: newSize };
+    }));
+  };
+
+  // Export Multi-SKU Costing Sheet to CSV
+  const handleExportCsv = () => {
+    const headers = [
+      'Quote Ref', 'Client Company', 'Date',
+      'SKU Code', 'Item Name', 'Box Type', 'Input Size', 'Unit',
+      'Length (mm)', 'Width (mm)', 'Height (mm)', 'Length (in)', 'Width (in)', 'Height (in)',
+      'Ply', 'Flute Profile',
+      'Blank Cut Length (mm)', 'Blank Deckle (mm)', 'Blank Cut Length (in)', 'Blank Deckle (in)', 'Board Area (sq.m)',
+      'Box Weight (grams)', 'Box Weight (kg)',
+      'Paper Rate (₹/kg)', 'Paper Material Cost (₹/box)',
+      'Conversion Cost (₹/box)', 'Finishing & Transport (₹/box)', 'Net Cost (₹/box)',
+      'Margin (%)', 'Quoted Rate (₹/box)',
+      'Target Qty (Pcs)', 'Total Order Weight (kg)', 'Total Order Weight (MT)', 'Total Order Amount (₹)',
+      'Effective Rate (₹/kg)'
+    ];
+
+    const rows = calculatedSkus.map(s => [
+      `"${quoteRef}"`, `"${effectiveCompanyName}"`, `"${quoteDate}"`,
+      `"${s.skuCode}"`, `"${s.name}"`, `"${s.itemType}"`, `"${s.size}"`, `"${s.unit}"`,
+      s.parsedDimensions.L_mm, s.parsedDimensions.W_mm, s.parsedDimensions.H_mm,
+      s.parsedDimensions.L_in, s.parsedDimensions.W_in, s.parsedDimensions.H_in,
+      s.plyCount, `"${s.fluteType}"`,
+      s.blankCutLengthMm, s.blankDeckleMm, s.blankCutLengthIn, s.blankDeckleIn, s.boardAreaSqM,
+      s.singleWeightGrams, s.singleWeightKg,
+      s.blendedPaperRate, s.singleMaterialCost,
+      s.totalConversionPerPc, s.totalFinishingPerPc, s.netBaseCostPerPc,
+      s.marginPercent, s.finalSellingRatePerPc,
+      s.qty, s.totalBatchWeightKg, s.totalBatchWeightMT, s.totalBatchSellingAmount,
+      s.effectiveSellingRatePerKg
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${effectiveCompanyName.replace(/[^a-zA-Z0-9]/g, '_')}_Multi_SKU_Costing_${quoteDate}.csv`;
+    link.click();
+  };
+
+  // Copy Quotation Summary for WhatsApp / Email
+  const handleCopyQuote = () => {
+    const skuLines = calculatedSkus.map((s, idx) => {
+      const dimText = s.unit === 'inch' 
+        ? `${s.parsedDimensions.textInch} (${s.parsedDimensions.textMm})`
+        : `${s.parsedDimensions.textMm} (${s.parsedDimensions.textInch})`;
+      return `${idx + 1}. *${s.name}* [${s.skuCode}]\n   • Size: ${dimText}\n   • Spec: ${s.plyCount}-Ply (${s.fluteType}-Flute) | Wt: ~${s.singleWeightGrams}g (${s.singleWeightKg} kg)\n   • Qty: ${s.qty.toLocaleString()} Pcs @ *₹${s.finalSellingRatePerPc.toFixed(2)} / Box*\n   • Total: ₹${s.totalBatchSellingAmount.toLocaleString('en-IN')}`;
+    }).join('\n\n');
+
+    const summaryText = `📦 *CORRUGATED BOX COMMERCIAL QUOTATION*
+*Client / Company:* ${effectiveCompanyName}
+*Date:* ${quoteDate} | *Ref:* ${quoteRef}
+*Validity:* 30 Days | *GST:* Extra as applicable
+══════════════════════════════════════
+${skuLines}
+══════════════════════════════════════
+📊 *ORDER CONSOLIDATION SUMMARY:*
+• *Total SKUs:* ${totals.totalSkusCount} Items
+• *Total Order Quantity:* ${totals.totalQuantityPcs.toLocaleString()} Boxes
+• *Total Order Tonnage:* ${totals.totalWeightKg.toLocaleString()} kg (${totals.totalWeightMT} MT)
+• *Blended Rate / KG:* ₹${totals.blendedRatePerKg.toFixed(2)} / kg
+• *GRAND TOTAL ORDER VALUE:* ₹${totals.totalQuotationAmount.toLocaleString('en-IN')} (Ex-Factory)
+
+_Generated via Corrugated Box Smart ERP Engine_`;
+
+    navigator.clipboard.writeText(summaryText).then(() => {
+      setCopiedMsg('✓ Copied formatted quote to clipboard!');
+      setTimeout(() => setCopiedMsg(''), 4000);
+    });
+  };
+
+  // Save all calculated SKUs into ERP Database (Item Master & Costings)
+  const handleSaveAllSkusToDb = async () => {
+    if (!getColRef) return alert('Database connection not available.');
+    setIsSavingDb(true);
+    try {
+      let savedCount = 0;
+      for (const s of calculatedSkus) {
+        const itemDoc = {
+          name: s.name,
+          Item_Name: s.name,
+          itemCode: s.skuCode,
+          companyId: selectedCompanyId || visibleCompanies[0]?.id || '',
+          customerId: selectedCustomerId || '',
+          clientName: effectiveCompanyName,
+          itemType: s.itemType,
+          size: s.size,
+          unit: s.unit,
+          length: s.parsedDimensions.L_mm,
+          width: s.parsedDimensions.W_mm,
+          height: s.parsedDimensions.H_mm,
+          lengthInch: s.parsedDimensions.L_in,
+          widthInch: s.parsedDimensions.W_in,
+          heightInch: s.parsedDimensions.H_in,
+          ply: s.plyCount,
+          fluteType: s.fluteType,
+          paperGsm: s.plyDetails[0]?.gsm || 140,
+          paperLayers: s.plyDetails,
+          paperRate: s.blendedPaperRate,
+          conversionCost: s.totalConversionPerPc,
+          unitRate: s.finalSellingRatePerPc,
+          sellingPrice: s.finalSellingRatePerPc,
+          unitWeightKg: s.singleWeightKg,
+          unitWeightGrams: s.singleWeightGrams,
+          blankLengthMm: s.blankCutLengthMm,
+          blankDeckleMm: s.blankDeckleMm,
+          boardAreaSqM: s.boardAreaSqM,
+          marginPercent: s.marginPercent,
+          updatedAt: new Date().toISOString()
+        };
+
+        // Add to items collection
+        await addDoc(getColRef('items'), itemDoc);
+
+        // Add to costings collection
+        await addDoc(getColRef('costings'), {
+          companyId: selectedCompanyId || '',
+          customerId: selectedCustomerId || '',
+          clientName: effectiveCompanyName,
+          itemName: s.name,
+          itemCode: s.skuCode,
+          size: s.size,
+          unit: s.unit,
+          unitCost: s.netBaseCostPerPc,
+          unitSellingRate: s.finalSellingRatePerPc,
+          unitWeight: s.singleWeightKg,
+          blendedRate: s.effectiveSellingRatePerKg,
+          paperMaterialCost: s.singleMaterialCost,
+          conversionCost: s.totalConversionPerPc,
+          marginPercent: s.marginPercent,
+          quoteRef,
+          savedAt: new Date().toISOString()
+        });
+
+        savedCount++;
+      }
+
+      setSaveMsg(`✓ Successfully saved all ${savedCount} SKUs to Database (Items & Costings)!`);
+      if (addLog) addLog(`Saved ${savedCount} calculated SKUs for ${effectiveCompanyName} to Item Master`);
+      setTimeout(() => setSaveMsg(''), 5000);
+    } catch (err) {
+      alert(`Error saving SKUs: ${err.message}`);
+    } finally {
+      setIsSavingDb(false);
+    }
+  };
+
+  // CSV Batch Handler
   const handleBatchCostCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -8484,34 +9225,22 @@ function CostingView({ items = [], companies = [], getColRef, addLog, costings =
           const row = lines[i].split(',');
           const name     = get(row, 'name', 'item', 'code', 'desc') || `Row ${i}`;
           const type     = get(row, 'type') || 'Box';
-          const size     = get(row, 'size', 'dimension') || '';
-          const dims     = size.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
-          const L = dims[0]||0, W = dims[1]||0, H = dims[2]||0;
-          const ply      = parseInt(get(row, 'ply', 'layer')) || 3;
+          const size     = get(row, 'size', 'dimension') || '12x8x6';
+          const unit     = get(row, 'unit') || (size.includes('"') ? 'inch' : 'mm');
+          const ply      = parseInt(get(row, 'ply', 'layer'), 10) || 3;
           const gsm      = parseFloat(get(row, 'gsm')) || 120;
-          const bf       = get(row, 'bf') || '-';
+          const flute    = get(row, 'flute') || 'B';
           const rate     = parseFloat(get(row, 'rate', 'price', '₹')) || 40;
-          const conv     = parseFloat(get(row, 'conv', 'conversion', 'mfg')) || 0;
-          const qty      = parseInt(get(row, 'qty', 'quantity')) || 1;
+          const conv     = parseFloat(get(row, 'conv', 'conversion', 'mfg')) || 2.5;
+          const qty      = parseInt(get(row, 'qty', 'quantity'), 10) || 1000;
+          const margin   = parseFloat(get(row, 'margin')) || 12;
 
-          // Geometry (same logic as CostingView engine)
-          let boardAreaSqM = 0;
-          if (type === 'Tray' || type === 'Lid') { boardAreaSqM = ((L + H*2 + 15) * (W + H*2 + 15)) / 1e6; }
-          else if (type === 'Sheet' || type === 'Plate') { boardAreaSqM = (L * W) / 1e6; }
-          else { boardAreaSqM = ((L+W)*2+50) * (W+H+20) / 1e6; }
+          const calculated = calculateSkuCost({
+            name, itemType: type, size, unit, plyCount: ply, fluteType: flute,
+            blendedPaperRate: rate, conversionCostPerPc: conv, targetQty: qty, marginPercent: margin
+          });
 
-          // Ply costs (simplified: single GSM & rate per ply, alternating liner/flute)
-          const numFlutes = Math.floor(ply / 2);
-          const numLiners = Math.ceil(ply / 2);
-          const linerCost = boardAreaSqM * numLiners * gsm * 1.0 / 1000 * rate;
-          const fluteCost = boardAreaSqM * numFlutes * gsm * 1.4 / 1000 * rate;
-          const materialCost = linerCost + fluteCost;
-          const totalCost = materialCost + conv;
-          const weightKg  = (boardAreaSqM * numLiners * gsm * 1.0 / 1000) + (boardAreaSqM * numFlutes * gsm * 1.4 / 1000);
-
-          results.push({ name, type, size: size||`${L}x${W}x${H}`, ply, gsm, bf, rate, conv, qty,
-            boardAreaSqM: boardAreaSqM.toFixed(4), weightKg: weightKg.toFixed(3),
-            unitCost: totalCost.toFixed(2), totalCost: (totalCost * qty).toFixed(2) });
+          results.push(calculated);
         }
         setBatchCostResults(results);
       } catch (err) { setBatchCostError('Parse error: ' + err.message); }
@@ -8520,463 +9249,1220 @@ function CostingView({ items = [], companies = [], getColRef, addLog, costings =
     e.target.value = '';
   };
 
-  const addPart = () => {
-    setParts([...parts, {
-      id: Date.now(), partName: `Part ${parts.length + 1}`, qtyPerSet: 1, calcMode: 'auto', manualWeight: '', manualRate: '', itemType: 'Partition', size: '', plyCount: 3, conversionCost: 0, pocketsLength: 3, pocketsWidth: 2, plyDetails: generatePlies(3)
-    }]);
-  };
-
-  const removePart = (id) => {
-    if (parts.length > 1) {
-      setParts(parts.filter(p => p.id !== id));
-    } else {
-      alert("A set must have at least one part.");
-    }
-  };
-
-  const handlePartChange = (id, field, value) => {
-    setParts(parts.map(p => {
-      if (p.id === id) {
-        const updated = { ...p, [field]: value };
-        // Auto-regenerate plies if plyCount changes
-        if (field === 'plyCount') {
-          updated.plyDetails = generatePlies(parseInt(value) || 3);
-        }
-        return updated;
-      }
-      return p;
-    }));
-  };
-
-  const handlePlyChange = (partId, plyIndex, field, value) => {
-    setParts(parts.map(p => {
-      if (p.id === partId) {
-        const newPlies = [...p.plyDetails];
-        newPlies[plyIndex][field] = parseFloat(value) || 0;
-        return { ...p, plyDetails: newPlies };
-      }
-      return p;
-    }));
-  };
-
-  // --- LIVE MATH ENGINE ---
-  const calculatedParts = parts.map(part => {
-    const qty = parseInt(part.qtyPerSet) || 1;
-
-    // DIRECT WEIGHT ENTRY BYPASS
-    if (part.calcMode === 'manual') {
-      const singleWeightKg = parseFloat(part.manualWeight) || 0;
-      const singleMaterialCost = singleWeightKg * (parseFloat(part.manualRate) || 0);
-      const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
-      
-      return { 
-        ...part, boardAreaSqM: 0, uiDetails: {}, singleWeightKg, singleMaterialCost, singleTotalCost,
-        totalWeightKg: singleWeightKg * qty, totalCost: singleTotalCost * qty
-      };
-    }
-
-    // AUTO-GEOMETRY CALCULATION
-    const dims = part.size.toLowerCase().replace(/\*/g, 'x').split('x').map(s => parseFloat(s.trim()) || 0);
-    const L = dims[0] || 0; const W = dims[1] || 0; const H = dims[2] || 0;
-    
-    let boardAreaSqM = 0;
-    let uiDetails = {};
-
-    if (part.itemType === 'Partition') {
-        const pL = parseInt(part.pocketsLength) || 1;
-        const pW = parseInt(part.pocketsWidth) || 1;
-        const latPieces = Math.max(0, pL - 1);  
-        const longPieces = Math.max(0, pW - 1); 
-        boardAreaSqM = ((latPieces * W * H) + (longPieces * L * H)) / 1000000;
-        uiDetails = { latPieces, longPieces };
-    } else {
-        let bl = 0, bw = 0;
-        if (part.itemType === 'Box') { bl = (L+W)*2+50; bw = W+H+20; }
-        else if (part.itemType === 'Tray') { bl = L+(H*2)+15; bw = W+(H*2)+15; }
-        else { bl = L; bw = W; }
-        boardAreaSqM = (bl * bw) / 1000000;
-        uiDetails = { bl, bw };
-    }
-
-    let singleWeightKg = 0;
-    let singleMaterialCost = 0;
-
-    part.plyDetails.forEach(ply => {
-      const plyWt = (boardAreaSqM * ply.gsm * ply.factor) / 1000;
-      singleWeightKg += plyWt;
-      singleMaterialCost += (plyWt * ply.rate);
-    });
-
-    const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
-
-    return { 
-      ...part, boardAreaSqM, uiDetails, singleWeightKg, singleMaterialCost, singleTotalCost,
-      totalWeightKg: singleWeightKg * qty, totalCost: singleTotalCost * qty
-    };
-  });
-
-  const grandTotalCost = calculatedParts.reduce((sum, p) => sum + p.totalCost, 0);
-  const grandTotalWeight = calculatedParts.reduce((sum, p) => sum + p.totalWeightKg, 0);
-  const blendedRatePerKg = grandTotalWeight > 0 ? (grandTotalCost / grandTotalWeight) : 0;
-
   return (
-    <div className="max-w-7xl mx-auto pb-12">
-      {/* ── MODE TOGGLE ── */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
-        <h2 className="text-2xl font-bold">Cost Calculator</h2>
-        <div style={{ display:'flex', gap:8 }}>
-          <button onClick={() => setBatchCostMode(false)} className={`apex-btn ${!batchCostMode ? 'apex-btn-primary' : 'apex-btn-secondary'}`} style={{ fontSize:12 }}>Single Set Builder</button>
-          <button onClick={() => { setBatchCostMode(true); }} className={`apex-btn ${batchCostMode ? 'apex-btn-primary' : 'apex-btn-secondary'}`} style={{ fontSize:12 }}>Batch CSV Costing</button>
+    <div className="max-w-7xl mx-auto pb-16 space-y-6">
+      
+      {/* ── TOP HERO BANNER & MODE CONTROLS ── */}
+      <div className="bg-gradient-to-r from-stone-900 via-stone-850 to-slate-900 text-white rounded-2xl p-6 shadow-xl border border-stone-750 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <span className="p-2 bg-amber-500/20 text-amber-400 rounded-xl text-xl">📦</span>
+            <h2 className="text-2xl font-black tracking-tight text-white">Smart Corrugated Cost Calculator</h2>
+            <span className="text-[11px] font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              Inch &amp; MM Multi-SKU Engine
+            </span>
+          </div>
+          <p className="text-xs text-stone-300">
+            Calculate exact paper weights, blank sizes, material costs, and selling rates across multiple company SKUs simultaneously.
+          </p>
+        </div>
+
+        {/* Global Unit & Mode Toggles */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Unit Toggle */}
+          <div className="flex items-center bg-stone-950 p-1 rounded-xl border border-stone-700">
+            <span className="text-[11px] font-bold text-stone-400 px-2 uppercase tracking-wider">Unit:</span>
+            <button
+              type="button"
+              onClick={() => handleToggleGlobalUnit('inch')}
+              className={`px-3 py-1 text-xs font-black rounded-lg transition ${globalUnit === 'inch' ? 'bg-amber-500 text-stone-950 shadow-md' : 'text-stone-300 hover:text-white'}`}
+            >
+              Inch (in)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleGlobalUnit('mm')}
+              className={`px-3 py-1 text-xs font-black rounded-lg transition ${globalUnit === 'mm' ? 'bg-amber-500 text-stone-950 shadow-md' : 'text-stone-300 hover:text-white'}`}
+            >
+              Millimeter (mm)
+            </button>
+          </div>
+
+          {/* Mode Switcher */}
+          <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-700">
+            <button
+              type="button"
+              onClick={() => setActiveMode('matrix')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition ${activeMode === 'matrix' ? 'bg-stone-100 text-stone-900 shadow' : 'text-stone-400 hover:text-white'}`}
+            >
+              Multi-SKU Matrix
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMode('set')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition ${activeMode === 'set' ? 'bg-stone-100 text-stone-900 shadow' : 'text-stone-400 hover:text-white'}`}
+            >
+              Composite Set
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMode('csv')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition ${activeMode === 'csv' ? 'bg-stone-100 text-stone-900 shadow' : 'text-stone-400 hover:text-white'}`}
+            >
+              Batch CSV
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* ── SINGLE SET MODE ── */}
-      {!batchCostMode && (
-      <div className="flex flex-col xl:flex-row gap-8 items-start">
-      
-      {/* LEFT COLUMN: PARTS BUILDER */}
-      <div className="flex-1 space-y-6 w-full">
-        <div className="flex justify-between items-center">
-           <h2 className="text-2xl font-bold">Composite Set Costing</h2>
-           <button onClick={addPart} className="bg-stone-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-stone-800 transition">+ Add Another Part to Set</button>
-        </div>
-
-        {calculatedParts.map((part, index) => (
-          <div key={part.id} className="bg-white rounded-xl shadow-sm border border-stone-300 overflow-hidden">
-            
-            {/* PART HEADER */}
-            <div className="bg-stone-100 p-4 border-b border-stone-200 flex flex-wrap gap-4 justify-between items-center">
-               <div className="flex items-center gap-3 flex-1 min-w-[250px]">
-                  <span className="bg-stone-800 text-white font-bold w-6 h-6 flex items-center justify-center rounded-full text-xs">{index + 1}</span>
-                  <input type="text" className="p-1.5 border border-stone-300 rounded font-bold text-stone-800 bg-white" placeholder="Part Name (e.g. Outer Box)" value={part.partName} onChange={e => handlePartChange(part.id, 'partName', e.target.value)} />
-               </div>
-               <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                     <label className="text-xs font-bold text-stone-600 uppercase">Qty Per Set:</label>
-                     <input type="number" min="1" className="w-16 p-1.5 border border-blue-300 bg-blue-50 rounded font-bold text-blue-900 text-center" value={part.qtyPerSet} onChange={e => handlePartChange(part.id, 'qtyPerSet', e.target.value)} />
-                  </div>
-                  {parts.length > 1 && <button onClick={() => removePart(part.id)} className="text-red-500 hover:text-red-700 text-sm font-bold px-2">Remove</button>}
-               </div>
+      {/* ========================================================================= */}
+      {/* ── MODE 1: MULTI-SKU COMPANY MATRIX ── */}
+      {/* ========================================================================= */}
+      {activeMode === 'matrix' && (
+        <div className="space-y-6">
+          
+          {/* CLIENT COMPANY & COMMERCIAL HEADER CARD */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-stone-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+            <div>
+              <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1.5">
+                Client / Customer Company
+              </label>
+              <select
+                className="w-full p-2.5 border border-stone-300 rounded-xl text-xs font-bold bg-stone-50 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                value={selectedCustomerId}
+                onChange={e => {
+                  const cid = e.target.value;
+                  setSelectedCustomerId(cid);
+                  const cust = customers.find(c => c.id === cid);
+                  if (cust?.name) setCustomClientName(cust.name);
+                }}
+              >
+                <option value="">-- Custom / Direct Client --</option>
+                {visibleCustomers.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.clientType || 'Client'})</option>
+                ))}
+              </select>
             </div>
 
-            {/* PART CONFIGURATION */}
-            <div className="p-6 border-b border-stone-100">
-               
-               {/* CALCULATION MODE TOGGLE */}
-               <div className="flex items-center gap-6 mb-6 pb-4 border-b border-stone-200">
-                 <label className="flex items-center gap-2 cursor-pointer">
-                   <input type="radio" checked={part.calcMode === 'auto'} onChange={() => handlePartChange(part.id, 'calcMode', 'auto')} className="accent-stone-900 w-4 h-4" />
-                   <span className="text-sm font-bold text-stone-700">Calculate from Plies & Dimensions</span>
-                 </label>
-                 <label className="flex items-center gap-2 cursor-pointer">
-                   <input type="radio" checked={part.calcMode === 'manual'} onChange={() => handlePartChange(part.id, 'calcMode', 'manual')} className="accent-stone-900 w-4 h-4" />
-                   <span className="text-sm font-bold text-stone-700">Direct Weight Entry</span>
-                 </label>
-               </div>
-
-               {part.calcMode === 'manual' ? (
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                   <div>
-                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Weight per Piece (KG)</label>
-                     <input type="number" step="0.001" className="w-full p-3 border border-orange-300 rounded-md bg-orange-50 font-mono text-orange-900 font-bold text-lg" placeholder="e.g. 0.450" value={part.manualWeight} onChange={e => handlePartChange(part.id, 'manualWeight', e.target.value)} />
-                   </div>
-                   <div>
-                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Blended Material Rate (₹/KG)</label>
-                     <input type="number" step="0.01" className="w-full p-3 border border-stone-300 rounded-md bg-white font-mono text-lg" placeholder="e.g. 42.50" value={part.manualRate} onChange={e => handlePartChange(part.id, 'manualRate', e.target.value)} />
-                   </div>
-                   <div>
-                     <label className="block text-xs font-bold text-stone-500 mb-1 uppercase tracking-wider">Conversion/Mfg Cost (₹)</label>
-                     <input type="number" step="0.01" className="w-full p-3 border border-stone-300 rounded-md bg-white font-mono text-lg" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
-                   </div>
-                 </div>
-               ) : (
-                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                   <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-medium text-stone-500 mb-1">Item Type</label>
-                          <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-bold" value={part.itemType} onChange={e => handlePartChange(part.id, 'itemType', e.target.value)}>
-                            <option value="Box">Standard Box</option><option value="Tray">Tray</option><option value="Partition">Partition (Divider)</option><option value="Sheet">Flat Sheet</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-stone-500 mb-1">Number of Plies</label>
-                          <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={part.plyCount} onChange={e => handlePartChange(part.id, 'plyCount', e.target.value)}>
-                            <option value={2}>2 Ply</option><option value={3}>3 Ply</option><option value={5}>5 Ply</option><option value={7}>7 Ply</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-stone-500 mb-1">
-                          {part.itemType === 'Partition' ? 'Inner Box Size (L x W x H) mm' : (part.itemType === 'Sheet' ? 'Size (L x W) mm' : 'Size (L x W x H) mm')}
-                        </label>
-                        <input type="text" placeholder="e.g. 250x200x150" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.size} onChange={e => handlePartChange(part.id, 'size', e.target.value)} />
-                      </div>
-
-                      {part.itemType === 'Partition' && (
-                        <div className="grid grid-cols-2 gap-4 bg-blue-50 p-3 rounded border border-blue-100">
-                          <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Length</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsLength} onChange={e => handlePartChange(part.id, 'pocketsLength', e.target.value)} /></div>
-                          <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Pockets along Width</label><input type="number" min="1" className="w-full p-1.5 border border-blue-300 rounded text-sm bg-white" value={part.pocketsWidth} onChange={e => handlePartChange(part.id, 'pocketsWidth', e.target.value)} /></div>
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="block text-xs font-medium text-stone-500 mb-1">Conversion/Mfg Cost (Per Piece)</label>
-                        <input type="number" step="0.01" className="w-full p-2 border border-stone-300 rounded-md bg-white font-mono" value={part.conversionCost} onChange={e => handlePartChange(part.id, 'conversionCost', e.target.value)} />
-                      </div>
-                   </div>
-
-                   <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 flex flex-col justify-center">
-                      <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 border-b border-stone-200 pb-2">Single Piece Geometry</p>
-                      {part.boardAreaSqM > 0 ? (
-                        <div className="space-y-2">
-                           {part.itemType === 'Partition' ? (
-                             <>
-                               <p className="flex justify-between text-sm"><span className="text-stone-500">Longitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.longPieces} pcs</span></p>
-                               <p className="flex justify-between text-sm"><span className="text-stone-500">Latitudinal Strips:</span> <span className="font-mono text-stone-900">{part.uiDetails.latPieces} pcs</span></p>
-                             </>
-                           ) : (
-                             <>
-                               <p className="flex justify-between text-sm"><span className="text-stone-500">Board Length:</span> <span className="font-mono text-stone-900">{part.uiDetails.bl?.toFixed(1)} mm</span></p>
-                               <p className="flex justify-between text-sm"><span className="text-stone-500">Board Width:</span> <span className="font-mono text-stone-900">{part.uiDetails.bw?.toFixed(1)} mm</span></p>
-                             </>
-                           )}
-                           <p className="flex justify-between text-base font-bold pt-2 border-t border-stone-200 mt-2"><span className="text-stone-700">Total Flat Area:</span> <span className="font-mono text-blue-700">{part.boardAreaSqM.toFixed(4)} m²</span></p>
-                        </div>
-                      ) : (
-                        <p className="text-stone-400 text-sm text-center italic">Enter dimensions to calculate geometry.</p>
-                      )}
-                   </div>
-                 </div>
-               )}
+            <div>
+              <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1.5">
+                Client Name / Quotation Header
+              </label>
+              <input
+                type="text"
+                className="w-full p-2.5 border border-stone-300 rounded-xl text-xs font-bold bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                placeholder="e.g. Rajeshwaree Packaging Pvt Ltd"
+                value={customClientName}
+                onChange={e => setCustomClientName(e.target.value)}
+              />
             </div>
 
-            {/* PLY TABLE (ONLY VISIBLE IF NOT MANUAL) */}
-            {part.calcMode === 'auto' && (
-              <div className="overflow-x-auto p-4 bg-white">
-                <table className="w-full text-left">
-                  <thead className="text-stone-400 text-xs uppercase tracking-wider">
-                    <tr><th className="px-2 pb-2">Layer</th><th className="px-2 pb-2">GSM</th><th className="px-2 pb-2">BF</th><th className="px-2 pb-2">Flute Factor</th><th className="px-2 pb-2">Rate/KG</th><th className="px-2 pb-2 text-right">Weight (1 pc)</th><th className="px-2 pb-2 text-right">Cost (1 pc)</th></tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {part.plyDetails.map((ply, idx) => {
-                      const plyWeightKg = (part.boardAreaSqM * ply.gsm * ply.factor) / 1000;
-                      const plyCost = plyWeightKg * ply.rate;
-                      return (
-                        <tr key={ply.id} className="hover:bg-stone-50">
-                          <td className="p-2 text-sm font-medium text-stone-600">{ply.name}</td>
-                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.gsm} onChange={e => handlePlyChange(part.id, idx, 'gsm', e.target.value)} /></td>
-                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.bf} onChange={e => handlePlyChange(part.id, idx, 'bf', e.target.value)} /></td>
-                          <td className="p-1"><input type="number" step="0.1" className="w-16 p-1.5 border rounded text-xs" value={ply.factor} onChange={e => handlePlyChange(part.id, idx, 'factor', e.target.value)} /></td>
-                          <td className="p-1"><input type="number" className="w-16 p-1.5 border rounded text-xs" value={ply.rate} onChange={e => handlePlyChange(part.id, idx, 'rate', e.target.value)} /></td>
-                          <td className="p-2 text-right text-sm font-mono text-stone-700">{plyWeightKg > 0 ? `${plyWeightKg.toFixed(3)} kg` : '-'}</td>
-                          <td className="p-2 text-right text-sm font-mono font-bold text-stone-800">{plyCost > 0 ? `₹${plyCost.toFixed(2)}` : '-'}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1.5">
+                  Quote Ref #
+                </label>
+                <input
+                  type="text"
+                  className="w-full p-2.5 border border-stone-300 rounded-xl text-xs font-mono font-bold bg-stone-50"
+                  value={quoteRef}
+                  onChange={e => setQuoteRef(e.target.value)}
+                />
               </div>
-            )}
+              <div>
+                <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1.5">
+                  Quote Date
+                </label>
+                <input
+                  type="date"
+                  className="w-full p-2.5 border border-stone-300 rounded-xl text-xs font-bold bg-stone-50"
+                  value={quoteDate}
+                  onChange={e => setQuoteDate(e.target.value)}
+                />
+              </div>
+            </div>
 
-            {/* PART TOTAL FOOTER (SHOWS UNIT WEIGHT) */}
-            <div className="bg-stone-800 text-white p-4 flex flex-wrap justify-between items-center gap-4">
-               <div className="text-sm flex flex-wrap items-center gap-4 md:gap-8">
-                  <div>
-                    <span className="text-stone-400 mr-2 uppercase text-[10px] tracking-wider block">Unit Cost</span> 
-                    <span className="font-mono font-bold text-green-400 text-lg">₹{part.singleTotalCost.toFixed(2)}</span>
-                  </div>
-                  <div>
-                    <span className="text-stone-400 mr-2 uppercase text-[10px] tracking-wider block">Unit Weight</span> 
-                    <span className="font-mono font-bold text-orange-400 text-lg">{part.singleWeightKg.toFixed(3)} kg</span>
-                  </div>
-               </div>
-               <div className="text-right">
-                  <span className="text-stone-400 mr-2 uppercase text-xs tracking-wider block mb-1">Subtotal ({part.qtyPerSet}x Qty)</span> 
-                  <span className="font-mono text-2xl font-bold">₹{part.totalCost.toFixed(2)}</span>
-               </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsReportModalOpen(true)}
+                className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black text-xs py-2.5 px-4 rounded-xl shadow-md transition transform active:scale-95"
+              >
+                <span>📊</span> Generate Smart Report
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyQuote}
+                title="Copy WhatsApp / Email Quotation"
+                className="p-2.5 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl border border-stone-300 transition"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                title="Export CSV"
+                className="p-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl border border-emerald-300 transition"
+              >
+                <Download className="w-4 h-4" />
+              </button>
             </div>
           </div>
-        ))}
-      </div>
 
-      {/* RIGHT COLUMN: STICKY SET SUMMARY */}
-      <div className="w-full xl:w-96 xl:sticky top-8 space-y-4">
-         <div className="bg-stone-900 rounded-xl shadow-xl border border-stone-800 overflow-hidden">
-            <div className="bg-stone-950 p-6 text-center border-b border-stone-800">
-               <h3 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-2">Grand Total Set Cost</h3>
-               <p className="text-5xl font-bold font-mono text-green-400">₹{grandTotalCost > 0 ? grandTotalCost.toFixed(2) : '0.00'}</p>
-               <p className="text-stone-500 text-sm mt-2 font-mono">Blended: ₹{blendedRatePerKg.toFixed(2)} / kg</p>
+          {/* QUICK PRESET BAR & ACTIONS */}
+          <div className="bg-stone-100 p-3.5 rounded-2xl border border-stone-300 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-stone-500 uppercase tracking-wider mr-1">Quick Add Preset:</span>
+              {COSTING_PRESETS.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleAddSku(p.id)}
+                  className="text-xs font-bold bg-white hover:bg-stone-800 hover:text-white text-stone-800 px-3 py-1.5 rounded-lg border border-stone-300 shadow-sm transition flex items-center gap-1.5"
+                >
+                  <span>+</span> {p.name}
+                </button>
+              ))}
             </div>
-            
-            <div className="p-6">
-               <h4 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-4 border-b border-stone-700 pb-2">Set Composition</h4>
-               <ul className="space-y-3 mb-6">
-                 {calculatedParts.map((p, i) => (
-                    <li key={p.id} className="flex justify-between items-start text-sm border-b border-stone-800 pb-3 last:border-0 last:pb-0">
-                       <div className="flex flex-col">
-                         <span className="text-stone-200 font-medium">
-                           <span className="text-stone-500 mr-2">{p.qtyPerSet}x</span> {p.partName || `Part ${i+1}`}
-                         </span>
-                         <span className="text-stone-500 text-[11px] mt-1 font-mono">
-                           Unit: {p.singleWeightKg.toFixed(3)} kg
-                         </span>
-                       </div>
-                       <div className="text-right flex flex-col items-end">
-                         <span className="font-mono font-bold text-white">₹{p.totalCost.toFixed(2)}</span>
-                         <span className="text-stone-500 text-[11px] mt-1 font-mono">
-                           Total: {p.totalWeightKg.toFixed(3)} kg
-                         </span>
-                       </div>
-                    </li>
-                 ))}
-               </ul>
 
-               <div className="bg-stone-800 p-4 rounded-lg border border-stone-700">
-                  <p className="flex justify-between text-sm mb-1"><span className="text-stone-400">Total Set Weight:</span> <span className="font-mono text-white font-bold text-lg">{grandTotalWeight.toFixed(3)} kg</span></p>
-                  <p className="flex justify-between text-sm"><span className="text-stone-400">Total Pieces:</span> <span className="font-mono text-white">{calculatedParts.reduce((s, p) => s + parseInt(p.qtyPerSet||0), 0)}</span></p>
-               </div>
+            <div className="flex items-center gap-2">
+              {items.length > 0 && (
+                <select
+                  className="text-xs font-bold bg-white border border-stone-300 text-stone-800 px-3 py-1.5 rounded-lg shadow-sm outline-none"
+                  onChange={e => {
+                    handleImportFromItems(e.target.value);
+                    e.target.value = '';
+                  }}
+                >
+                  <option value="">📥 Import Existing Box...</option>
+                  {[...items].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(i => (
+                    <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.size})</option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => handleAddSku()}
+                className="text-xs font-black bg-stone-900 hover:bg-stone-800 text-white px-3.5 py-1.5 rounded-lg shadow transition flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Blank SKU
+              </button>
             </div>
-         </div>
+          </div>
 
-         {/* SAVE COSTING PANEL */}
-         {getColRef && grandTotalCost > 0 && (
-           <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-5">
-             <h4 className="font-bold text-stone-800 mb-3 text-sm">Save Costing to Item</h4>
-             <p className="text-xs text-stone-500 mb-3">Link this result to a box in your database so it appears in the Items list — no need to recalculate next time.</p>
-             <div className="space-y-3">
-               <div>
-                 <label className="block text-xs text-stone-500 mb-1">Client Company</label>
-                 <select className="w-full p-2 border rounded text-sm" value={saveTarget.companyId} onChange={e => setSaveTarget({ companyId: e.target.value, itemId: '' })}>
-                   <option value="">-- Select Company --</option>
-                   {[...companies].sort((a,b) => (a?.name||'').localeCompare(b?.name||'')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                 </select>
-               </div>
-               <div>
-                 <label className="block text-xs text-stone-500 mb-1">Box / Item</label>
-                 <select className="w-full p-2 border rounded text-sm" value={saveTarget.itemId} onChange={e => setSaveTarget({...saveTarget, itemId: e.target.value})} disabled={!saveTarget.companyId}>
-                   <option value="">-- Select Item --</option>
-                   {items.filter(i => i.companyId === saveTarget.companyId).sort((a,b) => (a?.name||a?.Item_Name||'').localeCompare(b?.name||b?.Item_Name||'')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name}</option>)}
-                 </select>
-               </div>
-               {saveTarget.itemId && (
-                 <div className="bg-stone-50 p-3 rounded border text-xs font-mono space-y-1">
-                   <p className="flex justify-between"><span className="text-stone-500">Unit Cost:</span> <span className="font-bold text-stone-900">₹{grandTotalCost.toFixed(2)}</span></p>
-                   <p className="flex justify-between"><span className="text-stone-500">Unit Weight:</span> <span className="font-bold text-stone-900">{grandTotalWeight.toFixed(3)} kg</span></p>
-                   <p className="flex justify-between"><span className="text-stone-500">Blended Rate:</span> <span className="font-bold text-stone-900">₹{blendedRatePerKg.toFixed(2)}/kg</span></p>
-                 </div>
-               )}
-               <button
-                 onClick={async () => {
-                   if (!saveTarget.itemId) return alert('Please select an item first.');
-                   const item = items.find(i => i.id === saveTarget.itemId);
-                   // Remove existing costing for this item first
-                   const existing = costings.filter(c => c.itemId === saveTarget.itemId);
-                   for (const ec of existing) {
-                     // Turso deleteDoc is globally defined
-                     // We don't have getDocRef here so we use getColRef
-                   }
-                   await addDoc(getColRef('costings'), {
-                     itemId: saveTarget.itemId,
-                     companyId: saveTarget.companyId,
-                     itemName: item?.name || item?.Item_Name || 'Unknown',
-                     unitCost: parseFloat(grandTotalCost.toFixed(2)),
-                     unitWeight: parseFloat(grandTotalWeight.toFixed(3)),
-                     blendedRate: parseFloat(blendedRatePerKg.toFixed(2)),
-                     parts: calculatedParts.map(p => ({ partName: p.partName, unitCost: parseFloat(p.singleTotalCost.toFixed(2)), unitWeight: parseFloat(p.singleWeightKg.toFixed(3)) })),
-                     savedAt: new Date().toISOString()
-                   });
-                   addLog?.(`Saved costing for ${item?.name || item?.Item_Name}: ₹${grandTotalCost.toFixed(2)}/unit`);
-                   setSaveMsg(`✓ Saved! ₹${grandTotalCost.toFixed(2)} / unit for ${item?.name || item?.Item_Name}`);
-                   setTimeout(() => setSaveMsg(''), 4000);
-                 }}
-                 disabled={!saveTarget.itemId}
-                 className="w-full bg-stone-900 text-white py-2 rounded-lg text-sm font-bold hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
-               >
-                 Save Costing
-               </button>
-               {saveMsg && <p className="text-xs text-green-700 font-bold bg-green-50 px-3 py-2 rounded border border-green-200">{saveMsg}</p>}
-             </div>
-           </div>
-         )}
-      </div>
+          {/* ── MULTI-SKU LIVE TABLE ── */}
+          <div className="space-y-4">
+            {calculatedSkus.map((sku, index) => {
+              const dimText = sku.unit === 'inch' ? sku.parsedDimensions.textInch : sku.parsedDimensions.textMm;
+              const altDimText = sku.unit === 'inch' ? sku.parsedDimensions.textMm : sku.parsedDimensions.textInch;
 
-      </div>
+              return (
+                <div key={sku.id} className="bg-white rounded-2xl shadow-sm border border-stone-300 overflow-hidden transition hover:shadow-md">
+                  
+                  {/* SKU ROW HEADER */}
+                  <div className="bg-stone-50 px-4 py-3 border-b border-stone-200 flex flex-wrap justify-between items-center gap-3">
+                    <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+                      <span className="bg-stone-800 text-white font-black w-6 h-6 flex items-center justify-center rounded-full text-xs">
+                        {index + 1}
+                      </span>
+                      <input
+                        type="text"
+                        className="font-bold text-stone-900 bg-white border border-stone-300 rounded-lg px-2.5 py-1 text-sm flex-1 max-w-xs focus:ring-2 focus:ring-amber-500 outline-none"
+                        value={sku.name}
+                        onChange={e => handleUpdateSku(sku.id, 'name', e.target.value)}
+                        placeholder="SKU Name (e.g. Master Carton)"
+                      />
+                      <span className="font-mono text-xs font-bold text-stone-500 bg-stone-200/80 px-2 py-0.5 rounded">
+                        {sku.skuCode}
+                      </span>
+                    </div>
+
+                    {/* Quick SKU Metrics in Header */}
+                    <div className="flex items-center gap-4 text-xs">
+                      <div className="hidden sm:block">
+                        <span className="text-stone-400 mr-1.5 uppercase font-bold text-[10px]">Blank:</span>
+                        <span className="font-mono font-bold text-stone-800">
+                          {sku.blankDeckleMm} × {sku.blankCutLengthMm} mm
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-stone-400 mr-1.5 uppercase font-bold text-[10px]">Unit Wt:</span>
+                        <span className="font-mono font-extrabold text-orange-600">
+                          {sku.singleWeightGrams}g ({sku.singleWeightKg} kg)
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-stone-400 mr-1.5 uppercase font-bold text-[10px]">Unit Rate:</span>
+                        <span className="font-mono font-black text-emerald-700 text-sm">
+                          ₹{sku.finalSellingRatePerPc.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 pl-2 border-l border-stone-300">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSku(sku.id, 'expanded', !sku.expanded)}
+                          className="text-xs font-bold text-stone-600 hover:text-stone-900 px-2 py-1 rounded bg-stone-200/60 hover:bg-stone-200 transition"
+                        >
+                          {sku.expanded ? '▲ Simple' : '▼ Layers & Rates'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDuplicateSku(sku.id)}
+                          title="Duplicate SKU"
+                          className="p-1.5 text-stone-500 hover:text-stone-800 rounded hover:bg-stone-200 transition"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSku(sku.id)}
+                          title="Delete SKU"
+                          className="p-1.5 text-red-500 hover:text-red-700 rounded hover:bg-red-50 transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SKU CORE SPECIFICATION GRID */}
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end bg-white">
+                    
+                    {/* 1. Item Type */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Item Type</label>
+                      <select
+                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                        value={sku.itemType}
+                        onChange={e => handleUpdateSku(sku.id, 'itemType', e.target.value)}
+                      >
+                        <option value="Box">Standard Box (RSC)</option>
+                        <option value="Tray">Tray / Lid</option>
+                        <option value="Partition">Partition (Divider)</option>
+                        <option value="Sheet">Flat Sheet / Plate</option>
+                        <option value="DieCut">Die-Cut Box</option>
+                      </select>
+                    </div>
+
+                    {/* 2. Dimensions & Unit */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
+                          Size ({sku.unit})
+                        </label>
+                        <span className="text-[10px] font-bold text-amber-600 truncate max-w-[80px]" title={altDimText}>
+                          {altDimText}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                          placeholder={sku.unit === 'inch' ? '12x8x6' : '300x200x150'}
+                          value={sku.size}
+                          onChange={e => handleUpdateSku(sku.id, 'size', e.target.value)}
+                        />
+                        <select
+                          className="p-2 border border-stone-300 rounded-lg text-[10px] font-bold bg-stone-100 text-stone-700"
+                          value={sku.unit}
+                          onChange={e => handleUpdateSku(sku.id, 'unit', e.target.value)}
+                        >
+                          <option value="inch">in</option>
+                          <option value="mm">mm</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* 3. Ply & Flute */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Ply &amp; Flute</label>
+                      <div className="grid grid-cols-2 gap-1">
+                        <select
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                          value={sku.plyCount}
+                          onChange={e => handleUpdateSku(sku.id, 'plyCount', parseInt(e.target.value, 10))}
+                        >
+                          <option value={2}>2-Ply</option>
+                          <option value={3}>3-Ply</option>
+                          <option value={5}>5-Ply</option>
+                          <option value={7}>7-Ply</option>
+                        </select>
+                        <select
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                          value={sku.fluteType}
+                          onChange={e => handleUpdateSku(sku.id, 'fluteType', e.target.value)}
+                        >
+                          <option value="B">B-Flute</option>
+                          <option value="C">C-Flute</option>
+                          <option value="E">E-Flute</option>
+                          <option value="BC">BC-Flute</option>
+                          <option value="AB">AB-Flute</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* 4. Paper Rate (₹/kg) */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Paper Rate (₹/kg)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                        value={sku.blendedPaperRate}
+                        onChange={e => handleUpdateSku(sku.id, 'blendedPaperRate', parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+
+                    {/* 5. Conversion Cost (₹/pc) */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Conv. Cost (₹/pc)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                        value={sku.conversionCostPerPc}
+                        onChange={e => handleUpdateSku(sku.id, 'conversionCostPerPc', parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+
+                    {/* 6. Order Qty (Pcs) */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Target Qty (Pcs)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        className="w-full p-2 border border-blue-300 bg-blue-50/60 rounded-lg text-xs font-mono font-bold text-blue-900"
+                        value={sku.targetQty}
+                        onChange={e => handleUpdateSku(sku.id, 'targetQty', parseInt(e.target.value, 10) || 1)}
+                      />
+                    </div>
+
+                    {/* 7. Profit Margin % & Total Amount */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+                        Margin: <span className="font-bold text-stone-900">{sku.marginPercent}%</span>
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          step="1"
+                          className="w-14 p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white"
+                          value={sku.marginPercent}
+                          onChange={e => handleUpdateSku(sku.id, 'marginPercent', parseFloat(e.target.value) || 0)}
+                        />
+                        <div className="flex-1 bg-stone-900 text-white p-1.5 rounded-lg text-right truncate">
+                          <span className="block text-[9px] text-stone-400 font-bold uppercase">Total Value</span>
+                          <span className="text-xs font-bold font-mono text-emerald-400">
+                            ₹{sku.totalBatchSellingAmount.toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* EXPANDABLE ADVANCED LAYER SUBSTANCE & COMMERCIAL FINISHING */}
+                  {sku.expanded && (
+                    <div className="bg-stone-50 p-4 border-t border-stone-200 space-y-4">
+                      
+                      {/* Partition Pocket Matrix if Partition */}
+                      {sku.itemType === 'Partition' && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-blue-50/80 p-3 rounded-xl border border-blue-200">
+                          <div>
+                            <label className="block text-[10px] font-bold text-blue-800 mb-1">Pockets along Length</label>
+                            <input
+                              type="number"
+                              min="1"
+                              className="w-full p-1.5 border border-blue-300 rounded bg-white text-xs font-bold"
+                              value={sku.pocketsLength}
+                              onChange={e => handleUpdateSku(sku.id, 'pocketsLength', parseInt(e.target.value, 10) || 1)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-blue-800 mb-1">Pockets along Width</label>
+                            <input
+                              type="number"
+                              min="1"
+                              className="w-full p-1.5 border border-blue-300 rounded bg-white text-xs font-bold"
+                              value={sku.pocketsWidth}
+                              onChange={e => handleUpdateSku(sku.id, 'pocketsWidth', parseInt(e.target.value, 10) || 1)}
+                            />
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold text-blue-800 mb-1">Latitudinal Strips</span>
+                            <span className="font-mono text-xs font-bold text-stone-800">{Math.max(0, sku.pocketsLength - 1)} pcs</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold text-blue-800 mb-1">Longitudinal Strips</span>
+                            <span className="font-mono text-xs font-bold text-stone-800">{Math.max(0, sku.pocketsWidth - 1)} pcs</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Finishing, Printing & Freight details */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3 rounded-xl border border-stone-200">
+                        <div>
+                          <label className="block text-[10px] font-bold text-stone-600 mb-1">Flexo Printing (₹/pc)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            className="w-full p-1.5 border border-stone-300 rounded text-xs font-mono"
+                            value={sku.printingCostPerPc}
+                            onChange={e => handleUpdateSku(sku.id, 'printingCostPerPc', parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-stone-600 mb-1">Stitching/Glue (₹/pc)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            className="w-full p-1.5 border border-stone-300 rounded text-xs font-mono"
+                            value={sku.stitchingGlueCostPerPc}
+                            onChange={e => handleUpdateSku(sku.id, 'stitchingGlueCostPerPc', parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-stone-600 mb-1">Transport/Freight (₹/pc)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            className="w-full p-1.5 border border-stone-300 rounded text-xs font-mono"
+                            value={sku.freightCostPerPc}
+                            onChange={e => handleUpdateSku(sku.id, 'freightCostPerPc', parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-stone-600 mb-1">Conv. Rate (₹/KG)</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            className="w-full p-1.5 border border-stone-300 rounded text-xs font-mono"
+                            value={sku.conversionRatePerKg}
+                            onChange={e => handleUpdateSku(sku.id, 'conversionRatePerKg', parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Paper Layer Substance Table */}
+                      <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+                        <div className="bg-stone-100 px-3 py-2 border-b border-stone-200 flex justify-between items-center">
+                          <span className="text-xs font-black text-stone-800 uppercase tracking-wider">
+                            Stratified Paper Substance Recipe ({sku.plyCount}-Ply {sku.fluteType}-Flute)
+                          </span>
+                          <span className="text-[11px] text-stone-500 font-mono">
+                            Board Area: {sku.boardAreaSqM} m² ({sku.boardAreaSqFt} sq.ft)
+                          </span>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-stone-50 text-stone-500 uppercase text-[10px] font-bold border-b border-stone-200">
+                              <tr>
+                                <th className="p-2.5">Layer Name</th>
+                                <th className="p-2.5">Paper Type</th>
+                                <th className="p-2.5">GSM</th>
+                                <th className="p-2.5">BF</th>
+                                <th className="p-2.5">Flute Take-Up</th>
+                                <th className="p-2.5">Paper Rate (₹/kg)</th>
+                                <th className="p-2.5 text-right">Layer Wt (1 Box)</th>
+                                <th className="p-2.5 text-right">Layer Cost</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-stone-100">
+                              {sku.plyDetails.map((ply, pIdx) => {
+                                const factor = parseFloat(ply.factor) || 1.0;
+                                const lyrWt = (sku.boardAreaSqM * parseFloat(ply.gsm || 0) * factor) / 1000;
+                                const lyrCost = lyrWt * (parseFloat(ply.rate) || sku.blendedPaperRate);
+
+                                return (
+                                  <tr key={ply.id} className="hover:bg-stone-50">
+                                    <td className="p-2 font-bold text-stone-800">{ply.name}</td>
+                                    <td className="p-1">
+                                      <select
+                                        className="p-1 border rounded text-xs bg-white font-medium"
+                                        value={ply.type || (ply.isFlute ? 'Kraft' : 'Golden')}
+                                        onChange={e => handleUpdatePly(sku.id, pIdx, 'type', e.target.value)}
+                                      >
+                                        <option value="Kraft">Kraft</option>
+                                        <option value="Golden">Golden</option>
+                                        <option value="Duplex">Duplex</option>
+                                        <option value="Semi-Chemical">Semi-Chem</option>
+                                      </select>
+                                    </td>
+                                    <td className="p-1">
+                                      <input
+                                        type="number"
+                                        className="w-16 p-1 border rounded text-xs font-mono font-bold"
+                                        value={ply.gsm}
+                                        onChange={e => handleUpdatePly(sku.id, pIdx, 'gsm', e.target.value)}
+                                      />
+                                    </td>
+                                    <td className="p-1">
+                                      <input
+                                        type="number"
+                                        className="w-14 p-1 border rounded text-xs font-mono"
+                                        value={ply.bf}
+                                        onChange={e => handleUpdatePly(sku.id, pIdx, 'bf', e.target.value)}
+                                      />
+                                    </td>
+                                    <td className="p-1">
+                                      <input
+                                        type="number"
+                                        step="0.05"
+                                        className="w-16 p-1 border rounded text-xs font-mono"
+                                        value={ply.factor}
+                                        onChange={e => handleUpdatePly(sku.id, pIdx, 'factor', e.target.value)}
+                                      />
+                                    </td>
+                                    <td className="p-1">
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        className="w-16 p-1 border rounded text-xs font-mono font-bold text-emerald-800"
+                                        value={ply.rate || sku.blendedPaperRate}
+                                        onChange={e => handleUpdatePly(sku.id, pIdx, 'rate', e.target.value)}
+                                      />
+                                    </td>
+                                    <td className="p-2 text-right font-mono text-stone-700 font-bold">
+                                      {(lyrWt * 1000).toFixed(1)}g ({lyrWt.toFixed(3)}kg)
+                                    </td>
+                                    <td className="p-2 text-right font-mono font-bold text-stone-900">
+                                      ₹{lyrCost.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SKU FOOTER BREAKDOWN */}
+                  <div className="bg-stone-900 text-white px-4 py-2.5 flex flex-wrap justify-between items-center gap-3 text-xs">
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <div>
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-1">Material Cost:</span>
+                        <span className="font-mono font-bold text-amber-300">₹{sku.singleMaterialCost.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-1">Conversion:</span>
+                        <span className="font-mono font-bold text-stone-200">₹{sku.totalConversionPerPc.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-1">Net Cost:</span>
+                        <span className="font-mono font-bold text-stone-300">₹{sku.netBaseCostPerPc.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-1">Margin:</span>
+                        <span className="font-mono font-bold text-emerald-400">+₹{sku.marginAmountPerPc.toFixed(2)} ({sku.marginPercent}%)</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-6">
+                      <div>
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-1.5">Effective Rate/KG:</span>
+                        <span className="font-mono font-black text-amber-400">₹{sku.effectiveSellingRatePerKg.toFixed(2)} / kg</span>
+                      </div>
+                      <div className="bg-stone-800 px-3 py-1 rounded-lg border border-stone-700">
+                        <span className="text-stone-400 text-[10px] uppercase font-bold mr-2">Quoted Unit Rate:</span>
+                        <span className="font-mono font-black text-green-400 text-sm">₹{sku.finalSellingRatePerPc.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ── STICKY AGGREGATE SUMMARY & COMMERCIAL BANNER ── */}
+          <div className="bg-gradient-to-br from-stone-900 to-slate-950 text-white rounded-2xl p-6 shadow-2xl border border-stone-800">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-stone-800 flex-wrap gap-4">
+              <div>
+                <span className="text-xs font-bold text-amber-400 uppercase tracking-widest block">Executive Order Summary</span>
+                <h3 className="text-xl font-black text-white">Quotation for {effectiveCompanyName}</h3>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsReportModalOpen(true)}
+                  className="bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs px-5 py-2.5 rounded-xl shadow-lg transition transform active:scale-95 flex items-center gap-2"
+                >
+                  <Printer className="w-4 h-4" /> View &amp; Print Smart Report
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAllSkusToDb}
+                  disabled={isSavingDb}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow transition flex items-center gap-2 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Save All SKUs to Item Master
+                </button>
+              </div>
+            </div>
+
+            {/* Metric KPI Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+              <div className="bg-stone-850/80 p-3.5 rounded-xl border border-stone-700/80">
+                <span className="text-[10px] font-bold text-stone-400 uppercase block mb-1">Total SKUs</span>
+                <span className="text-2xl font-black font-mono text-white">{totals.totalSkusCount}</span>
+                <span className="text-[10px] text-stone-500 block mt-0.5">Box Varieties</span>
+              </div>
+              <div className="bg-stone-850/80 p-3.5 rounded-xl border border-stone-700/80">
+                <span className="text-[10px] font-bold text-stone-400 uppercase block mb-1">Total Order Quantity</span>
+                <span className="text-2xl font-black font-mono text-white">{totals.totalQuantityPcs.toLocaleString()}</span>
+                <span className="text-[10px] text-stone-500 block mt-0.5">Total Pieces</span>
+              </div>
+              <div className="bg-stone-850/80 p-3.5 rounded-xl border border-stone-700/80">
+                <span className="text-[10px] font-bold text-stone-400 uppercase block mb-1">Total Order Tonnage</span>
+                <span className="text-2xl font-black font-mono text-orange-400">{totals.totalWeightMT} MT</span>
+                <span className="text-[10px] text-stone-500 block mt-0.5">{totals.totalWeightKg.toLocaleString()} kg</span>
+              </div>
+              <div className="bg-stone-850/80 p-3.5 rounded-xl border border-stone-700/80">
+                <span className="text-[10px] font-bold text-stone-400 uppercase block mb-1">Raw Material Cost</span>
+                <span className="text-2xl font-black font-mono text-amber-300">₹{totals.totalMaterialCost.toLocaleString('en-IN')}</span>
+                <span className="text-[10px] text-stone-500 block mt-0.5">Paper Value</span>
+              </div>
+              <div className="bg-stone-850/80 p-3.5 rounded-xl border border-stone-700/80">
+                <span className="text-[10px] font-bold text-stone-400 uppercase block mb-1">Blended Rate / KG</span>
+                <span className="text-2xl font-black font-mono text-cyan-400">₹{totals.blendedRatePerKg.toFixed(2)}</span>
+                <span className="text-[10px] text-stone-500 block mt-0.5">₹/kg selling</span>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-950 to-stone-900 p-3.5 rounded-xl border border-emerald-500/50 shadow-inner">
+                <span className="text-[10px] font-extrabold text-emerald-400 uppercase block mb-1">Grand Total Value</span>
+                <span className="text-2xl font-black font-mono text-emerald-400">₹{totals.totalQuotationAmount.toLocaleString('en-IN')}</span>
+                <span className="text-[10px] text-emerald-300/80 block mt-0.5">Avg ₹{totals.averageRatePerBox.toFixed(2)} / box</span>
+              </div>
+            </div>
+
+            {/* Notification Messages */}
+            {saveMsg && (
+              <div className="p-3 bg-emerald-900/60 border border-emerald-500/60 text-emerald-200 text-xs font-bold rounded-xl flex items-center gap-2">
+                <span>✓</span> {saveMsg}
+              </div>
+            )}
+            {copiedMsg && (
+              <div className="p-3 bg-amber-900/60 border border-amber-500/60 text-amber-200 text-xs font-bold rounded-xl flex items-center gap-2">
+                <span>📋</span> {copiedMsg}
+              </div>
+            )}
+          </div>
+
+        </div>
       )}
 
-      {/* ── BATCH CSV COSTING MODE ── */}
-      {batchCostMode && (
-        <div>
-          {/* Upload Panel */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
-            <h3 className="font-bold text-stone-800 mb-1">Batch Cost Calculator — CSV Import</h3>
-            <p className="text-xs text-stone-500 mb-1">Upload a CSV to get unit cost, weight, and area calculated for multiple box specs at once.</p>
+      {/* ========================================================================= */}
+      {/* ── MODE 2: COMPOSITE SET COSTING (MULTI-PART SINGLE BOX SET) ── */}
+      {/* ========================================================================= */}
+      {activeMode === 'set' && (
+        <div className="flex flex-col xl:flex-row gap-8 items-start">
+          
+          {/* LEFT COLUMN: PARTS BUILDER */}
+          <div className="flex-1 space-y-6 w-full">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold">Composite Multi-Part Set Costing</h2>
+              <button
+                type="button"
+                onClick={() => setParts([...parts, {
+                  id: Date.now(), partName: `Part ${parts.length + 1}`, qtyPerSet: 1, calcMode: 'auto', manualWeight: '', manualRate: '', itemType: 'Partition', size: globalUnit === 'inch' ? '12x8x6' : '300x200x150', unit: globalUnit, plyCount: 3, fluteType: 'B', conversionCost: 2.0, pocketsLength: 3, pocketsWidth: 2, plyDetails: generatePliesForCount(3, 'B', 40)
+                }])}
+                className="bg-stone-900 text-white px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-stone-800 transition"
+              >
+                + Add Another Part to Set
+              </button>
+            </div>
+
+            {parts.map((part, index) => {
+              const parsed = parseDimensionString(part.size, part.unit || globalUnit);
+              const { L_mm, W_mm, H_mm } = parsed;
+
+              let boardAreaSqM = 0;
+              let singleWeightKg = 0;
+              let singleMaterialCost = 0;
+
+              if (part.calcMode === 'manual') {
+                singleWeightKg = parseFloat(part.manualWeight) || 0;
+                singleMaterialCost = singleWeightKg * (parseFloat(part.manualRate) || 40);
+              } else {
+                if (part.itemType === 'Partition') {
+                  const pL = parseInt(part.pocketsLength, 10) || 1;
+                  const pW = parseInt(part.pocketsWidth, 10) || 1;
+                  boardAreaSqM = (((pL - 1) * W_mm * H_mm) + ((pW - 1) * L_mm * H_mm)) / 1e6;
+                } else if (part.itemType === 'Tray') {
+                  boardAreaSqM = ((L_mm + 2*H_mm + 15) * (W_mm + 2*H_mm + 15)) / 1e6;
+                } else if (part.itemType === 'Sheet') {
+                  boardAreaSqM = (L_mm * W_mm) / 1e6;
+                } else {
+                  boardAreaSqM = (((L_mm + W_mm)*2 + 40) * (W_mm + H_mm + 15)) / 1e6;
+                }
+
+                part.plyDetails.forEach(ply => {
+                  const plyWt = (boardAreaSqM * parseFloat(ply.gsm || 120) * (parseFloat(ply.factor) || 1.0)) / 1000;
+                  singleWeightKg += plyWt;
+                  singleMaterialCost += (plyWt * (parseFloat(ply.rate) || 40));
+                });
+              }
+
+              const singleTotalCost = singleMaterialCost + parseFloat(part.conversionCost || 0);
+              const qty = parseInt(part.qtyPerSet, 10) || 1;
+              const totalCost = singleTotalCost * qty;
+              const totalWeightKg = singleWeightKg * qty;
+
+              return (
+                <div key={part.id} className="bg-white rounded-2xl shadow-sm border border-stone-300 overflow-hidden">
+                  <div className="bg-stone-100 p-4 border-b border-stone-200 flex flex-wrap gap-4 justify-between items-center">
+                    <div className="flex items-center gap-3 flex-1 min-w-[250px]">
+                      <span className="bg-stone-800 text-white font-bold w-6 h-6 flex items-center justify-center rounded-full text-xs">{index + 1}</span>
+                      <input
+                        type="text"
+                        className="p-1.5 border border-stone-300 rounded font-bold text-stone-800 bg-white"
+                        value={part.partName}
+                        onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, partName: e.target.value } : p))}
+                      />
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-bold text-stone-600 uppercase">Qty Per Set:</label>
+                      <input
+                        type="number"
+                        min="1"
+                        className="w-16 p-1.5 border border-blue-300 bg-blue-50 rounded font-bold text-blue-900 text-center"
+                        value={part.qtyPerSet}
+                        onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, qtyPerSet: parseInt(e.target.value, 10) || 1 } : p))}
+                      />
+                      {parts.length > 1 && (
+                        <button onClick={() => setParts(parts.filter(p => p.id !== part.id))} className="text-red-500 hover:text-red-700 text-sm font-bold px-2">✕</button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                    <div>
+                      <label className="block text-xs font-bold text-stone-500 mb-1">Item Type</label>
+                      <select
+                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-bold bg-stone-50"
+                        value={part.itemType}
+                        onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, itemType: e.target.value } : p))}
+                      >
+                        <option value="Box">Standard Box</option>
+                        <option value="Tray">Tray / Lid</option>
+                        <option value="Partition">Partition (Divider)</option>
+                        <option value="Sheet">Flat Sheet</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs font-bold text-stone-500">Size ({part.unit || globalUnit})</label>
+                        <span className="text-[10px] font-bold text-amber-600">
+                          {part.unit === 'inch' ? parsed.textMm : parsed.textInch}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold"
+                          value={part.size}
+                          onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, size: e.target.value } : p))}
+                        />
+                        <select
+                          className="p-2 border rounded-lg text-xs font-bold bg-stone-100"
+                          value={part.unit || globalUnit}
+                          onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, unit: e.target.value } : p))}
+                        >
+                          <option value="inch">in</option>
+                          <option value="mm">mm</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-stone-500 mb-1">Conversion Cost (₹/pc)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        className="w-full p-2 border border-stone-300 rounded-lg text-xs font-mono font-bold"
+                        value={part.conversionCost}
+                        onChange={e => setParts(parts.map(p => p.id === part.id ? { ...p, conversionCost: parseFloat(e.target.value) || 0 } : p))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-stone-900 text-white p-4 flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-4">
+                      <span>Unit Wt: <strong className="font-mono text-orange-400">{(singleWeightKg * 1000).toFixed(1)}g</strong></span>
+                      <span>Unit Cost: <strong className="font-mono text-green-400">₹{singleTotalCost.toFixed(2)}</strong></span>
+                    </div>
+                    <div>
+                      <span>Subtotal ({qty}x): <strong className="font-mono text-lg text-white font-black">₹{totalCost.toFixed(2)}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* RIGHT COLUMN: STICKY SET SUMMARY */}
+          <div className="w-full xl:w-96 xl:sticky top-8 space-y-4">
+            <div className="bg-stone-900 rounded-2xl shadow-xl border border-stone-800 p-6 text-white text-center">
+              <span className="text-stone-400 text-xs font-bold uppercase tracking-wider block mb-1">Composite Set Grand Total</span>
+              <p className="text-4xl font-black font-mono text-green-400">
+                ₹{parts.reduce((sum, p) => {
+                  const parsed = parseDimensionString(p.size, p.unit || globalUnit);
+                  const { L_mm, W_mm, H_mm } = parsed;
+                  let area = (((L_mm+W_mm)*2 + 40)*(W_mm+H_mm+15))/1e6;
+                  let wt = 0; let mat = 0;
+                  p.plyDetails.forEach(pl => { const w = (area * parseFloat(pl.gsm||120)*(parseFloat(pl.factor)||1))/1000; wt += w; mat += (w*parseFloat(pl.rate||40)); });
+                  return sum + ((mat + parseFloat(p.conversionCost||0)) * (parseInt(p.qtyPerSet,10)||1));
+                }, 0).toFixed(2)}
+              </p>
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ── MODE 3: BATCH CSV COSTING ── */}
+      {/* ========================================================================= */}
+      {activeMode === 'csv' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+            <h3 className="font-black text-stone-900 mb-1">Batch Multi-Box Cost Calculator — CSV Import</h3>
+            <p className="text-xs text-stone-500 mb-3">Upload a CSV sheet to calculate unit cost, weight, board area, and selling rate for dozens of boxes at once.</p>
             <p className="text-xs text-stone-400 mb-4">
-              <strong>Required CSV columns:</strong>{' '}
-              <code>Name, Type, Size, Ply, GSM, BF, Rate, Conv, Qty</code>{' '}—{' '}
-              Type: <em>Box / Tray / Lid / Sheet</em> &nbsp;|&nbsp;
-              Size: <em>LxWxH mm</em> &nbsp;|&nbsp;
-              Rate: <em>₹/kg for paper</em> &nbsp;|&nbsp;
-              Conv: <em>₹ conversion cost per piece (optional)</em>
+              <strong>Supported CSV headers:</strong> <code>Name, Type, Size, Unit (inch/mm), Ply, Flute, GSM, Rate, Conv, Qty, Margin</code>
             </p>
             <div className="flex items-center gap-3 flex-wrap">
-              <label className="flex items-center gap-2 cursor-pointer bg-stone-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-stone-800 transition">
-                Upload CSV
+              <label className="flex items-center gap-2 cursor-pointer bg-stone-900 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-stone-800 transition shadow">
+                📂 Choose CSV File
                 <input type="file" accept=".csv,.txt" className="hidden" onChange={handleBatchCostCSV} />
               </label>
               {batchCostResults.length > 0 && (
-                <button className="bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-800 transition" onClick={() => {
-                  const hdr = 'Name,Type,Size,Ply,GSM,BF,Rate(₹/kg),Conv(₹),Qty,Board Area(sqm),Weight(kg),Unit Cost(₹),Total Cost(₹)\n';
-                  const rows = batchCostResults.map(r => `${r.name},${r.type},${r.size},${r.ply},${r.gsm},${r.bf},${r.rate},${r.conv},${r.qty},${r.boardAreaSqM},${r.weightKg},${r.unitCost},${r.totalCost}`).join('\n');
-                  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([hdr+rows],{type:'text/csv'})); a.download = 'batch_costing_results.csv'; a.click();
-                }}>Export Results CSV</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const headers = 'Name,Type,Size,Unit,Ply,Flute,GSM,Rate(₹/kg),Conv(₹),Qty,Board Area(sqm),Unit Weight(kg),Unit Cost(₹),Quoted Rate(₹),Total Cost(₹)\n';
+                    const rows = batchCostResults.map(r => `"${r.name}","${r.itemType}","${r.size}","${r.unit}",${r.plyCount},"${r.fluteType}",${r.blendedPaperRate},${r.totalConversionPerPc},${r.qty},${r.boardAreaSqM},${r.singleWeightKg},${r.netBaseCostPerPc},${r.finalSellingRatePerPc},${r.totalBatchSellingAmount}`).join('\n');
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([headers + rows], { type: 'text/csv' })); a.download = 'Batch_Costing_Results.csv'; a.click();
+                  }}
+                  className="bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-800 transition"
+                >
+                  📥 Export Results CSV
+                </button>
               )}
-              {batchCostResults.length > 0 && <button className="text-stone-500 text-sm underline" onClick={() => setBatchCostResults([])}>Clear</button>}
-              {batchCostError && <span className="text-red-600 text-sm font-medium">{batchCostError}</span>}
+              {batchCostResults.length > 0 && (
+                <button type="button" onClick={() => setBatchCostResults([])} className="text-stone-500 text-xs font-bold underline">Clear</button>
+              )}
+              {batchCostError && <span className="text-red-600 text-xs font-bold">{batchCostError}</span>}
             </div>
           </div>
 
-          {/* Results Table */}
           {batchCostResults.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-x-auto">
-              <table className="w-full text-left" style={{fontSize:12}}>
-                <thead>
-                  <tr className="bg-stone-900 text-white">
-                    {['Item / Code','Type','Size (mm)','Ply','GSM','BF','Rate (₹/kg)','Conv (₹)','Qty','Board Area (m²)','Unit Wt (kg)','Unit Cost (₹)','Total Cost (₹)'].map(h => (
-                      <th key={h} className="p-3 whitespace-nowrap font-semibold text-stone-300" style={{fontSize:10,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
+            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-stone-900 text-white uppercase text-[10px] font-bold">
+                  <tr>
+                    {['Item Name','Type','Size','Ply','Flute','Board Area','Unit Wt','Paper Cost','Conv.','Net Cost','Quoted Rate','Qty','Total Amount'].map(h => (
+                      <th key={h} className="p-3 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-stone-100">
                   {batchCostResults.map((r, i) => (
-                    <tr key={i} className="border-t border-stone-100 hover:bg-stone-50">
-                      <td className="p-3 font-semibold text-stone-900">{r.name}</td>
-                      <td className="p-3 text-stone-600">{r.type}</td>
-                      <td className="p-3 font-mono text-stone-700">{r.size}</td>
-                      <td className="p-3 text-center">{r.ply}</td>
-                      <td className="p-3 text-center">{r.gsm}</td>
-                      <td className="p-3 text-center">{r.bf}</td>
-                      <td className="p-3 text-right">₹{r.rate}</td>
-                      <td className="p-3 text-right">₹{r.conv}</td>
-                      <td className="p-3 text-center">{r.qty}</td>
-                      <td className="p-3 text-right font-mono">{r.boardAreaSqM}</td>
-                      <td className="p-3 text-right font-mono">{r.weightKg}</td>
-                      <td className="p-3 text-right font-bold text-emerald-700">₹{r.unitCost}</td>
-                      <td className="p-3 text-right font-bold text-stone-900">₹{r.totalCost}</td>
+                    <tr key={i} className="hover:bg-stone-50">
+                      <td className="p-3 font-bold text-stone-900">{r.name}</td>
+                      <td className="p-3 text-stone-600">{r.itemType}</td>
+                      <td className="p-3 font-mono font-bold text-stone-800">{r.size} {r.unit}</td>
+                      <td className="p-3 text-center">{r.plyCount}</td>
+                      <td className="p-3 text-center font-bold text-blue-700">{r.fluteType}</td>
+                      <td className="p-3 font-mono">{r.boardAreaSqM} m²</td>
+                      <td className="p-3 font-mono font-bold text-orange-600">{r.singleWeightGrams}g</td>
+                      <td className="p-3 font-mono text-stone-700">₹{r.singleMaterialCost.toFixed(2)}</td>
+                      <td className="p-3 font-mono text-stone-700">₹{r.totalConversionPerPc.toFixed(2)}</td>
+                      <td className="p-3 font-mono font-bold text-stone-800">₹{r.netBaseCostPerPc.toFixed(2)}</td>
+                      <td className="p-3 font-mono font-black text-emerald-700">₹{r.finalSellingRatePerPc.toFixed(2)}</td>
+                      <td className="p-3 font-bold text-stone-800">{r.qty}</td>
+                      <td className="p-3 font-mono font-black text-stone-900">₹{r.totalBatchSellingAmount.toLocaleString('en-IN')}</td>
                     </tr>
                   ))}
-                  <tr className="border-t-2 border-stone-400 bg-stone-800 text-white font-bold">
-                    <td className="p-3" colSpan={11}>TOTALS</td>
-                    <td className="p-3 text-right text-emerald-300">—</td>
-                    <td className="p-3 text-right text-emerald-300">₹{batchCostResults.reduce((a,r) => a + parseFloat(r.totalCost), 0).toFixed(2)}</td>
-                  </tr>
                 </tbody>
               </table>
             </div>
           )}
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* ── SMART MULTI-SKU QUOTATION & COSTING REPORT MODAL ── */}
+      {/* ========================================================================= */}
+      {isReportModalOpen && (
+        <SmartMultiSkuReportModal
+          isOpen={isReportModalOpen}
+          onClose={() => setIsReportModalOpen(false)}
+          companyName={effectiveCompanyName}
+          quoteRef={quoteRef}
+          quoteDate={quoteDate}
+          calculatedSkus={calculatedSkus}
+          totals={totals}
+          globalUnit={globalUnit}
+          onExportCsv={handleExportCsv}
+          onCopyQuote={handleCopyQuote}
+          onSaveAllSkusToDb={handleSaveAllSkusToDb}
+        />
+      )}
+
+    </div>
+  );
+}
+
+// --- SMART MULTI-SKU QUOTATION & COSTING REPORT MODAL COMPONENT ---
+function SmartMultiSkuReportModal({
+  isOpen,
+  onClose,
+  companyName,
+  quoteRef,
+  quoteDate,
+  calculatedSkus = [],
+  totals = {},
+  globalUnit = 'inch',
+  onExportCsv,
+  onCopyQuote,
+  onSaveAllSkusToDb
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:static print:inset-auto">
+      <div className="bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-6xl max-h-[95vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none print:overflow-visible">
+        
+        {/* MODAL HEADER & ACTION TOOLBAR (HIDDEN IN PRINT) */}
+        <div className="flex justify-between items-center px-6 py-4 border-b border-stone-200 bg-stone-50 sticky top-0 z-10 print:hidden flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <span className="p-2 bg-amber-500 text-stone-950 rounded-xl text-lg font-black">📄</span>
+            <div>
+              <h3 className="font-black text-stone-900 text-base">Multi-SKU Commercial Quotation &amp; Cost Report</h3>
+              <p className="text-xs text-stone-500">Official technical &amp; commercial breakdown for {companyName}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-4 py-2 rounded-xl shadow transition"
+            >
+              <Printer className="w-3.5 h-3.5" /> Print / PDF
+            </button>
+            <button
+              type="button"
+              onClick={onCopyQuote}
+              className="flex items-center gap-1.5 bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold text-xs px-3.5 py-2 rounded-xl border border-stone-300 transition"
+            >
+              <Copy className="w-3.5 h-3.5" /> Copy Quote
+            </button>
+            <button
+              type="button"
+              onClick={onExportCsv}
+              className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs px-3.5 py-2 rounded-xl border border-emerald-300 transition"
+            >
+              <Download className="w-3.5 h-3.5" /> Excel CSV
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 text-stone-500 hover:text-stone-900 text-sm font-bold rounded-lg hover:bg-stone-100 transition"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* PRINTABLE REPORT SHEET CONTAINER */}
+        <div className="p-6 md:p-8 space-y-6 print:p-4 text-xs font-sans" id="printable-quotation-sheet">
+          
+          {/* 1. LETTERHEAD & QUOTATION HEADER */}
+          <div className="flex justify-between items-start border-b-2 border-stone-800 pb-5 flex-wrap gap-4">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-widest text-amber-600 block mb-0.5">Corrugated Packaging Division</span>
+              <h1 className="text-2xl font-black tracking-tight text-stone-900 uppercase">Commercial Costing &amp; Quotation</h1>
+              <p className="text-xs text-stone-600 mt-1 font-medium">Automatic CAD Matrix • High-Precision Multi-SKU Cost Analysis</p>
+            </div>
+
+            <div className="text-right font-mono">
+              <div className="inline-block bg-stone-100 px-3 py-1.5 rounded-lg border border-stone-200 text-right">
+                <span className="text-[10px] font-bold text-stone-500 block uppercase">Quote Ref #</span>
+                <span className="text-sm font-black text-stone-900">{quoteRef}</span>
+              </div>
+              <p className="text-[11px] text-stone-600 mt-1">Date: <strong className="text-stone-900">{quoteDate}</strong></p>
+              <p className="text-[11px] text-stone-600">Validity: <strong className="text-stone-900">30 Calendar Days</strong></p>
+            </div>
+          </div>
+
+          {/* 2. CLIENT & MANUFACTURER INFO BAR */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-stone-50 p-4 rounded-xl border border-stone-200">
+            <div>
+              <span className="text-[10px] font-black uppercase text-stone-500 tracking-wider block mb-1">Quotation Prepared For:</span>
+              <h4 className="text-sm font-black text-stone-900">{companyName}</h4>
+              <p className="text-stone-600 text-xs mt-0.5">Client Multi-SKU Manufacturing Account</p>
+            </div>
+            <div className="md:text-right">
+              <span className="text-[10px] font-black uppercase text-stone-500 tracking-wider block mb-1">Commercial Terms:</span>
+              <p className="text-stone-700 text-xs">Ex-Factory Corrugation Unit • GST Extra as applicable</p>
+              <p className="text-stone-600 text-[11px] mt-0.5">Standard Dimensional Tolerances: ±2mm (±0.1 in)</p>
+            </div>
+          </div>
+
+          {/* 3. EXECUTIVE KPI CARDS */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="bg-stone-100 p-3 rounded-xl border border-stone-200">
+              <span className="text-[9px] font-bold text-stone-500 uppercase block">Total SKUs</span>
+              <span className="text-lg font-black font-mono text-stone-900">{totals.totalSkusCount} Varieties</span>
+            </div>
+            <div className="bg-stone-100 p-3 rounded-xl border border-stone-200">
+              <span className="text-[9px] font-bold text-stone-500 uppercase block">Total Order Quantity</span>
+              <span className="text-lg font-black font-mono text-stone-900">{totals.totalQuantityPcs.toLocaleString()} Pcs</span>
+            </div>
+            <div className="bg-stone-100 p-3 rounded-xl border border-stone-200">
+              <span className="text-[9px] font-bold text-stone-500 uppercase block">Total Paper Tonnage</span>
+              <span className="text-lg font-black font-mono text-orange-600">{totals.totalWeightMT} MT ({totals.totalWeightKg.toLocaleString()} kg)</span>
+            </div>
+            <div className="bg-stone-100 p-3 rounded-xl border border-stone-200">
+              <span className="text-[9px] font-bold text-stone-500 uppercase block">Raw Material Value</span>
+              <span className="text-lg font-black font-mono text-stone-900">₹{totals.totalMaterialCost.toLocaleString('en-IN')}</span>
+            </div>
+            <div className="bg-stone-100 p-3 rounded-xl border border-stone-200">
+              <span className="text-[9px] font-bold text-stone-500 uppercase block">Blended Selling Rate</span>
+              <span className="text-lg font-black font-mono text-blue-700">₹{totals.blendedRatePerKg.toFixed(2)} / kg</span>
+            </div>
+            <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-300">
+              <span className="text-[9px] font-black text-emerald-800 uppercase block">Grand Total Value</span>
+              <span className="text-lg font-black font-mono text-emerald-700">₹{totals.totalQuotationAmount.toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+
+          {/* 4. COMPREHENSIVE MULTI-SKU ITEMIZED PRICING MATRIX */}
+          <div className="border border-stone-300 rounded-xl overflow-hidden shadow-sm">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-stone-900 text-white uppercase text-[9.5px] font-black tracking-wider">
+                <tr>
+                  <th className="p-2.5 text-center w-8">#</th>
+                  <th className="p-2.5">SKU Description</th>
+                  <th className="p-2.5">Box Type</th>
+                  <th className="p-2.5">Dimensions (Inches &amp; mm)</th>
+                  <th className="p-2.5">Ply / Flute</th>
+                  <th className="p-2.5">Blank (Deckle × Length)</th>
+                  <th className="p-2.5 text-right">Unit Wt</th>
+                  <th className="p-2.5 text-right">Paper Cost</th>
+                  <th className="p-2.5 text-right">Conv. Cost</th>
+                  <th className="p-2.5 text-right bg-stone-800">Quoted Rate</th>
+                  <th className="p-2.5 text-center">Order Qty</th>
+                  <th className="p-2.5 text-right">Total Value (₹)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200 text-xs">
+                {calculatedSkus.map((s, idx) => (
+                  <tr key={s.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-stone-50/70'}>
+                    <td className="p-2.5 text-center font-bold text-stone-500">{idx + 1}</td>
+                    <td className="p-2.5">
+                      <span className="font-bold text-stone-900 block">{s.name}</span>
+                      <span className="font-mono text-[10px] text-stone-500">{s.skuCode}</span>
+                    </td>
+                    <td className="p-2.5 text-stone-700 font-medium">{s.itemType}</td>
+                    <td className="p-2.5">
+                      <span className="font-mono font-bold text-stone-900 block">{s.parsedDimensions.textInch}</span>
+                      <span className="font-mono text-[10px] text-stone-500 block">({s.parsedDimensions.textMm})</span>
+                    </td>
+                    <td className="p-2.5">
+                      <span className="font-bold text-stone-800">{s.plyCount}-Ply</span>
+                      <span className="text-[10px] text-blue-700 font-bold block">{s.fluteType}-Flute</span>
+                    </td>
+                    <td className="p-2.5 font-mono text-[10.5px] text-stone-700">
+                      {s.blankDeckleMm} × {s.blankCutLengthMm} mm
+                      <span className="block text-[9.5px] text-stone-400">({s.blankDeckleIn}" × {s.blankCutLengthIn}")</span>
+                    </td>
+                    <td className="p-2.5 text-right font-mono font-bold text-orange-700">
+                      {s.singleWeightGrams}g
+                      <span className="block text-[9.5px] text-stone-400 font-normal">({s.singleWeightKg} kg)</span>
+                    </td>
+                    <td className="p-2.5 text-right font-mono text-stone-700">₹{s.singleMaterialCost.toFixed(2)}</td>
+                    <td className="p-2.5 text-right font-mono text-stone-700">₹{s.totalConversionPerPc.toFixed(2)}</td>
+                    <td className="p-2.5 text-right font-mono font-black text-emerald-800 text-sm bg-emerald-50/40">
+                      ₹{s.finalSellingRatePerPc.toFixed(2)}
+                    </td>
+                    <td className="p-2.5 text-center font-mono font-bold text-stone-800">{s.qty.toLocaleString()}</td>
+                    <td className="p-2.5 text-right font-mono font-black text-stone-900">
+                      ₹{s.totalBatchSellingAmount.toLocaleString('en-IN')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-stone-900 text-white font-black text-xs">
+                <tr>
+                  <td colSpan={6} className="p-3 uppercase tracking-wider text-stone-300">Total Order Consolidation</td>
+                  <td className="p-3 text-right font-mono text-orange-300">{totals.totalWeightKg.toLocaleString()} kg</td>
+                  <td className="p-3 text-right font-mono text-amber-300">₹{totals.totalMaterialCost.toLocaleString('en-IN')}</td>
+                  <td className="p-3 text-right font-mono text-stone-300">₹{totals.totalConversionCost.toLocaleString('en-IN')}</td>
+                  <td className="p-3 text-right font-mono text-cyan-300">Avg ₹{totals.averageRatePerBox.toFixed(2)}</td>
+                  <td className="p-3 text-center font-mono text-white">{totals.totalQuantityPcs.toLocaleString()}</td>
+                  <td className="p-3 text-right font-mono text-emerald-400 text-sm">
+                    ₹{totals.totalQuotationAmount.toLocaleString('en-IN')}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* 5. STRATIFIED PAPER SUBSTANCE RECIPE DETAILS */}
+          <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 space-y-3">
+            <h4 className="text-xs font-black uppercase text-stone-800 tracking-wider">
+              Technical Substance &amp; GSM Recipe Specifications
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {calculatedSkus.map((s, idx) => (
+                <div key={s.id} className="bg-white p-3 rounded-lg border border-stone-200 text-[11px] space-y-1">
+                  <div className="flex justify-between items-center border-b border-stone-100 pb-1">
+                    <strong className="text-stone-900 truncate max-w-[180px]">{s.name}</strong>
+                    <span className="font-bold text-blue-700 font-mono text-[10px]">{s.plyCount}-Ply {s.fluteType}</span>
+                  </div>
+                  <p className="text-stone-600">
+                    <strong>GSM Recipe:</strong> {s.plyDetails.map(p => `${p.gsm} (${p.type || (p.isFlute ? 'F' : 'K')})`).join(' + ')}
+                  </p>
+                  <p className="text-stone-600 flex justify-between">
+                    <span>Paper Rate: <strong>₹{s.blendedPaperRate}/kg</strong></span>
+                    <span>Area: <strong>{s.boardAreaSqM} m²</strong></span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 6. TERMS & SIGNATURE BLOCK */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-stone-300">
+            <div className="text-[11px] text-stone-600 space-y-1">
+              <strong className="text-stone-800 block text-xs">Standard Quotation Terms &amp; Conditions:</strong>
+              <p>1. Payment terms: 30 days from invoice date / as agreed.</p>
+              <p>2. Supply quantity tolerance: ±5% on final delivered quantity.</p>
+              <p>3. Raw material paper rates subject to market escalation with 15 days notice.</p>
+              <p>4. Stereo block / cutting die charges to be billed extra at actuals if required.</p>
+            </div>
+
+            <div className="flex justify-between items-end pt-8 md:pt-4">
+              <div className="text-center">
+                <div className="w-32 border-b border-stone-400 mb-1"></div>
+                <span className="text-[10px] font-bold text-stone-500 uppercase">Prepared By</span>
+              </div>
+              <div className="text-center">
+                <div className="w-36 border-b border-stone-400 mb-1"></div>
+                <span className="text-[10px] font-bold text-stone-800 uppercase font-black">Authorized Signatory</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
     </div>
   );
 }
