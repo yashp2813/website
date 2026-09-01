@@ -4479,6 +4479,29 @@ const deleteDoc = async (docRef) => {
 const getColRef = (table) => normalizeTableName(table);
 const getDocRef = (table, id) => ({ table: normalizeTableName(table), id });
 
+const db = {};
+const writeBatch = (database = db) => {
+  const operations = [];
+  return {
+    set: (docRef, data) => {
+      const table = normalizeTableName(typeof docRef === 'string' ? docRef : docRef?.table);
+      const id = typeof docRef === 'string' ? (data?.id || generateId()) : (docRef?.id || data?.id || generateId());
+      operations.push(() => addDoc(table, { id, ...data }));
+    },
+    update: (docRef, data) => {
+      operations.push(() => updateDoc(docRef, data));
+    },
+    delete: (docRef) => {
+      operations.push(() => deleteDoc(docRef));
+    },
+    commit: async () => {
+      for (const op of operations) {
+        await op();
+      }
+    }
+  };
+};
+
 // ==========================================
 // 2. HELPER FUNCTIONS (CSV)
 // ==========================================
@@ -6736,6 +6759,21 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            onClick={() => {
+              const el = document.getElementById('reelInwardForm');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth' });
+                const firstInput = el.querySelector('input[placeholder*="Mill"], input[placeholder*="Supplier"], input[type="text"]');
+                if (firstInput) firstInput.focus();
+              }
+            }}
+            className="apex-btn"
+            style={{ background: '#0f172a', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <span>➕</span> Inward New Reel
+          </button>
           <button onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : setIsPasteOpen(true)} className="apex-btn" style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span>📥</span> Import CSV / Excel File
           </button>
@@ -11464,61 +11502,105 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       companyId: effectiveCompanyId
     };
 
-    if (editingId) {
-      const singleReel = reelsInput[0];
-      const prevReel = inventory.find(r => r.id === editingId);
-      const reelTag = prevReel?.systemReelId || prevReel?.uniqueReelId || singleReel.reelNo || editingId;
-      await updateDoc(getDocRef('inventory', editingId), { ...finalCommon, ...singleReel, category: 'Paper', tallySynced: false, updatedAt: new Date().toISOString() });
-      if(addLog) addLog(`Updated inventory reel [${reelTag}]: Size ${singleReel.size}cm, ${singleReel.gsm} GSM, ${singleReel.bf} BF, ${singleReel.receivedQty} kg, Mill: ${finalCommon.millName || '-'}`);
-      setEditingId(null);
-      setReelsInput([{...emptyReel}]);
-    } else {
-      const batch = writeBatch(db);
-      let count = 0;
-      const createdReelsList = [];
+    try {
+      if (editingId) {
+        const singleReel = reelsInput[0];
+        const prevReel = inventory.find(r => r.id === editingId);
+        const reelTag = prevReel?.systemReelId || prevReel?.uniqueReelId || singleReel.reelNo || editingId;
+        const recvQty = parseFloat(singleReel.receivedQty) || 0;
+        const initIssued = parseFloat(singleReel.initialIssuedQty) || 0;
+        const balQty = Math.max(0, recvQty - initIssued);
 
-      reelsInput.forEach((reel, idx) => {
-        const supNo = reel.supplierReelNo || reel.reelNo;
-        if (!supNo && !reel.size && !reel.gsm) return;
-        const existingMax = (inventory || []).reduce((max, cur) => {
-          const fid = cur.systemReelId || formatSystemReelId(cur, inventory);
-          const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
-          return !isNaN(n) && n > max ? n : max;
-        }, 0);
-        const prefix = commonData.stockType === 'job_work' ? 'RL-JW' : 'RL';
-        const autoReelId = reel.uniqueReelId || `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
-        const finalSupNo = supNo || autoReelId;
-        const newId = generateId();
-        const newDocRef = { table: 'inventory', id: newId };
-        
-        const nowIso = new Date().toISOString();
-        const reelDoc = {
+        await updateDoc(getDocRef('inventory', editingId), {
           ...finalCommon,
-          ...reel,
-          id: newId,
-          uniqueReelId: autoReelId,
-          systemReelId: autoReelId,
-          supplierReelNo: finalSupNo,
-          reelNo: finalSupNo,
+          ...singleReel,
+          size: parseFloat(singleReel.size) || 0,
+          gsm: parseFloat(singleReel.gsm) || 0,
+          bf: parseFloat(singleReel.bf) || 0,
+          colour: singleReel.colour || 'Kraft',
+          receivedQty: recvQty,
+          initialIssuedQty: initIssued,
+          balanceQty: balQty,
+          ratePerKg: parseFloat(singleReel.ratePerKg) || 0,
           category: 'Paper',
           tallySynced: false,
-          createdAt: nowIso,
-          updatedAt: nowIso
-        };
+          updatedAt: new Date().toISOString()
+        });
+        if(addLog) addLog(`Updated inventory reel [${reelTag}]: Size ${singleReel.size}cm, ${singleReel.gsm} GSM, ${singleReel.bf} BF, ${recvQty} kg, Mill: ${finalCommon.millName || '-'}`);
+        setEditingId(null);
+        setReelsInput([{...emptyReel}]);
+        alert(`✓ Reel #${reelTag} updated successfully!`);
+      } else {
+        let count = 0;
+        const createdReelsList = [];
 
-        batch.set(newDocRef, reelDoc);
-        createdReelsList.push(reelDoc);
-        count++;
-      });
+        for (let idx = 0; idx < reelsInput.length; idx++) {
+          const reel = reelsInput[idx];
+          const supNo = (reel.supplierReelNo || reel.reelNo || '').trim();
+          if (!supNo && !reel.size && !reel.gsm && !reel.receivedQty) continue;
 
-      await batch.commit();
-      const reelSummaries = createdReelsList.map(r => r.systemReelId || r.reelNo).slice(0, 5).join(', ');
-      if(addLog) addLog(`Inwarded ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'} (${reelSummaries}${count > 5 ? '...' : ''})`);
-      setReelsInput([{...emptyReel}]); 
+          const existingMax = (inventory || []).reduce((max, cur) => {
+            const fid = cur.systemReelId || formatSystemReelId(cur, inventory);
+            const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
+            return !isNaN(n) && n > max ? n : max;
+          }, 0);
+          const prefix = commonData.stockType === 'job_work' ? 'RL-JW' : 'RL';
+          const autoReelId = (reel.uniqueReelId && reel.uniqueReelId.trim())
+            ? reel.uniqueReelId.trim()
+            : `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
+          const finalSupNo = supNo || autoReelId;
+          const newId = generateId();
+          
+          const nowIso = new Date().toISOString();
+          const recvQty = parseFloat(reel.receivedQty) || 0;
+          const initIssued = parseFloat(reel.initialIssuedQty) || 0;
+          const balQty = Math.max(0, recvQty - initIssued);
 
-      if (shouldPrintBarcodes && createdReelsList.length > 0) {
-        setPrintTagData({ type: 'reel', data: createdReelsList });
+          const reelDoc = {
+            ...finalCommon,
+            ...reel,
+            id: newId,
+            uniqueReelId: autoReelId,
+            systemReelId: autoReelId,
+            supplierReelNo: finalSupNo,
+            reelNo: finalSupNo,
+            size: parseFloat(reel.size) || 0,
+            gsm: parseFloat(reel.gsm) || 0,
+            bf: parseFloat(reel.bf) || 0,
+            colour: reel.colour || 'Kraft',
+            receivedQty: recvQty,
+            initialIssuedQty: initIssued,
+            balanceQty: balQty,
+            ratePerKg: parseFloat(reel.ratePerKg) || 0,
+            category: 'Paper',
+            tallySynced: false,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          };
+
+          await addDoc('inventory', reelDoc);
+          createdReelsList.push(reelDoc);
+          count++;
+        }
+
+        if (count === 0) {
+          alert('Please fill in reel details (Supplier Reel No, Size, GSM, Received KG) before saving.');
+          return;
+        }
+
+        const reelSummaries = createdReelsList.map(r => r.systemReelId || r.reelNo).slice(0, 5).join(', ');
+        if(addLog) addLog(`Inwarded ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'} (${reelSummaries}${count > 5 ? '...' : ''})`);
+        
+        alert(`✓ Successfully added ${count} new reel(s) to stock inventory!`);
+        setReelsInput([{...emptyReel}]); 
+
+        if (shouldPrintBarcodes && createdReelsList.length > 0) {
+          setPrintTagData({ type: 'reel', data: createdReelsList });
+        }
       }
+    } catch (err) {
+      console.error('Error saving inventory reel:', err);
+      alert(`Error saving inventory reel: ${err.message || err}`);
     }
   };
 
@@ -12149,7 +12231,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
 
       {/* --- INWARD NEW REEL(S) INVOICE FORM (AVAILABLE IN BOTH EXCEL AND CLASSIC VIEWS) --- */}
       {activeSubTab === 'Paper' && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
+        <div id="reelInwardForm" className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-6">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
             <h3 className="font-bold flex items-center gap-2 text-stone-900">
               <Plus style={{ width: 18, height: 18 }} /> {editingId ? 'Edit Reel Entry' : 'Inward Paper Reels (Factory Stock or Nashik Job Work Stock)'}
@@ -17768,11 +17850,7 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     if (!selectedOrderIds.length) return;
     if (window.confirm(`Are you sure you want to delete ${selectedOrderIds.length} stock records? This will completely remove them from the database.`)) {
       try {
-        const batch = writeBatch(db);
-        selectedOrderIds.forEach(id => {
-          batch.delete(getDocRef('orders', id));
-        });
-        await batch.commit();
+        await Promise.all(selectedOrderIds.map(id => deleteDoc(getDocRef('orders', id))));
         addLog(`Bulk deleted ${selectedOrderIds.length} finished goods records`);
         setSelectedOrderIds([]);
       } catch (err) {
@@ -22196,10 +22274,10 @@ function ClientJobWorkPortalModal({
     }
     setIsSavingInward(true);
     try {
-      const batch = writeBatch(db);
       let count = 0;
-      inwardReels.forEach((reel, idx) => {
-        if (!reel.size || !reel.gsm || !reel.receivedQty) return;
+      for (let idx = 0; idx < inwardReels.length; idx++) {
+        const reel = inwardReels[idx];
+        if (!reel.size || !reel.gsm || !reel.receivedQty) continue;
         const newId = generateId();
         const autoReelId = reel.uniqueReelId || `RL-JW-${Date.now().toString().slice(-5)}-${idx + 1}`;
         const newDoc = {
@@ -22219,19 +22297,18 @@ function ClientJobWorkPortalModal({
           supplierReelNo: reel.supplierReelNo || autoReelId,
           uniqueReelId: autoReelId,
           systemReelId: autoReelId,
-          size: String(reel.size),
-          gsm: String(reel.gsm),
-          bf: String(reel.bf),
+          size: parseFloat(reel.size) || 0,
+          gsm: parseFloat(reel.gsm) || 0,
+          bf: parseFloat(reel.bf) || 0,
           colour: reel.colour || 'Kraft',
-          receivedQty: parseFloat(reel.receivedQty),
-          balanceQty: parseFloat(reel.receivedQty),
+          receivedQty: parseFloat(reel.receivedQty) || 0,
+          balanceQty: parseFloat(reel.receivedQty) || 0,
           ratePerKg: parseFloat(reel.ratePerKg || 0),
           createdAt: new Date().toISOString()
         };
-        batch.set({ table: 'inventory', id: newId }, newDoc);
+        await addDoc('inventory', newDoc);
         count++;
-      });
-      await batch.commit();
+      }
       if (addLog) addLog(`Inwarded ${count} Job Work reels for client ${client.name} (DC: ${inwardMeta.inwardChallanNo})`);
       alert(`✓ Successfully inwarded ${count} paper reels for ${client.name}!`);
       setShowInwardForm(false);
