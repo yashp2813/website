@@ -4309,6 +4309,27 @@ export const getItemLayers = (item) => {
   return [];
 };
 
+// Check if an item or order is a Corrugated Sheet / PPC / Plate / Partition (ready right after corrugation)
+export const isCorrugatedSheetItem = (itemOrName, order = null) => {
+  if (!itemOrName && !order) return false;
+  const itemType = (typeof itemOrName === 'object' && itemOrName !== null ? (itemOrName.itemType || itemOrName.Item_Type) : '') || (order?.itemType || order?.orderType || '');
+  const name = (typeof itemOrName === 'object' && itemOrName !== null ? (itemOrName.name || itemOrName.Item_Name || itemOrName.itemName) : (itemOrName || '')) || (order?.itemName || order?.Item_Name || '');
+  
+  const typeUpper = String(itemType || '').toUpperCase();
+  const nameUpper = String(name || '').toUpperCase();
+  
+  if (typeUpper.includes('SHEET') || typeUpper.includes('PPC') || typeUpper.includes('PLATE') || typeUpper.includes('PAD') || typeUpper.includes('PARTITION') || typeUpper.includes('FLAT') || typeUpper.includes('BOARD')) {
+    return true;
+  }
+  if (nameUpper.includes('SHEET') || nameUpper.includes('PPC') || nameUpper.includes('PLATE') || nameUpper.includes('PAD') || nameUpper.includes('PARTITION') || nameUpper.includes('CORRUGATED SHEET') || nameUpper.includes('FLAT BOARD')) {
+    return true;
+  }
+  if (order?.jobWorkType && String(order.jobWorkType).toLowerCase().includes('sheet')) {
+    return true;
+  }
+  return false;
+};
+
 const getWipStages = (w) => {
   if (!w || !w.stages) return [];
   if (Array.isArray(w.stages)) return w.stages;
@@ -5944,7 +5965,8 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
     if (!wipData || !advanceWipStage) return;
     const stages = getPlantWipStages(wipData.companyId, companies);
     const currIdx = stages.findIndex(st => isWipInStage(wipData, st));
-    const nextStage = currIdx >= 0 && currIdx < stages.length - 1 ? stages[currIdx + 1] : 'Bundling/Ready';
+    const isSheet = isCorrugatedSheetItem(wipData);
+    const nextStage = (currIdx === 0 && isSheet) ? 'Bundling/Ready' : (currIdx >= 0 && currIdx < stages.length - 1 ? stages[currIdx + 1] : 'Bundling/Ready');
     if (window.confirm(`Advance "${wipData.itemName || wipData.id}" → "${nextStage}"?`)) {
       await advanceWipStage(wipData, nextStage);
       playBeepSound(); alert(`Advanced to ${nextStage}!`); onClose();
@@ -14884,7 +14906,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         } catch(err) {}
       }
 
-      // 2. AUTO-ADVANCE WIP: Deduct produced quantity from Corrugation balance and add to Printing stage
+      // 2. AUTO-ADVANCE WIP: If corrugated sheet -> directly Ready in Finished Goods (Bundling/Ready); if box -> advance to Printing stage
       const producedSheets = parseFloat(finalRecord.linerQty || 0);
       const upsCount = parseFloat(finalRecord.numberOfUps || 1);
       const producedQtyPcs = Math.round(producedSheets * upsCount);
@@ -14894,6 +14916,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           const targetOrderId = finalRecord.orderId;
           const targetJobNo = jCardNo;
           const targetItemName = finalRecord.usedForItem;
+
+          const linkedOrder = orders.find(o => o.id === targetOrderId || o.orderNo === targetJobNo);
+          const matchedItem = items.find(i => i.id === linkedOrder?.itemId || i.name === targetItemName || i.Item_Name === targetItemName);
+          const isSheet = isCorrugatedSheetItem(matchedItem || targetItemName, linkedOrder);
+          const destinationStage = isSheet ? 'Bundling/Ready' : 'Printing';
 
           // Find existing Corrugation WIP card by orderId, jobNo, or itemName
           const existingCorrWip = (wipStages || []).find(w =>
@@ -14922,31 +14949,31 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             }
           }
 
-          // Check if Printing card already exists for this order/job
-          const existingPrintingWip = (wipStages || []).find(w =>
-            w.currentStage === 'Printing' && (
+          // Check if destination stage card already exists for this order/job
+          const existingDestWip = (wipStages || []).find(w =>
+            (w.currentStage === destinationStage || (isSheet && (w.currentStage === 'Bundling' || w.currentStage === 'Ready in FG'))) && (
               (targetOrderId && w.orderId === targetOrderId) ||
               (targetJobNo && w.jobNo === targetJobNo) ||
               (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
             )
           );
 
-          if (existingPrintingWip) {
-            const newPrintQty = parseFloat(existingPrintingWip.qty || 0) + producedQtyPcs;
-            const newPrintSheets = parseFloat(existingPrintingWip.sheets || 0) + producedSheets;
-            await updateDoc(getDocRef('wip_stages', existingPrintingWip.id), { 
-              qty: newPrintQty, 
-              sheets: newPrintSheets, 
+          if (existingDestWip) {
+            const newDestQty = parseFloat(existingDestWip.qty || 0) + producedQtyPcs;
+            const newDestSheets = parseFloat(existingDestWip.sheets || 0) + producedSheets;
+            await updateDoc(getDocRef('wip_stages', existingDestWip.id), { 
+              qty: newDestQty, 
+              sheets: newDestSheets, 
               updatedAt: new Date().toISOString() 
             });
-            await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newPrintQty, newPrintSheets, existingPrintingWip.id]).catch(() => {});
+            await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newDestQty, newDestSheets, existingDestWip.id]).catch(() => {});
           } else {
             const wipPayload = {
               orderId: targetOrderId || `job_${Date.now()}`,
               companyId: finalRecord.companyId || allowedCompanyId || '',
               jobNo: targetJobNo || 'JC-CORR',
               itemName: targetItemName || 'Corrugated Board',
-              currentStage: 'Printing',
+              currentStage: destinationStage,
               qty: producedQtyPcs,
               sheets: Math.round(producedSheets),
               ups: upsCount,
@@ -14956,8 +14983,33 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             };
             await addDoc(getColRef('wip_stages'), wipPayload);
           }
+
+          // If corrugated sheet, also auto-inward directly to Finished Goods on the order
+          if (isSheet && linkedOrder && getDocRef) {
+            try {
+              const currentFg = parseFloat(linkedOrder.openingFgQty || 0);
+              const newFg = currentFg + producedQtyPcs;
+              const targetOrderQty = parseFloat(linkedOrder.orderQty || 0);
+              const newStatus = (newFg >= targetOrderQty) ? 'Ready for Dispatch' : (linkedOrder.status || 'In Production');
+              await updateDoc(getDocRef('orders', linkedOrder.id), {
+                openingFgQty: newFg,
+                status: newStatus,
+                updatedAt: new Date().toISOString()
+              });
+              await executeQuery(`UPDATE orders SET openingFgQty = ?, status = ?, updatedAt = ? WHERE id = ?`, [
+                newFg, newStatus, new Date().toISOString(), linkedOrder.id
+              ]).catch(() => {});
+            } catch(e) {}
+          }
+
           window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
-          if (addLog) addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo || targetItemName}]`);
+          if (addLog) {
+            if (isSheet) {
+              addLog(`✓ Corrugated Sheet produced: ${producedQtyPcs} sheets directly marked Ready in Finished Goods for Job [${jCardNo || targetItemName}]`);
+            } else {
+              addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo || targetItemName}]`);
+            }
+          }
         } catch(err) {
           console.warn('WIP advance error:', err);
         }
@@ -14970,8 +15022,12 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           const allPLogs = [...production, { ...finalRecord, id: '_new' }].filter(p => p.orderId === finalRecord.orderId);
           const item = items.find(i => i.id === linkedOrder.itemId);
           const isPpc = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+          const isSheet = isCorrugatedSheetItem(item, linkedOrder);
           let producedQty = 0;
-          if (isPpc) {
+          if (isSheet) {
+            const sumSheets = allPLogs.reduce((a, p) => a + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || linkedOrder.plannedUps || 1)), 0);
+            producedQty = Math.max(parseInt(linkedOrder.openingFgQty || 0), Math.round(sumSheets));
+          } else if (isPpc) {
             const cPPS = Math.max(1, parseInt(linkedOrder.smallPerSet || 2) - 1);
             const sPPS = Math.max(1, parseInt(linkedOrder.commonPerSet || 2) - 1);
             let tc = 0, ts = 0;
@@ -14996,8 +15052,9 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           }
           const orderQty = parseInt(linkedOrder.orderQty || 0);
           if (producedQty >= orderQty && orderQty > 0) {
-            await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'Completed' });
-            addLog(`Auto-completed Job [${jCardNo}]: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced)`);
+            const targetStatus = isSheet ? 'Ready for Dispatch' : 'Completed';
+            await updateDoc(getDocRef('orders', linkedOrder.id), { status: targetStatus });
+            addLog(`Auto-completed Job [${jCardNo}]: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced - ${targetStatus})`);
           } else if (linkedOrder.status === 'Pending') {
             await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'In Production' });
           }
@@ -18128,10 +18185,15 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     const pLogs = production.filter(p => p.orderId === order.id);
     const item = items.find(i => i.id === order.itemId);
     const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+    const isSheet = isCorrugatedSheetItem(item, order);
     
     let producedQty = 0;
 
-    if (isPpcOrder) {
+    if (isSheet) {
+        const sumSheets = pLogs.reduce((acc, p) => acc + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || order.plannedUps || 1)), 0);
+        const fgStockQty = parseInt(order.openingFgQty || 0);
+        producedQty = Math.max(fgStockQty, Math.round(sumSheets));
+    } else if (isPpcOrder) {
         const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
         const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
         let totalCommonPieces = 0, totalSmallPieces = 0;
@@ -26724,25 +26786,41 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
                             &larr; Back
                           </button>
                         )}
-                        {idx < STAGES.length - 1 ? (
-                          <button
-                            type="button"
-                            onClick={() => moveWipStage(wip, STAGES[idx + 1])}
-                            className="apex-btn apex-btn-primary"
-                            style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#1c1917', minHeight: 32 }}
-                          >
-                            Advance &rarr;
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => moveWipStage(wip, 'Finished Goods')}
-                            className="apex-btn apex-btn-primary"
-                            style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#16a34a', minHeight: 32 }}
-                          >
-                            📦 Ready in FG
-                          </button>
-                        )}
+                        {(() => {
+                          const isSheet = isCorrugatedSheetItem(wip, ord);
+                          if (stage === 'Corrugation' && isSheet) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => moveWipStage(wip, 'Bundling/Ready')}
+                                className="apex-btn apex-btn-primary"
+                                style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#16a34a', minHeight: 32 }}
+                                title="Corrugated sheets are ready directly after corrugation"
+                              >
+                                📦 Ready in FG &rarr;
+                              </button>
+                            );
+                          }
+                          return idx < STAGES.length - 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => moveWipStage(wip, STAGES[idx + 1])}
+                              className="apex-btn apex-btn-primary"
+                              style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#1c1917', minHeight: 32 }}
+                            >
+                              Advance &rarr;
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => moveWipStage(wip, 'Finished Goods')}
+                              className="apex-btn apex-btn-primary"
+                              style={{ padding: '6px 10px', fontSize: 11, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#16a34a', minHeight: 32 }}
+                            >
+                              📦 Ready in FG
+                            </button>
+                          );
+                        })()}
                       </div>
 
                     </div>
