@@ -7554,8 +7554,18 @@ export default function App() {
     const list = Array.isArray(jobs) ? jobs : [];
     setPlannedJobs(list);
     try {
-      localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(list));
-      localStorage.setItem(`erp_planned_jobs_all`, JSON.stringify(list));
+      if (list.length === 0) {
+        // Wipe all localStorage variants when clearing so stale data can't resurface
+        localStorage.removeItem(`erp_planned_jobs_${uid || 'all'}`);
+        localStorage.removeItem('erp_planned_jobs_all');
+        // Also clear any other uid-keyed variants that might exist
+        Object.keys(localStorage).forEach(key => {
+          if (key.startsWith('erp_planned_jobs_')) localStorage.removeItem(key);
+        });
+      } else {
+        localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(list));
+        localStorage.setItem('erp_planned_jobs_all', JSON.stringify(list));
+      }
       window.dispatchEvent(new CustomEvent('apex_jobs_changed', { detail: list }));
     } catch(e) {}
 
@@ -7657,18 +7667,15 @@ export default function App() {
         setPlannedJobs(parsedPJobs);
         try {
           localStorage.setItem('erp_planned_jobs_all', JSON.stringify(parsedPJobs));
+          localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(parsedPJobs));
         } catch(e) {}
       } else {
-        // Fallback: If cloud DB planned_jobs is empty, check localStorage and seed to cloud
+        // DB has no planned jobs — treat as authoritative empty state.
+        // Clear localStorage so stale old data doesn't re-seed the DB on next load.
+        setPlannedJobs([]);
         try {
-          const localSaved = localStorage.getItem(`erp_planned_jobs_${uid || 'all'}`) || localStorage.getItem('erp_planned_jobs_all');
-          if (localSaved) {
-            const localList = JSON.parse(localSaved);
-            if (Array.isArray(localList) && localList.length > 0) {
-              setPlannedJobs(localList);
-              savePlannedJobs(localList);
-            }
-          }
+          localStorage.removeItem('erp_planned_jobs_all');
+          localStorage.removeItem(`erp_planned_jobs_${uid || 'all'}`);
         } catch(e) {}
       }
 
@@ -7730,6 +7737,12 @@ export default function App() {
             rollStandBackingB: safeJsonParse(j.rollStandBackingB, null),
           }));
           setPlannedJobs(parsedPJobs);
+        } else if (pJobs && pJobs.length === 0) {
+          // DB authoritative: no planned jobs — clear local state and localStorage
+          setPlannedJobs([]);
+          try {
+            localStorage.removeItem('erp_planned_jobs_all');
+          } catch(e) {}
         }
       } catch (err) {
         // Silently ignore poll errors (network blip, etc.)
@@ -16024,12 +16037,23 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   }, [parentPlannedJobs]);
 
   const saveJobsToStorage = (jobs) => {
-    setPlannedJobs(jobs);
+    const list = Array.isArray(jobs) ? jobs : [];
+    setPlannedJobs(list);
     try { 
-      localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(jobs)); 
-      window.dispatchEvent(new CustomEvent('apex_jobs_changed', { detail: jobs }));
+      if (list.length === 0) {
+        // Remove all localStorage keys so stale data can't resurface
+        localStorage.removeItem(JOBS_STORAGE_KEY);
+        localStorage.removeItem('erp_planned_jobs_all');
+        Object.keys(localStorage).forEach(key => {
+          if (key.startsWith('erp_planned_jobs_')) localStorage.removeItem(key);
+        });
+      } else {
+        localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(list));
+        localStorage.setItem('erp_planned_jobs_all', JSON.stringify(list));
+      }
+      window.dispatchEvent(new CustomEvent('apex_jobs_changed', { detail: list }));
     } catch(e) {}
-    if (onSavePlannedJobs) onSavePlannedJobs(jobs);
+    if (onSavePlannedJobs) onSavePlannedJobs(list);
   };
 
   const [draggedJobId, setDraggedJobId] = useState(null);
