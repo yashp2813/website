@@ -1311,7 +1311,7 @@ export function GlobalVoiceAssistant({
             else if (action.type === 'log_wastage') {
               const wp = action.wastagePayload || {};
               if (addDoc && getColRef) {
-                await addDoc(getColRef('wastage_logs'), {
+                await addDoc(getColRef('wastage'), {
                   companyId: activeUnitId || (companies[0]?.id || ''),
                   date: new Date().toISOString().split('T')[0],
                   wastageKg: parseFloat(wp.wastageKg || 50),
@@ -1329,13 +1329,16 @@ export function GlobalVoiceAssistant({
             else if (action.type === 'log_fuel_power') {
               const fp = action.fuelPowerPayload || {};
               if (addDoc && getColRef) {
-                await addDoc(getColRef('fuel_power_logs'), {
+                // BUG 9 FIX: fuel_power_logs table didn't exist — storing in wastage with category='fuel_power'
+                await addDoc(getColRef('wastage'), {
                   companyId: activeUnitId || (companies[0]?.id || ''),
                   date: new Date().toISOString().split('T')[0],
+                  category: 'fuel_power',
                   coalKg: parseFloat(fp.coalKg || 0),
                   firewoodKg: parseFloat(fp.firewoodKg || 0),
                   powerKwh: parseFloat(fp.powerKwh || 0),
-                  loggedBy: currentUser?.name || 'AI Assistant',
+                  operator: currentUser?.name || 'AI Assistant',
+                  notes: `AI Logged: Coal ${fp.coalKg || 0}kg, Firewood ${fp.firewoodKg || 0}kg, Power ${fp.powerKwh || 0}kWh`,
                   createdAt: new Date().toISOString()
                 });
                 if (addLog) addLog(`AI Logged Boiler Fuel & Electricity usage`);
@@ -4436,6 +4439,9 @@ const normalizeTableName = (tableName) => {
   if (!tableName) return '';
   const table = typeof tableName === 'string' ? tableName : (tableName?.table || tableName || '');
   if (table === 'wipStages') return 'wip_stages';
+  if (table === 'purchase_orders') return 'purchaseOrders';
+  if (table === 'wastage_logs') return 'wastage';
+  if (table === 'dailyReports') return 'daily_reports';
   return table;
 };
 
@@ -4445,11 +4451,13 @@ const addDoc = async (tableName, docData) => {
   const keys = Object.keys(docData).filter(k => k !== 'id');
   const cols = ['id', ...keys].join(', ');
   const placeholders = ['?', ...keys.map(() => '?')].join(', ');
-  const values = [id, ...keys.map(k => typeof docData[k] === 'object' ? JSON.stringify(docData[k]) : docData[k])];
+  const values = [id, ...keys.map(k => typeof docData[k] === 'object' && docData[k] !== null ? JSON.stringify(docData[k]) : docData[k])];
   await executeWithAutoMigrate(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`, values, table);
+  // BUG 17 FIX: build result with already-parsed objects (not raw JSON strings)
+  // so turso_db_change consumers don't need to re-parse after merge
   const result = { id, ...docData };
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'add', data: result } }));
+    window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'add', data: result, _parsed: true } }));
   }
   return result;
 };
@@ -4460,16 +4468,23 @@ const updateDoc = async (docRef, updateData) => {
   const keys = Object.keys(updateData).filter(k => k !== 'id');
   if (keys.length === 0) return;
   const setClause = keys.map(k => `${k} = ?`).join(', ');
-  const values = [...keys.map(k => typeof updateData[k] === 'object' ? JSON.stringify(updateData[k]) : updateData[k]), id];
+  const values = [...keys.map(k => typeof updateData[k] === 'object' && updateData[k] !== null ? JSON.stringify(updateData[k]) : updateData[k]), id];
   await executeWithAutoMigrate(`UPDATE ${table} SET ${setClause} WHERE id = ?`, values, table);
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'update', id, data: updateData } }));
+    // BUG 17 FIX: mark event as _parsed so handlers know fields are already objects
+    window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'update', id, data: updateData, _parsed: true } }));
   }
 };
 
+// BUG 11 FIX: deleteDoc now requires a { table, id } object (from getDocRef).
+// Passing a bare string previously set table = id = the string — wrong SQL.
 const deleteDoc = async (docRef) => {
-  const table = normalizeTableName(typeof docRef === 'string' ? docRef : docRef?.table);
-  const id = typeof docRef === 'string' ? docRef : docRef?.id;
+  if (!docRef || typeof docRef !== 'object' || !docRef.table || !docRef.id) {
+    console.error('[deleteDoc] Must be called with getDocRef(table, id). Got:', docRef);
+    throw new Error('deleteDoc requires { table, id } — use getDocRef(table, id)');
+  }
+  const table = normalizeTableName(docRef.table);
+  const id = docRef.id;
   await executeQuery(`DELETE FROM ${table} WHERE id = ?`, [id]);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'delete', id } }));
@@ -4480,13 +4495,28 @@ const getColRef = (table) => normalizeTableName(table);
 const getDocRef = (table, id) => ({ table: normalizeTableName(table), id });
 
 const db = {};
+// BUG 18 FIX: writeBatch.set now uses INSERT OR REPLACE (true upsert like Firebase batch.set)
+// so it doesn't crash on duplicate IDs.
 const writeBatch = (database = db) => {
   const operations = [];
   return {
     set: (docRef, data) => {
       const table = normalizeTableName(typeof docRef === 'string' ? docRef : docRef?.table);
       const id = typeof docRef === 'string' ? (data?.id || generateId()) : (docRef?.id || data?.id || generateId());
-      operations.push(() => addDoc(table, { id, ...data }));
+      const docWithId = { id, ...data };
+      const keys = Object.keys(docWithId).filter(k => k !== 'id');
+      const cols = ['id', ...keys].join(', ');
+      const placeholders = ['?', ...keys.map(() => '?')].join(', ');
+      const updateClause = keys.map(k => `${k} = excluded.${k}`).join(', ');
+      const values = [id, ...keys.map(k => typeof docWithId[k] === 'object' && docWithId[k] !== null ? JSON.stringify(docWithId[k]) : docWithId[k])];
+      operations.push(() => executeWithAutoMigrate(
+        `INSERT INTO ${table} (${cols}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updateClause}`,
+        values, table
+      ).then(() => {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table, action: 'add', data: docWithId, _parsed: true } }));
+        }
+      }));
     },
     update: (docRef, data) => {
       operations.push(() => updateDoc(docRef, data));
@@ -7046,31 +7076,41 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
 
 export default function App() {
   const advanceWipStage = async (wip, nextStage) => {
-    let stagesObj = {};
-    if (typeof wip.stages === 'string') {
-      try { stagesObj = JSON.parse(wip.stages); } catch(e) {}
-    } else if (typeof wip.stages === 'object' && wip.stages !== null) {
-      stagesObj = wip.stages;
+    try {
+      let stagesObj = {};
+      if (typeof wip.stages === 'string') {
+        try { stagesObj = JSON.parse(wip.stages); } catch(e) {}
+      } else if (typeof wip.stages === 'object' && wip.stages !== null) {
+        stagesObj = wip.stages;
+      }
+      const stageKey = nextStage.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      stagesObj[stageKey] = {
+        completedAt: new Date().toISOString(),
+        completedBy: currentErpUser?.name || 'Operator'
+      };
+      await updateDoc(getDocRef('wip_stages', wip.id), {
+        currentStage: nextStage,
+        stages: JSON.stringify(stagesObj),
+        updatedAt: new Date().toISOString()
+      });
+      addLog(`Advanced WIP order ${wip.orderId || wip.itemName} to ${nextStage}`);
+    } catch (err) {
+      console.error('Failed to advance WIP stage:', err);
+      alert(`Could not advance to ${nextStage}: ${err?.message || err}`);
     }
-    const stageKey = nextStage.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    stagesObj[stageKey] = {
-      completedAt: new Date().toISOString(),
-      completedBy: currentErpUser?.name || 'Operator'
-    };
-    await updateDoc(getDocRef('wip_stages', wip.id), {
-      currentStage: nextStage,
-      stages: JSON.stringify(stagesObj),
-      updatedAt: new Date().toISOString()
-    });
-    addLog(`Advanced WIP order ${wip.orderId || wip.itemName} to ${nextStage}`);
   };
 
   const moveWipStageBack = async (wip, prevStage) => {
-    await updateDoc(getDocRef('wip_stages', wip.id), {
-      currentStage: prevStage,
-      updatedAt: new Date().toISOString()
-    });
-    addLog(`Moved WIP order ${wip.orderId || wip.itemName} back to ${prevStage}`);
+    try {
+      await updateDoc(getDocRef('wip_stages', wip.id), {
+        currentStage: prevStage,
+        updatedAt: new Date().toISOString()
+      });
+      addLog(`Moved WIP order ${wip.orderId || wip.itemName} back to ${prevStage}`);
+    } catch (err) {
+      console.error('Failed to move WIP stage back:', err);
+      alert(`Could not move back to ${prevStage}: ${err?.message || err}`);
+    }
   };
 
   const [isDbReady, setIsDbReady] = useState(false);
@@ -7602,11 +7642,14 @@ export default function App() {
 
   useEffect(() => {
     const handleJobsChanged = (e) => {
-      if (e.detail) setPlannedJobs(e.detail);
-      else {
+      // BUG 20 FIX: explicit check for detail
+      if (e.detail !== undefined && e.detail !== null) {
+        setPlannedJobs(Array.isArray(e.detail) ? e.detail : []);
+      } else {
         try {
           const saved = localStorage.getItem(`erp_planned_jobs_${uid || 'all'}`) || localStorage.getItem('erp_planned_jobs_all');
           if (saved) setPlannedJobs(JSON.parse(saved));
+          else setPlannedJobs([]);
         } catch(err) {}
       }
     };
@@ -7650,7 +7693,7 @@ export default function App() {
       setTransactions(txns);
       setCustomers(custs);
       setDispatches(disps);
-      setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, []) })));
+      setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, {}) })));
       setDailyReports(daily);
 
       // Cloud Planned Jobs Sync
@@ -7670,13 +7713,23 @@ export default function App() {
           localStorage.setItem(`erp_planned_jobs_${uid || 'all'}`, JSON.stringify(parsedPJobs));
         } catch(e) {}
       } else {
-        // DB has no planned jobs — treat as authoritative empty state.
-        // Clear localStorage so stale old data doesn't re-seed the DB on next load.
-        setPlannedJobs([]);
+        // If DB is empty, check if localStorage has existing planned jobs to restore & seed to DB
         try {
-          localStorage.removeItem('erp_planned_jobs_all');
-          localStorage.removeItem(`erp_planned_jobs_${uid || 'all'}`);
-        } catch(e) {}
+          const saved = localStorage.getItem(`erp_planned_jobs_${uid || 'all'}`) || localStorage.getItem('erp_planned_jobs_all');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setPlannedJobs(parsed);
+              savePlannedJobs(parsed).catch(() => {});
+            } else {
+              setPlannedJobs([]);
+            }
+          } else {
+            setPlannedJobs([]);
+          }
+        } catch(e) {
+          setPlannedJobs([]);
+        }
       }
 
       setIsDbReady(true);
@@ -7699,8 +7752,9 @@ export default function App() {
   }, []);
 
   // 🔄 Real-time cross-device sync: poll Turso cloud DB every 30 seconds
-  // This keeps phones and PCs in sync without requiring a manual refresh.
+  // BUG 19 FIX: Only run background poll while user is authenticated
   useEffect(() => {
+    if (!currentErpUser) return;
     const POLL_INTERVAL_MS = 30000; // 30 seconds
     const intervalId = setInterval(async () => {
       try {
@@ -7723,7 +7777,7 @@ export default function App() {
         ]);
         if (prod) setProduction(prod.map(p => ({ ...p, consumedReels: safeJsonParse(p.consumedReels, []) })));
         if (ords) setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
-        if (wip) setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, []) })));
+        if (wip) setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, {}) })));
         if (inv) setInventory(inv);
         if (wst) setWastageLogs(wst);
         if (pJobs && pJobs.length > 0) {
@@ -7750,12 +7804,39 @@ export default function App() {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(intervalId);
-  }, []);
+  }, [currentErpUser]);
 
   useEffect(() => {
     const handleDbChange = (e) => {
-      let { table, action, id, data } = e.detail || {};
+      let { table, action, id, data, _parsed } = e.detail || {};
       if (table === 'wipStages') table = 'wip_stages';
+
+      // BUG 7 FIX: helper to parse JSON string fields back to arrays/objects
+      // Only needed when _parsed is NOT true (i.e., data came from a raw DB read, not from our helpers)
+      const parseOrderFields = (o) => {
+        if (!o || _parsed) return o;
+        return {
+          ...o,
+          dispatchSchedule: Array.isArray(o.dispatchSchedule) ? o.dispatchSchedule : safeJsonParse(o.dispatchSchedule, []),
+          dispatchHistory: Array.isArray(o.dispatchHistory) ? o.dispatchHistory : safeJsonParse(o.dispatchHistory, []),
+          attachedReels: Array.isArray(o.attachedReels) ? o.attachedReels : safeJsonParse(o.attachedReels, []),
+        };
+      };
+      const parseProdFields = (p) => {
+        if (!p || _parsed) return p;
+        return {
+          ...p,
+          consumedReels: Array.isArray(p.consumedReels) ? p.consumedReels : safeJsonParse(p.consumedReels, []),
+        };
+      };
+      const parseWipFields = (w) => {
+        if (!w || _parsed) return w;
+        return {
+          ...w,
+          stages: (w.stages && typeof w.stages === 'string') ? safeJsonParse(w.stages, {}) : (w.stages || {}),
+        };
+      };
+
       if (action === 'delete') {
         if (table === 'production') setProduction(prev => prev.filter(p => p.id !== id));
         else if (table === 'orders') setOrders(prev => prev.filter(o => o.id !== id));
@@ -7768,6 +7849,12 @@ export default function App() {
         else if (table === 'purchaseOrders') setPurchaseOrders(prev => prev.filter(p => p.id !== id));
         else if (table === 'erp_users') setErpUsers(prev => prev.filter(u => u.id !== id));
         else if (table === 'wip_stages') setWipStages(prev => prev.filter(w => w.id !== id));
+        // BUG 8 FIX: missing tables
+        else if (table === 'dispatches') setDispatches(prev => prev.filter(d => d.id !== id));
+        else if (table === 'logs') setLogs(prev => prev.filter(l => l.id !== id));
+        else if (table === 'costings') setCostings(prev => prev.filter(c => c.id !== id));
+        else if (table === 'transactions') setTransactions(prev => prev.filter(t => t.id !== id));
+        else if (table === 'daily_reports') setDailyReports(prev => prev.filter(r => r.id !== id));
       } else if (action === 'bulk_delete') {
         if (table === 'wip_stages') setWipStages([]);
         else if (table === 'production') setProduction([]);
@@ -7775,9 +7862,11 @@ export default function App() {
         else if (table === 'inventory') setInventory([]);
         else if (table === 'items') setItems([]);
         else if (table === 'wastage') setWastageLogs([]);
+        else if (table === 'dispatches') setDispatches([]);
       } else if (action === 'add') {
-        if (table === 'production') setProduction(prev => [data, ...prev.filter(p => p.id !== data.id)]);
-        else if (table === 'orders') setOrders(prev => [data, ...prev.filter(o => o.id !== data.id)]);
+        // BUG 7 FIX: parse JSON fields on add too, in case data came from a raw path
+        if (table === 'production') setProduction(prev => [parseProdFields(data), ...prev.filter(p => p.id !== data.id)]);
+        else if (table === 'orders') setOrders(prev => [parseOrderFields(data), ...prev.filter(o => o.id !== data.id)]);
         else if (table === 'inventory') setInventory(prev => [data, ...prev.filter(i => i.id !== data.id)]);
         else if (table === 'items') setItems(prev => [data, ...prev.filter(i => i.id !== data.id)]);
         else if (table === 'customers') setCustomers(prev => [data, ...prev.filter(c => c.id !== data.id)]);
@@ -7786,10 +7875,25 @@ export default function App() {
         else if (table === 'wastage') setWastageLogs(prev => [data, ...prev.filter(w => w.id !== data.id)]);
         else if (table === 'purchaseOrders') setPurchaseOrders(prev => [data, ...prev.filter(p => p.id !== data.id)]);
         else if (table === 'erp_users') setErpUsers(prev => [data, ...prev.filter(u => u.id !== data.id)]);
-        else if (table === 'wip_stages') setWipStages(prev => [data, ...prev.filter(w => w.id !== data.id)]);
+        else if (table === 'wip_stages') setWipStages(prev => [parseWipFields(data), ...prev.filter(w => w.id !== data.id)]);
+        // BUG 8 FIX: missing tables
+        else if (table === 'dispatches') setDispatches(prev => [data, ...prev.filter(d => d.id !== data.id)]);
+        else if (table === 'logs') setLogs(prev => [data, ...prev.filter(l => l.id !== data.id)]);
+        else if (table === 'costings') setCostings(prev => [data, ...prev.filter(c => c.id !== data.id)]);
+        else if (table === 'transactions') setTransactions(prev => [data, ...prev.filter(t => t.id !== data.id)]);
+        else if (table === 'daily_reports') setDailyReports(prev => [data, ...prev.filter(r => r.id !== data.id)]);
       } else if (action === 'update') {
-        if (table === 'production') setProduction(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
-        else if (table === 'orders') setOrders(prev => prev.map(o => o.id === id ? { ...o, ...data } : o));
+        // BUG 7 FIX: merge and re-parse JSON fields so they remain arrays, not strings
+        if (table === 'production') setProduction(prev => prev.map(p => {
+          if (p.id !== id) return p;
+          const merged = { ...p, ...data };
+          return parseProdFields(merged);
+        }));
+        else if (table === 'orders') setOrders(prev => prev.map(o => {
+          if (o.id !== id) return o;
+          const merged = { ...o, ...data };
+          return parseOrderFields(merged);
+        }));
         else if (table === 'inventory') setInventory(prev => prev.map(i => i.id === id ? { ...i, ...data } : i));
         else if (table === 'items') setItems(prev => prev.map(i => i.id === id ? { ...i, ...data } : i));
         else if (table === 'customers') setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
@@ -7798,7 +7902,17 @@ export default function App() {
         else if (table === 'wastage') setWastageLogs(prev => prev.map(w => w.id === id ? { ...w, ...data } : w));
         else if (table === 'purchaseOrders') setPurchaseOrders(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
         else if (table === 'erp_users') setErpUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u));
-        else if (table === 'wip_stages') setWipStages(prev => prev.map(w => w.id === id ? { ...w, ...data } : w));
+        else if (table === 'wip_stages') setWipStages(prev => prev.map(w => {
+          if (w.id !== id) return w;
+          const merged = { ...w, ...data };
+          return parseWipFields(merged);
+        }));
+        // BUG 8 FIX: missing tables
+        else if (table === 'dispatches') setDispatches(prev => prev.map(d => d.id === id ? { ...d, ...data } : d));
+        else if (table === 'logs') setLogs(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
+        else if (table === 'costings') setCostings(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+        else if (table === 'transactions') setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...data } : t));
+        else if (table === 'daily_reports') setDailyReports(prev => prev.map(r => r.id === id ? { ...r, ...data } : r));
       }
     };
     window.addEventListener('turso_db_change', handleDbChange);
@@ -8168,7 +8282,7 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={inventory} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} companies={companies} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} />
+      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={inventory} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} companies={companies} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} onSelectOrder={(ord) => setVoiceJobCardOrder(ord)} />
       <CreateDirectJobModal
         isOpen={createDirectJobModalOpen}
         onClose={() => setCreateDirectJobModalOpen(false)}
@@ -8260,10 +8374,10 @@ export default function App() {
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
         {activeTab === 'calculator'      && canAccess(currentErpUser.role,'calculator')      && <CalculatorView companies={companies} items={unitItems} addLog={addLog} currentUser={currentErpUser} activeUnitId={uid} />}
         {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} customers={unitCustomers} getColRef={getColRef} addLog={addLog} costings={costings} currentUser={currentErpUser} />}
-        {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
+        {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} wipStages={unitWipStages} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
         {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} wipStages={unitWipStages} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
-        {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
-        {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
+        {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
+        {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} customers={unitCustomers} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'own_stock' })} />}
@@ -14363,15 +14477,15 @@ function CompleteJobModal({ isOpen, onClose, order, inventory = [], onFinalizeJo
 }
 
 // --- PRODUCTION VIEW ---
-function ProductionView({ inventory, production, orders, items, companies, addLog, role, getColRef, getDocRef, currentUser, productionPrefill, onClearPrefill, activeUnitId, autoSetUnit, onAttachReel, wipStages = [], plannedJobs = [] }) {
+function ProductionView({ inventory = [], production = [], orders = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, productionPrefill, onClearPrefill, activeUnitId, autoSetUnit, onAttachReel, wipStages = [], plannedJobs = [] }) {
   const [substitutionOverride, setSubstitutionOverride] = useState(false);
   const [substitutionReason, setSubstitutionReason] = useState('');
   const [gateModalQuery, setGateModalQuery] = useState(null);
-  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
-  const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
-  const visibleItems = allowedCompanyId === 'all' ? items : items.filter(i => i.companyId === allowedCompanyId);
-  const visibleProduction = allowedCompanyId === 'all' ? production : production.filter(p => p.companyId === allowedCompanyId);
-  const visibleOrders = allowedCompanyId === 'all' ? orders : orders.filter(o => o.companyId === allowedCompanyId);
+  const allowedCompanyId = activeUnitId || 'all';
+  const visibleCompanies = companies;
+  const visibleItems = items;
+  const visibleProduction = production;
+  const visibleOrders = orders;
 
   const [editingId, setEditingId] = useState(null);
   const [suggestedKg, setSuggestedKg] = useState(null);
@@ -14553,12 +14667,23 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
     }));
   };
 
+  // BUG 1 FIX: track whether we just processed a prefill so the second effect run
+  // (triggered by onClearPrefill setting productionPrefill to null) doesn't restore the stale draft
+  const didPrefillRef = useRef(false);
+
   // 1. Initial Mount: restore saved draft or consume prefill
   useEffect(() => {
     if (productionPrefill && productionPrefill.id) {
+      didPrefillRef.current = true; // mark: next run must skip draft restore
       handleJobSelect(productionPrefill.id);
       onClearPrefill?.();
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    // Second run after prefill — skip draft restore entirely
+    if (didPrefillRef.current) {
+      didPrefillRef.current = false;
       return;
     }
 
@@ -14702,7 +14827,17 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       alert("⚠️ A production log can only be entered and accepted if linked to a Job Card.\n\nPlease select an active Job Card from the dropdown above.");
       return;
     }
+    // BUG 12 FIX: validate sheets and reel weight before accepting submission
+    const linerQtyNum = parseFloat(newRecord.linerQty);
+    if (!newRecord.linerQty || isNaN(linerQtyNum) || linerQtyNum <= 0) {
+      alert('⚠️ Please enter the number of sheets produced (Liner Qty must be > 0).');
+      return;
+    }
     const totalKg = consumedReels.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0);
+    if (totalKg <= 0) {
+      alert('⚠️ Please enter at least one reel with weight used (total weight must be > 0).');
+      return;
+    }
     const reelNosStr = consumedReels.map(r => (r.reelNo || '').toUpperCase()).filter(Boolean).join(', ');
     const finalRecord = { ...newRecord, consumedReels: consumedReels, useKg: totalKg.toFixed(1), reelNos: reelNosStr, tallySynced: false };
 
@@ -14718,24 +14853,35 @@ function ProductionView({ inventory, production, orders, items, companies, addLo
       addLog(`Added production record for Job [${jCardNo}]: Reels ${reelNosStr}`);
 
       // 1. AUTO-DEPLETE REEL INVENTORY BALANCES
+      // BUG 2 FIX: aggregate total usage per reel ID first to handle duplicate reel entries
+      const reelUsageMap = new Map(); // reelInventoryId -> { matched, totalUsedKg }
       for (const rItem of consumedReels) {
         if (!rItem.reelNo || !rItem.weight) continue;
         const usedKg = parseFloat(rItem.weight || 0);
         if (usedKg <= 0) continue;
-        const matched = inventory.find(i => 
+        const matched = inventory.find(i =>
           String(i.reelNo || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
           String(i.supplierReelNo || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
           String(i.uniqueReelId || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
           i.id === rItem.reelNo
         );
         if (matched && getDocRef) {
-          const currentBal = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
-          const newBal = Math.max(0, currentBal - usedKg);
-          try {
-            await updateDoc(getDocRef('inventory', matched.id), { balanceQty: newBal });
-            if (addLog) addLog(`Auto-depleted ${usedKg}kg from reel #${matched.supplierReelNo || matched.reelNo} (Remaining Bal: ${newBal.toFixed(1)}kg)`);
-          } catch(err) {}
+          const entry = reelUsageMap.get(matched.id);
+          if (entry) {
+            entry.totalUsedKg += usedKg; // accumulate if same reel appears again
+          } else {
+            reelUsageMap.set(matched.id, { matched, totalUsedKg: usedKg });
+          }
         }
+      }
+      // Now do one DB write per unique reel, using the original balance from inventory state
+      for (const [, { matched, totalUsedKg }] of reelUsageMap) {
+        const currentBal = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
+        const newBal = Math.max(0, currentBal - totalUsedKg);
+        try {
+          await updateDoc(getDocRef('inventory', matched.id), { balanceQty: newBal });
+          if (addLog) addLog(`Auto-depleted ${totalUsedKg.toFixed(1)}kg from reel #${matched.supplierReelNo || matched.reelNo} (Remaining Bal: ${newBal.toFixed(1)}kg)`);
+        } catch(err) {}
       }
 
       // 2. AUTO-ADVANCE WIP: Deduct produced quantity from Corrugation balance and add to Printing stage
@@ -15706,10 +15852,14 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   const itemName = targetItem.name || targetItem.Item_Name || targetOrder.itemName || 'Box Item';
   const poNo = targetOrder.poNumber || targetOrder.poNo || job?.poNumber || 'N/A';
   const orderDate = targetOrder.orderDate || new Date().toISOString().split('T')[0];
-  const jcNo = job?.jobNo || `JC-${(targetOrder.id || '').substring(0, 8).toUpperCase()}`;
+  const jcNo = job?.jobNo || (targetOrder.orderNo ? (targetOrder.orderNo.startsWith('JC-') ? targetOrder.orderNo : `JC-${String(targetOrder.orderNo).replace(/^ORD-?/i, '')}`) : `JC-${(targetOrder.id || '').substring(0, 8).toUpperCase()}`);
 
   const type = targetItem.itemType || targetItem.Item_Type || 'Box';
   const isPpc = type === 'PPC' || type === 'Partition';
+  const isPpcOrFlat = (targetItem.itemType || targetItem.Item_Type || type || '').toUpperCase().includes('PPC') ||
+    (targetItem.itemType || targetItem.Item_Type || type || '').toUpperCase().includes('PARTITION') ||
+    (targetItem.itemType || targetItem.Item_Type || type || '').toUpperCase().includes('PLATE') ||
+    (targetItem.itemType || targetItem.Item_Type || type || '').toUpperCase().includes('SHEET');
 
   const { idL, idW, idH, odL, odW, odH, fluteType } = getItemDimensions(targetItem);
   const L = odL || idL || 400; const W = odW || idW || 250; const H = odH || idH || 250;
@@ -15757,7 +15907,7 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0" style={{ zIndex: 100000 }}>
       <div className="bg-white rounded-2xl shadow-2xl border border-stone-300 w-full max-w-5xl max-h-[95vh] overflow-y-auto text-stone-900 print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
         
         {/* Top Header Bar */}
@@ -17198,16 +17348,9 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
       }
     }
 
-    // Always remove from Planning Queue (plannedJobs in localStorage & DB) to declutter planning sheet
+    // Always remove from Planning Queue — rely solely on onSavePlannedJobs to manage
+    // localStorage and state correctly (BUG 14 FIX: removed redundant manual localStorage loop)
     try {
-      const lsKeys = Object.keys(localStorage).filter(k => k.startsWith('erp_planned_jobs'));
-      for (const key of lsKeys) {
-        const saved = localStorage.getItem(key);
-        if (!saved) continue;
-        const all = JSON.parse(saved);
-        const after = all.filter(j => j.orderId !== orderId && (!ordNo || j.jobNo !== ordNo) && j.id !== orderId);
-        if (after.length !== all.length) localStorage.setItem(key, JSON.stringify(after));
-      }
       await executeQuery(`DELETE FROM planned_jobs WHERE orderId = ?`, [orderId]).catch(() => {});
       if (ordNo) await executeQuery(`DELETE FROM planned_jobs WHERE jobNo = ?`, [ordNo]).catch(() => {});
       if (typeof onSavePlannedJobs === 'function') {
@@ -17222,27 +17365,67 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
 
   const handleBulkDeleteOrders = async () => {
     if (selectedOrderIds.size === 0) return;
-    if (window.confirm(`Are you sure you want to permanently delete the ${selectedOrderIds.size} selected order(s)?`)) {
-      const idsToDelete = Array.from(selectedOrderIds);
+    // BUG 4 FIX: check for advanced WIP before allowing bulk delete
+    const idsToDelete = Array.from(selectedOrderIds);
+    const advancedWips = idsToDelete.flatMap(id => {
+      const ord = orders.find(o => o.id === id);
+      const ordNo = ord?.orderNo || '';
+      return wipStages.filter(w =>
+        (w.orderId === id || (ordNo && w.jobNo === ordNo)) &&
+        w.currentStage && w.currentStage !== 'Corrugation'
+      );
+    });
+    if (advancedWips.length > 0) {
+      const stageNames = [...new Set(advancedWips.map(w => w.currentStage))].join(', ');
+      alert(`❌ Cannot delete: ${advancedWips.length} order(s) have active WIP in [${stageNames}].\n\nPlease complete or move those WIP cards back to Corrugation first.`);
+      return;
+    }
+    if (window.confirm(`Are you sure you want to permanently delete the ${idsToDelete.length} selected order(s)?`)) {
+      const failed = [];
       for (const id of idsToDelete) {
-        await cleanupOrderWipAndPlanning(id);
+        try {
+          // BUG 3 FIX: delete the order first; only clean up WIP/planning if delete succeeds
+          await deleteDoc(getDocRef('orders', id));
+          await cleanupOrderWipAndPlanning(id);
+        } catch (err) {
+          failed.push(id);
+          console.error(`Failed to delete order ${id}:`, err);
+        }
       }
-      await Promise.all(idsToDelete.map(id => deleteDoc(getDocRef('orders', id))));
-      if (addLog) addLog(`Bulk deleted ${idsToDelete.length} orders`);
+      if (failed.length > 0) alert(`⚠️ ${failed.length} order(s) could not be deleted. Others were removed successfully.`);
+      if (addLog) addLog(`Bulk deleted ${idsToDelete.length - failed.length} orders`);
       setSelectedOrderIds(new Set());
     }
   };
 
   const handleDelete = async (id, itemName) => {
     if (window.confirm(`Delete order for "${itemName || id}"? This will remove it from the orders database.`)) {
-      await cleanupOrderWipAndPlanning(id);
-      await deleteDoc(getDocRef('orders', id));
-      if (addLog) addLog(`Deleted order for ${itemName}`);
-      setSelectedOrderIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+      // BUG 4 FIX: block deletion if WIP cards have advanced past Corrugation
+      const ord = orders.find(o => o.id === id);
+      const ordNo = ord?.orderNo || '';
+      const advancedWips = wipStages.filter(w =>
+        (w.orderId === id || (ordNo && w.jobNo === ordNo)) &&
+        w.currentStage && w.currentStage !== 'Corrugation'
+      );
+      if (advancedWips.length > 0) {
+        const stageNames = [...new Set(advancedWips.map(w => w.currentStage))].join(', ');
+        alert(`❌ Cannot delete: this order has active WIP in [${stageNames}].\n\nPlease complete or move the WIP card back to Corrugation first.`);
+        return;
+      }
+      try {
+        // BUG 3 FIX: delete order first, then clean up — prevents data loss if deletion fails
+        await deleteDoc(getDocRef('orders', id));
+        await cleanupOrderWipAndPlanning(id);
+        if (addLog) addLog(`Deleted order for ${itemName}`);
+        setSelectedOrderIds(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      } catch (err) {
+        console.error(`Failed to delete order ${id}:`, err);
+        alert(`Could not delete order: ${err?.message || err}`);
+      }
     }
   };
 
@@ -18039,10 +18222,14 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   // --- DISPATCH HISTORY EDIT/DELETE LOGIC ---
   const handleDeleteHistory = async (order, idx) => {
     if (!window.confirm('Delete this dispatch record? The stock will be returned to your inventory.')) return;
-    const historyItem = order.dispatchHistory[idx];
-    const newHistory = order.dispatchHistory.filter((_, i) => i !== idx);
-    const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - historyItem.qty);
-    
+    // BUG 6 FIX: dispatchHistory may be null or a JSON string if update event didn't parse it
+    const history = Array.isArray(order.dispatchHistory)
+      ? order.dispatchHistory
+      : safeJsonParse(order.dispatchHistory, []);
+    const historyItem = history[idx];
+    if (!historyItem) { alert('Dispatch record not found. Please refresh the page.'); return; }
+    const newHistory = history.filter((_, i) => i !== idx);
+    const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - (historyItem.qty || 0));
     await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
     addLog(`Deleted dispatch record of ${historyItem.qty} for ${order.itemName || order.Item_Name}`);
   };
@@ -18051,13 +18238,14 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     e.preventDefault();
     const newQty = parseInt(editHistory.qty);
     if (isNaN(newQty) || newQty <= 0) return;
-    
-    const oldQty = order.dispatchHistory[idx].qty;
-    const newHistory = [...order.dispatchHistory];
+    // BUG 6 FIX: same null guard
+    const history = Array.isArray(order.dispatchHistory)
+      ? order.dispatchHistory
+      : safeJsonParse(order.dispatchHistory, []);
+    const oldQty = history[idx]?.qty ?? 0;
+    const newHistory = [...history];
     newHistory[idx] = { ...newHistory[idx], qty: newQty };
-    
     const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - oldQty + newQty);
-    
     await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
     addLog(`Updated dispatch record from ${oldQty} to ${newQty} for ${order.itemName || order.Item_Name}`);
     setEditHistory({ orderId: null, idx: -1, qty: '' });
@@ -25756,7 +25944,6 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
     if (window.confirm(`Delete Fuel & Gum record for ${date}?`)) {
       await deleteDoc(getDocRef('wastage', id));
       await executeQuery(`DELETE FROM wastage WHERE id = ?`, [id]).catch(() => {});
-      await executeQuery(`DELETE FROM wastage_logs WHERE id = ?`, [id]).catch(() => {});
       addLog(`Deleted Fuel & Gum record for ${date}`);
       window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wastage', action: 'delete', id } }));
     }
@@ -25783,7 +25970,6 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
         try {
           await deleteDoc(getDocRef('wastage', row.id));
           await executeQuery(`DELETE FROM wastage WHERE id = ?`, [row.id]).catch(() => {});
-          await executeQuery(`DELETE FROM wastage_logs WHERE id = ?`, [row.id]).catch(() => {});
         } catch(e) {}
       }
       addLog(`Cleaned up ${emptyGhostRecords.length} empty Fuel & Gum ghost records`);
@@ -25989,8 +26175,9 @@ function FuelGumView({ wastageLogs = [], orders = [], companies = [], production
 }
 
 // --- WIP TRACKER VIEW ---
-function WIPTrackerView({ wipStages = [], orders = [], production = [], inventory = [], companies = [], items = [], addLog, role, currentUser, activeUnitId, onAdvance, onMoveBack, getDocRef, getColRef }) {
+function WIPTrackerView({ wipStages = [], orders = [], production = [], inventory = [], companies = [], customers = [], items = [], addLog, role, currentUser, activeUnitId, onAdvance, onMoveBack, getDocRef, getColRef }) {
   const [completedJobRealCost, setCompletedJobRealCost] = useState(null);
+  const [selectedJobCardOrder, setSelectedJobCardOrder] = useState(null);
   const STAGES = ['Corrugation', 'Printing', 'Punching', 'Stitching/Gluing', 'Bundling/Ready'];
   const [filterSearch, setFilterSearch] = useState('');
   const [draggedWip, setDraggedWip] = useState(null);
@@ -26472,6 +26659,16 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <button
+                            onClick={() => {
+                              const linked = orders.find(o => o.id === wip.orderId || o.orderNo === wip.jobNo) || { id: wip.orderId || wip.id, orderNo: wip.jobNo, itemName: wip.itemName, orderQty: wip.qty || wip.orderQty, companyId: wip.companyId };
+                              setSelectedJobCardOrder(linked);
+                            }}
+                            title="View Job Card"
+                            style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#2563eb', borderRadius: 4, padding: '2px 6px', minHeight: 24, fontSize: 10, cursor: 'pointer', fontWeight: 800 }}
+                          >
+                            📋 Card
+                          </button>
                           <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, -1)} disabled={wIdx === 0} title="Move Up in Stage" style={{ opacity: wIdx === 0 ? 0.3 : 1, padding: '2px 6px', minHeight: 24, background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>▲</button>
                           <button onClick={() => moveWipPriorityWithinStage(wip.id, stage, 1)} disabled={wIdx === stageWips.length - 1} title="Move Down in Stage" style={{ opacity: wIdx === stageWips.length - 1 ? 0.3 : 1, padding: '2px 6px', minHeight: 24, background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>▼</button>
                           <button
@@ -26556,6 +26753,19 @@ function WIPTrackerView({ wipStages = [], orders = [], production = [], inventor
           );
         })}
       </div>
+
+      {/* Render JobCardViewModal when clicked in WIP Tracker */}
+      {selectedJobCardOrder && (
+        <JobCardViewModal
+          order={selectedJobCardOrder}
+          job={null}
+          item={items.find(i => i.id === selectedJobCardOrder.itemId || i.name === selectedJobCardOrder.itemName || i.Item_Name === selectedJobCardOrder.itemName)}
+          company={companies.find(c => c.id === selectedJobCardOrder.companyId || c.name === selectedJobCardOrder.companyId)}
+          customer={customers?.find(c => c.id === selectedJobCardOrder.customerId || c.name === selectedJobCardOrder.customerName)}
+          onClose={() => setSelectedJobCardOrder(null)}
+          onDownloadPdf={typeof generateJobCard === 'function' ? generateJobCard : null}
+        />
+      )}
     </div>
   );
 }
@@ -26994,7 +27204,7 @@ function PurchaseOrdersView({ purchaseOrders = [], vendors = [], companies = [],
       status: 'Pending',
       createdAt: new Date().toISOString()
     };
-    await addDoc(getColRef('purchase_orders'), payload);
+    await addDoc(getColRef('purchaseOrders'), payload);
     if (addLog) addLog(`Created PO for ${vendors.find(v => v.id === header.vendorId)?.name}`);
     setShowForm(false);
     setHeader({ vendorId: '', companyId: '', invoiceNo: '', expectedDate: '' });
@@ -27002,7 +27212,7 @@ function PurchaseOrdersView({ purchaseOrders = [], vendors = [], companies = [],
   };
 
   const handleStatus = async (id, status) => {
-    await updateDoc(getDocRef('purchase_orders', id), { status });
+    await updateDoc(getDocRef('purchaseOrders', id), { status });
     if (addLog) addLog(`Updated PO status to ${status}`);
   };
 
