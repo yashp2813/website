@@ -16270,6 +16270,7 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
   const [selectedJobCardOrder, setSelectedJobCardOrder] = useState(null);
   const [selectedJobCardJob, setSelectedJobCardJob] = useState(null);
   const [createJobModalOrder, setCreateJobModalOrder] = useState(null);
+  const [editingPlannedJob, setEditingPlannedJob] = useState(null);
   const [showCustomJobForm, setShowCustomJobForm] = useState(false);
   const [showNewQueueModal, setShowNewQueueModal] = useState(false);
   const [newQueueName, setNewQueueName] = useState('');
@@ -16584,6 +16585,76 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
       customerId: '', itemId: '', itemName: '', plannedQty: '', ups: '1',
       queueId: queuesList[0]?.id || 'q_line1'
     });
+  };
+
+  const handleOpenEditJob = (job) => {
+    setEditingPlannedJob({
+      ...job,
+      plannedQty: String(job.plannedQty || 0),
+      ups: String(job.ups || 1),
+      queueId: job.queueId || queuesList[0]?.id || 'q_line1',
+      jobNo: job.jobNo || '',
+      itemName: job.itemName || '',
+      notes: job.notes || ''
+    });
+  };
+
+  const handleSaveEditedJob = async (e) => {
+    e.preventDefault();
+    if (!editingPlannedJob) return;
+
+    const plannedQtyNum = parseInt(editingPlannedJob.plannedQty || 0);
+    const upsNum = parseInt(editingPlannedJob.ups || 1);
+
+    if (isNaN(plannedQtyNum) || plannedQtyNum <= 0) {
+      alert("Target Planned Quantity must be greater than 0.");
+      return;
+    }
+
+    const updatedJob = {
+      ...editingPlannedJob,
+      jobNo: (editingPlannedJob.jobNo || '').trim(),
+      itemName: (editingPlannedJob.itemName || '').trim(),
+      plannedQty: plannedQtyNum,
+      ups: Math.max(1, upsNum),
+      queueId: editingPlannedJob.queueId || queuesList[0]?.id || 'q_line1',
+      notes: editingPlannedJob.notes || '',
+      updatedAt: new Date().toISOString()
+    };
+
+    const updatedList = (plannedJobs || []).map(j => j.id === updatedJob.id ? updatedJob : j);
+    saveJobsToStorage(updatedList);
+
+    // Sync changes to WIP Tracker if active in Corrugation
+    try {
+      const sheetsCalculated = Math.ceil(plannedQtyNum / Math.max(1, upsNum));
+      if (getDocRef && updatedJob.orderId) {
+        const existingWip = (wipStages || []).find(w => 
+          (w.orderId === updatedJob.orderId || w.jobNo === updatedJob.jobNo || w.id === updatedJob.id) &&
+          (w.currentStage === 'Corrugation' || !w.currentStage)
+        );
+        if (existingWip) {
+          await updateDoc(getDocRef('wip_stages', existingWip.id), {
+            jobNo: updatedJob.jobNo,
+            itemName: updatedJob.itemName,
+            qty: plannedQtyNum,
+            sheets: sheetsCalculated,
+            ups: updatedJob.ups,
+            orderQty: plannedQtyNum,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      }
+      await executeQuery(
+        `UPDATE wip_stages SET jobNo = ?, itemName = ?, qty = ?, sheets = ?, ups = ?, orderQty = ?, updatedAt = ? WHERE (orderId = ? OR jobNo = ? OR id = ?) AND (currentStage = 'Corrugation' OR currentStage IS NULL)`,
+        [updatedJob.jobNo, updatedJob.itemName, plannedQtyNum, sheetsCalculated, updatedJob.ups, plannedQtyNum, new Date().toISOString(), updatedJob.orderId || updatedJob.id, updatedJob.jobNo, updatedJob.id]
+      ).catch(() => {});
+    } catch(err) {
+      console.warn("WIP sync on job edit error:", err);
+    }
+
+    if (addLog) addLog(`✏️ Updated Job Card #${updatedJob.jobNo}: ${updatedJob.itemName} (${plannedQtyNum.toLocaleString()} pcs · ${updatedJob.ups} Ups)`);
+    setEditingPlannedJob(null);
   };
 
   const removeJob = async (jobId) => {
@@ -16901,12 +16972,13 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                           <span style={{ fontSize: 10, fontWeight: 800, color: '#ea580c' }}>{wipStageName}</span>
                         </div>
 
-                        {/* Card Actions: Start Prod, Job Card, Remove */}
+                        {/* Card Actions: Start Prod, Job Card, Edit, Remove */}
                         <div style={{ display: 'flex', gap: 4, borderTop: '1px solid #e2e8f0', paddingTop: 6, alignItems: 'center' }}>
                           <button
                             onClick={() => startJobProduction(job)}
                             className="apex-btn apex-btn-primary apex-btn-sm"
-                            style={{ padding: '3px 8px', fontSize: 10, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#2563eb' }}
+                            style={{ padding: '3px 7px', fontSize: 10, fontWeight: 800, flex: 1, justifyContent: 'center', background: '#2563eb' }}
+                            title="Start Production for this Job"
                           >
                             🚀 Prod
                           </button>
@@ -16918,13 +16990,23 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
                             }}
                             className="apex-btn apex-btn-secondary apex-btn-sm"
                             style={{ padding: '3px 6px', fontSize: 10, fontWeight: 700 }}
+                            title="View Job Card"
                           >
                             📋 Card
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditJob(job)}
+                            className="apex-btn apex-btn-secondary apex-btn-sm"
+                            style={{ padding: '3px 6px', fontSize: 10, fontWeight: 700, color: '#334155', background: '#f1f5f9' }}
+                            title="Edit Job Details (Quantity, Ups, Line, Spec)"
+                          >
+                            ✏️ Edit
                           </button>
                           <button
                             onClick={() => removeJob(job.id)}
                             className="apex-btn apex-btn-sm"
                             style={{ padding: '2px 5px', fontSize: 10, color: '#ef4444', background: '#fef2f2', border: '1px solid #fecaca' }}
+                            title="Remove from Queue"
                           >
                             ✕
                           </button>
@@ -17137,6 +17219,124 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
           </div>
         );
       })()}
+
+      {/* EDIT PLANNED JOB MODAL */}
+      {editingPlannedJob && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100000, padding: 16 }}>
+          <div className="apex-card" style={{ maxWidth: 500, width: '100%', padding: 22, background: '#fff', borderRadius: 14, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid #e2e8f0', paddingBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 20 }}>✏️</span>
+                <div>
+                  <h4 style={{ fontSize: 16, fontWeight: 800, color: '#0f172a', margin: 0 }}>Edit Planned Job Card</h4>
+                  <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0 0 0' }}>Modify planned quantity, ups, line queue, or details</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingPlannedJob(null)}
+                style={{ background: '#f1f5f9', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', fontWeight: 800, color: '#64748b' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedJob} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Job Card No. *</label>
+                  <input
+                    type="text"
+                    required
+                    className="apex-input font-mono font-bold"
+                    value={editingPlannedJob.jobNo}
+                    onChange={e => setEditingPlannedJob({ ...editingPlannedJob, jobNo: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Production Queue / Line</label>
+                  <select
+                    className="apex-select font-bold"
+                    value={editingPlannedJob.queueId}
+                    onChange={e => setEditingPlannedJob({ ...editingPlannedJob, queueId: e.target.value })}
+                  >
+                    {queuesList.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Item / Product Name *</label>
+                <input
+                  type="text"
+                  required
+                  className="apex-input font-bold"
+                  value={editingPlannedJob.itemName}
+                  onChange={e => setEditingPlannedJob({ ...editingPlannedJob, itemName: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Target Planned Qty (pcs) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    className="apex-input font-mono font-bold"
+                    value={editingPlannedJob.plannedQty}
+                    onChange={e => setEditingPlannedJob({ ...editingPlannedJob, plannedQty: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Number of Ups *</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    className="apex-input font-mono font-bold"
+                    value={editingPlannedJob.ups}
+                    onChange={e => setEditingPlannedJob({ ...editingPlannedJob, ups: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Planning Notes / Instructions</label>
+                <input
+                  type="text"
+                  className="apex-input"
+                  placeholder="Special instructions for machine operator..."
+                  value={editingPlannedJob.notes || ''}
+                  onChange={e => setEditingPlannedJob({ ...editingPlannedJob, notes: e.target.value })}
+                />
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '10px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 11, color: '#475569' }}>
+                💡 <strong>Calculated Output:</strong> {Math.ceil((parseInt(editingPlannedJob.plannedQty || 0) / Math.max(1, parseInt(editingPlannedJob.ups || 1))))} Sheets Required (+2% Wastage: {Math.ceil((parseInt(editingPlannedJob.plannedQty || 0) / Math.max(1, parseInt(editingPlannedJob.ups || 1))) * 1.02)} Sheets). Synchronizes automatically with WIP &amp; Job Cards.
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 6, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditingPlannedJob(null)}
+                  className="apex-btn apex-btn-secondary"
+                  style={{ padding: '8px 16px', fontSize: 12, fontWeight: 700 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="apex-btn apex-btn-primary"
+                  style={{ padding: '8px 20px', fontSize: 12, fontWeight: 800, background: '#2563eb' }}
+                >
+                  💾 Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Render JobCardViewModal when clicked */}
       {selectedJobCardOrder && (
