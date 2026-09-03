@@ -9603,14 +9603,18 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
 }
 
 // --- CALCULATOR VIEW ---
-function CalculatorView({ companies, items, addLog, currentUser }) {
-  const allowedCompanyId = currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all');
+function CalculatorView({ companies, items, addLog, currentUser, activeUnitId }) {
+  const allowedCompanyId = activeUnitId || (currentUser?.role === 'admin' ? 'all' : (currentUser?.companyId || 'all'));
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
-  const [selectedCompany, setSelectedCompany] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : '');
+  const [selectedCompany, setSelectedCompany] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : (visibleCompanies[0]?.id || ''));
   const [selectedItem, setSelectedItem] = useState('');
   const [quantity, setQuantity] = useState('');
   const [calcWastage, setCalcWastage] = useState(0);
+
+  // Multi-GSM & BF Layer state
+  const [customLayers, setCustomLayers] = useState([]);
+  const [showLayerEditor, setShowLayerEditor] = useState(true);
   
   const [commonPerSet, setCommonPerSet] = useState(5);
   const [smallPerSet, setSmallPerSet] = useState(4);
@@ -9630,32 +9634,131 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
     }
   }, [visibleCompanies, selectedCompany]);
 
+  // When an item is chosen, auto-load its layers (multi-GSM and BF)
+  useEffect(() => {
+    const item = items.find(i => i.id === selectedItem);
+    if (!item) {
+      setCustomLayers([]);
+      setResult(null);
+      return;
+    }
+    const existing = getItemLayers(item);
+    const ply = parseInt(item.ply || item.Ply || 3, 10) || 3;
+    const flute = item.fluteType || item.Flute_Type || item.flute || 'B';
+    
+    if (existing && Array.isArray(existing) && existing.length > 0) {
+      setCustomLayers(normalizeLayers(existing, flute));
+    } else {
+      const defaults = generateDefaultLayers(ply, flute);
+      const itemGsm = item.paperGsm || item.Paper_GSM;
+      const itemBf = item.paperBf || item.Paper_BF;
+      const itemColour = item.paperColour || item.Paper_Colour;
+      const enriched = defaults.map((l, idx) => ({
+        ...l,
+        gsm: l.gsm || itemGsm || '120',
+        bf: l.bf || itemBf || '16',
+        type: (idx === 0 && itemColour) ? itemColour : (l.type || 'Kraft')
+      }));
+      setCustomLayers(enriched);
+    }
+  }, [selectedItem, items]);
+
+  const handleLayerChange = (idx, field, val) => {
+    setCustomLayers(prev => {
+      const updated = [...prev];
+      const current = { ...updated[idx] };
+      if (field === 'isFlute') {
+        const isF = !!val;
+        current.isFlute = isF;
+        current.takeUp = isF ? 1.35 : 1.0;
+      } else {
+        current[field] = val;
+      }
+      updated[idx] = current;
+      return updated;
+    });
+  };
+
+  const handleAddLayer = () => {
+    setCustomLayers(prev => [
+      ...prev,
+      {
+        id: `lyr_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        name: `Layer ${prev.length + 1}`,
+        type: 'Kraft',
+        gsm: '120',
+        bf: '16',
+        takeUp: 1.0,
+        isFlute: false
+      }
+    ]);
+  };
+
+  const handleRemoveLayer = (idx) => {
+    if (customLayers.length <= 1) {
+      alert('At least one layer is required.');
+      return;
+    }
+    setCustomLayers(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleResetLayers = () => {
+    const item = items.find(i => i.id === selectedItem);
+    if (!item) return;
+    const ply = parseInt(item.ply || item.Ply || 3, 10) || 3;
+    const flute = item.fluteType || item.Flute_Type || item.flute || 'B';
+    const existing = getItemLayers(item);
+    if (existing && existing.length > 0) {
+      setCustomLayers(normalizeLayers(existing, flute));
+    } else {
+      setCustomLayers(generateDefaultLayers(ply, flute));
+    }
+  };
+
   const handleCalculate = (e) => {
     e.preventDefault();
     const item = items.find(i => i.id === selectedItem);
     if (!item || !quantity) return;
 
-    const qty = parseInt(quantity);
+    const qty = parseInt(quantity, 10);
+    if (isNaN(qty) || qty <= 0) return;
+
     const sizeString = String(item.size || item.Size_mm || '0x0x0');
     const parsedDim = parseDimensionString(sizeString, item.unit || 'mm');
     const L = parsedDim.L_mm;
     const W = parsedDim.W_mm;
     const H = parsedDim.H_mm; 
     
-    const ply = parseInt(item.ply || item.Ply || 3);
-    const gsm = parseFloat(item.paperGsm || item.Paper_GSM || 120); 
+    const ply = parseInt(item.ply || item.Ply || 3, 10) || 3;
     const type = item.itemType || item.Item_Type || 'Box';
+    const flute = item.fluteType || item.Flute_Type || item.flute || 'B';
+    const wastagePct = Math.max(0, parseFloat(calcWastage) || 0);
+
+    // Active layers with multi-GSM and BF combinations
+    let effectiveLayers = (customLayers && customLayers.length > 0)
+      ? customLayers
+      : (getItemLayers(item).length > 0 ? getItemLayers(item) : generateDefaultLayers(ply, flute));
+    effectiveLayers = normalizeLayers(effectiveLayers, flute);
 
     let totalSqMeters = 0;
-    let paperRequiredKg = 0;
+    let unitArea = 0;
+    let boardLength = 0;
+    let boardWidth = 0;
 
-    const numFlutes = Math.floor(ply / 2);
-    const numLiners = Math.ceil(ply / 2);
-    const flutingFactor = 1.40;
+    // PPC specific variables
+    let cNeeded = 0;
+    let sNeeded = 0;
+    let targetSheets = 0;
+    let commonSheetsNeeded = 0;
+    let smallSheetsNeeded = 0;
+    let boardWidthCommon = 0;
+    let boardLengthCommon = 0;
+    let boardWidthSmall = 0;
+    let boardLengthSmall = 0;
 
     if (type === 'PPC') {
-      const cNeeded = (parseInt(smallPerSet) - 1) * qty;
-      const sNeeded = (parseInt(commonPerSet) - 1) * qty;
+      cNeeded = (parseInt(smallPerSet) - 1) * qty;
+      sNeeded = (parseInt(commonPerSet) - 1) * qty;
       
       const baseC = parseInt(baseCommonUps) || 1;
       const baseS = parseInt(baseSmallUps) || 1;
@@ -9666,52 +9769,24 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       const smallPiecesPerCommonSheet = baseC * pUpsC; 
       const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
 
-      const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
+      commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
       const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
       const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
-      const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+      smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
       
-      const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
+      targetSheets = commonSheetsNeeded + smallSheetsNeeded;
 
-      const boardWidthCommon = H * baseC;
-      const boardLengthCommon = ((L + W) * pUpsC) + 10;
+      boardWidthCommon = H * baseC;
+      boardLengthCommon = ((L + W) * pUpsC) + 10;
       
-      const boardWidthSmall = boardWidthCommon; 
-      const boardLengthSmall = (W * 2 * pUpsS) + 10;
+      boardWidthSmall = boardWidthCommon; 
+      boardLengthSmall = (W * 2 * pUpsS) + 10;
       
       const areaCommon = (boardWidthCommon * boardLengthCommon) / 1000000;
       const areaSmall = (boardWidthSmall * boardLengthSmall) / 1000000;
       totalSqMeters = (commonSheetsNeeded * areaCommon) + (smallSheetsNeeded * areaSmall);
-      
-      const linerSqMeters = totalSqMeters * numLiners;
-      const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
-      paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
-
-      const wastagePct = Math.max(0, parseFloat(calcWastage) || 0);
-      const grossPaperKg = paperRequiredKg * (1 + wastagePct / 100);
-
-      setResult({
-        isPpc: true, 
-        targetSheets, 
-        commonSheetsNeeded,
-        smallSheetsNeeded,
-        boardWidthCommon: boardWidthCommon.toFixed(2),
-        boardLengthCommon: boardLengthCommon.toFixed(2),
-        boardWidthSmall: boardWidthSmall.toFixed(2),
-        boardLengthSmall: boardLengthSmall.toFixed(2),
-        totalArea: totalSqMeters.toFixed(2), 
-        netPaperRequired: paperRequiredKg.toFixed(2),
-        paperRequired: grossPaperKg.toFixed(2),
-        wastagePercent: wastagePct,
-        itemDetails: item,
-        cNeeded, 
-        sNeeded
-      });
-
+      unitArea = qty > 0 ? totalSqMeters / qty : 0;
     } else {
-      let boardLength = 0;
-      let boardWidth = 0;
-
       switch (type) {
         case 'Box':
           boardLength = (L + W) * 2 + 50; 
@@ -9733,28 +9808,146 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       }
 
       const sqMetersPerBox = (boardLength * boardWidth) / 1000000;
+      unitArea = sqMetersPerBox;
       totalSqMeters = sqMetersPerBox * qty;
-      
-      const linerSqMeters = totalSqMeters * numLiners;
-      const fluteSqMeters = totalSqMeters * numFlutes * flutingFactor;
-      paperRequiredKg = ((linerSqMeters + fluteSqMeters) * gsm) / 1000; 
-
-      const wastagePct = Math.max(0, parseFloat(calcWastage) || 0);
-      const grossPaperKg = paperRequiredKg * (1 + wastagePct / 100);
-
-      setResult({
-        isPpc: false, 
-        boardLength: boardLength.toFixed(2), 
-        boardWidth: boardWidth.toFixed(2), 
-        totalArea: totalSqMeters.toFixed(2), 
-        netPaperRequired: paperRequiredKg.toFixed(2),
-        paperRequired: grossPaperKg.toFixed(2),
-        wastagePercent: wastagePct,
-        itemDetails: item 
-      });
     }
 
-    addLog(`Calculated materials for ${qty}x ${item.name || item.Item_Name} (${type})`);
+    // LAYER-WISE BREAKDOWN WITH MULTI-GSM & BF COMBINATIONS
+    let totalNetKg = 0;
+    const layerBreakdown = effectiveLayers.map((lyr, idx) => {
+      const layerGsm = parseFloat(lyr.gsm) || 120;
+      const layerBf = String(lyr.bf || '16').trim();
+      const layerType = lyr.type || (idx === 0 ? 'Golden' : 'Kraft');
+      const isFlute = lyr.isFlute || (lyr.name && lyr.name.toLowerCase().includes('flut'));
+      const takeUp = parseFloat(lyr.takeUp) || (isFlute ? 1.35 : 1.0);
+
+      // Weight per piece in grams: Unit Area (m²) * GSM * Take-Up
+      const weightNetGrams = Math.round(unitArea * layerGsm * takeUp * 10) / 10;
+      const weightGrossGrams = Math.round(weightNetGrams * (1 + wastagePct / 100) * 10) / 10;
+
+      // Net and Gross paper required for the whole order in KG
+      const layerNetKg = Math.round(((totalSqMeters * layerGsm * takeUp) / 1000) * 100) / 100;
+      const layerGrossKg = Math.round((layerNetKg * (1 + wastagePct / 100)) * 100) / 100;
+
+      totalNetKg += layerNetKg;
+
+      return {
+        index: idx + 1,
+        id: lyr.id || `layer_${idx}`,
+        name: lyr.name || `Layer ${idx + 1}`,
+        type: layerType,
+        gsm: layerGsm,
+        bf: layerBf,
+        isFlute,
+        takeUp,
+        weightNetGrams,
+        weightGrossGrams,
+        netKg: layerNetKg,
+        grossKg: layerGrossKg
+      };
+    });
+
+    const totalGrossKg = Math.round((totalNetKg * (1 + wastagePct / 100)) * 100) / 100;
+    const totalNetWeightGrams = Math.round(layerBreakdown.reduce((sum, l) => sum + l.weightNetGrams, 0) * 10) / 10;
+    const totalGrossWeightGrams = Math.round(layerBreakdown.reduce((sum, l) => sum + l.weightGrossGrams, 0) * 10) / 10;
+
+    // Attach percentage share of total paper
+    const layerBreakdownWithShare = layerBreakdown.map(l => ({
+      ...l,
+      sharePct: totalGrossKg > 0 ? Math.round((l.grossKg / totalGrossKg) * 1000) / 10 : 0
+    }));
+
+    // Group reels by Paper Type + GSM + BF
+    const reelMap = {};
+    layerBreakdownWithShare.forEach(l => {
+      const key = `${l.type}__${l.gsm}__${l.bf}`;
+      if (!reelMap[key]) {
+        reelMap[key] = {
+          key,
+          type: l.type,
+          gsm: l.gsm,
+          bf: l.bf,
+          netKg: 0,
+          grossKg: 0,
+          layers: []
+        };
+      }
+      reelMap[key].netKg += l.netKg;
+      reelMap[key].grossKg += l.grossKg;
+      reelMap[key].layers.push(l.name);
+    });
+
+    const reelRequisitionList = Object.values(reelMap).map(r => ({
+      ...r,
+      netKg: Math.round(r.netKg * 100) / 100,
+      grossKg: Math.round(r.grossKg * 100) / 100
+    }));
+
+    setResult({
+      isPpc: type === 'PPC',
+      boardLength: type === 'PPC' ? null : boardLength.toFixed(2),
+      boardWidth: type === 'PPC' ? null : boardWidth.toFixed(2),
+      boardWidthCommon: type === 'PPC' ? boardWidthCommon.toFixed(2) : null,
+      boardLengthCommon: type === 'PPC' ? boardLengthCommon.toFixed(2) : null,
+      boardWidthSmall: type === 'PPC' ? boardWidthSmall.toFixed(2) : null,
+      boardLengthSmall: type === 'PPC' ? boardLengthSmall.toFixed(2) : null,
+      targetSheets: type === 'PPC' ? targetSheets : null,
+      commonSheetsNeeded: type === 'PPC' ? commonSheetsNeeded : null,
+      smallSheetsNeeded: type === 'PPC' ? smallSheetsNeeded : null,
+      cNeeded: type === 'PPC' ? cNeeded : null,
+      sNeeded: type === 'PPC' ? sNeeded : null,
+      totalArea: totalSqMeters.toFixed(2),
+      unitArea: unitArea.toFixed(4),
+      netPaperRequired: totalNetKg.toFixed(2),
+      paperRequired: totalGrossKg.toFixed(2),
+      boxNetWeightGrams: totalNetWeightGrams,
+      boxGrossWeightGrams: totalGrossWeightGrams,
+      wastagePercent: wastagePct,
+      itemDetails: item,
+      layers: layerBreakdownWithShare,
+      reelRequisitionList,
+      qty
+    });
+
+    addLog(`Calculated layer-wise materials for ${qty}x ${item.name || item.Item_Name} (${type}, ${effectiveLayers.length} layers)`);
+  };
+
+  const handleExportLayerBreakdownCsv = () => {
+    if (!result || !result.layers) return;
+    const headers = ['Layer #', 'Layer Name', 'Paper Quality', 'GSM', 'BF', 'Flute Take-Up', 'Net Wt/Pc (g)', 'Gross Wt/Pc (g)', 'Net Paper (kg)', 'Gross Paper (kg)', 'Share (%)'];
+    const rows = result.layers.map(l => [
+      l.index,
+      `"${l.name}"`,
+      `"${l.type}"`,
+      l.gsm,
+      `"${l.bf}"`,
+      l.takeUp,
+      l.weightNetGrams,
+      l.weightGrossGrams,
+      l.netKg,
+      l.grossKg,
+      `${l.sharePct}%`
+    ]);
+    rows.push([
+      'TOTAL',
+      `"${result.itemDetails?.name || 'Box'}"`,
+      '-',
+      '-',
+      '-',
+      '-',
+      result.boxNetWeightGrams,
+      result.boxGrossWeightGrams,
+      result.netPaperRequired,
+      result.paperRequired,
+      '100%'
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Material_Layer_Breakdown_${(result.itemDetails?.name || 'Box').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    addLog(`Exported material layer breakdown CSV for ${result.itemDetails?.name || 'Box'}`);
   };
 
   // ---- BATCH CALCULATOR (CSV/Excel) ----
@@ -9806,14 +9999,17 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
     e.target.value = '';
   };
 
-  const filteredItems = items.filter(i => i.companyId === selectedCompany);
+  const filteredItems = items.filter(i => !selectedCompany || selectedCompany === 'all' || i.companyId === selectedCompany);
   const currentItemObj = items.find(i => i.id === selectedItem);
   const isPPC = currentItemObj?.itemType === 'PPC' || currentItemObj?.Item_Type === 'PPC';
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-5xl mx-auto pb-12">
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-        <h2 className="text-2xl font-bold">Material Calculator</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-stone-900">Material Calculator</h2>
+          <p className="text-xs text-stone-500 mt-0.5">Precise layer-wise paper requisition with multi-GSM &amp; BF combinations</p>
+        </div>
         <div style={{ display:'flex', gap:8 }}>
           <button onClick={() => { setBatchMode(false); setBatchResults([]); }} className={`apex-btn ${!batchMode ? 'apex-btn-primary' : 'apex-btn-secondary'}`} style={{ fontSize:12 }}>Single Item</button>
           <button onClick={() => { setBatchMode(true); setResult(null); }} className={`apex-btn ${batchMode ? 'apex-btn-primary' : 'apex-btn-secondary'}`} style={{ fontSize:12 }}>Batch / CSV Mode</button>
@@ -9821,131 +10017,413 @@ function CalculatorView({ companies, items, addLog, currentUser }) {
       </div>
       
       {!batchMode && (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-          <form onSubmit={handleCalculate} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-stone-700 mb-1">Select Manufacturing Unit</label>
-              <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={selectedCompany} onChange={(e) => { setSelectedCompany(e.target.value); setSelectedItem(''); setResult(null); }} required>
-                <option value="">-- Choose Unit --</option>
-                {[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-stone-700 mb-1">Select Box/Item</label>
-              <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} disabled={!selectedCompany} required>
-                <option value="">-- Choose Item --</option>
-                {[...filteredItems].sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.itemType || i.Item_Type})</option>)}
-              </select>
-            </div>
-
-            {isPPC && (
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
-                <p className="text-xs font-bold text-blue-800 uppercase tracking-wider mb-2">PPC Die & Set Requirements</p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-[10px] text-blue-700 mb-1">Common Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={commonPerSet} onChange={e => setCommonPerSet(e.target.value)} /></div>
-                  <div><label className="block text-[10px] text-blue-700 mb-1">Small Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={smallPerSet} onChange={e => setSmallPerSet(e.target.value)} /></div>
-                  
-                  <div><label className="block text-[10px] text-blue-700 mb-1">Base Common Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseCommonUps} onChange={e => setBaseCommonUps(e.target.value)} /></div>
-                  <div><label className="block text-[10px] text-blue-700 mb-1">Base Small Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseSmallUps} onChange={e => setBaseSmallUps(e.target.value)} /></div>
-                  
-                  <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Common Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsCommon} onChange={e => setPlannedUpsCommon(e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Small Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsSmall} onChange={e => setPlannedUpsSmall(e.target.value)} /></div>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-sm font-medium text-stone-700">Trimming / Sheet Wastage %</label>
-                <span className="text-[11px] font-bold text-stone-500 font-mono">(Adds % to gross paper needed)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-mono font-bold"
-                  value={calcWastage}
-                  onChange={(e) => setCalcWastage(e.target.value)}
-                  placeholder="e.g. 10"
-                />
-                <span className="font-bold text-stone-600">%</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-stone-700 mb-1">{isPPC ? 'Order Quantity (Sets)' : 'Order Quantity'}</label>
-              <input type="number" min="1" className="w-full p-2 border border-stone-300 rounded-md bg-stone-50" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 5000" required />
-            </div>
-            <button type="submit" className="w-full bg-stone-900 text-white py-3 rounded-md hover:bg-stone-800 transition font-medium">Calculate Raw Material</button>
-          </form>
-        </div>
-
-        {result ? (
-          <div className="bg-stone-900 text-stone-100 p-6 rounded-xl shadow-lg border border-stone-800">
-            <h3 className="text-xl font-bold text-white mb-4 border-b border-stone-700 pb-2">Calculation Output</h3>
-            <div className="space-y-4">
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
+            <form onSubmit={handleCalculate} className="space-y-4">
               <div>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-stone-400 text-sm">Selected Item</p>
-                    <p className="text-lg font-semibold">{result.itemDetails.name || result.itemDetails.Item_Name}</p>
-                    <p className="text-sm text-stone-300">{result.itemDetails.itemType || result.itemDetails.Item_Type}</p>
-                  </div>
-                  <div className="text-right text-xs bg-stone-800 p-2 rounded">
-                    <p>{result.itemDetails.paperGsm || result.itemDetails.Paper_GSM} GSM</p>
-                    <p>{result.itemDetails.paperBf || result.itemDetails.Paper_BF} BF</p>
-                    <p>{result.itemDetails.paperColour || result.itemDetails.Paper_Colour}</p>
-                  </div>
-                </div>
-                <p className="text-sm mt-2">Dimensions: {result.itemDetails.size || result.itemDetails.Size_mm} mm ({result.itemDetails.ply || result.itemDetails.Ply}-ply)</p>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Select Manufacturing Unit</label>
+                <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 text-stone-900 font-bold" value={selectedCompany} onChange={(e) => { setSelectedCompany(e.target.value); setSelectedItem(''); setResult(null); }} required>
+                  <option value="">-- Choose Unit --</option>
+                  {[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Select Box/Item</label>
+                <select className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 text-stone-900 font-bold" value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} disabled={!selectedCompany} required>
+                  <option value="">-- Choose Item --</option>
+                  {[...filteredItems].sort((a,b) => (a?.name || a?.Item_Name || '').localeCompare(b?.name || b?.Item_Name || '')).map(i => <option key={i.id} value={i.id}>{i.name || i.Item_Name} ({i.itemType || i.Item_Type})</option>)}
+                </select>
               </div>
 
-              {result.isPpc ? (
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
-                  <div>
-                    <p className="text-stone-400 text-sm">Pieces Needed</p>
-                    <p className="font-mono text-sm">{result.cNeeded} Common<br/>{result.sNeeded} Small</p>
+              {/* LAYER SPECIFICATIONS / MULTI-GSM & BF EDITOR */}
+              {currentItemObj && customLayers.length > 0 && (
+                <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-black text-amber-900">📄 Paper Layers (Multi-GSM / BF)</span>
+                      <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full font-mono">
+                        {customLayers.length} Layers
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleResetLayers}
+                        className="text-[10px] text-amber-800 hover:text-amber-950 underline font-bold"
+                        title="Reset layers to master item defaults"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowLayerEditor(!showLayerEditor)}
+                        className="text-xs font-bold text-amber-800 hover:text-amber-950 px-2 py-0.5 rounded bg-amber-100"
+                      >
+                        {showLayerEditor ? '▲ Collapse' : '▼ Edit Layers'}
+                      </button>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-stone-400 text-sm">Segregated Sheets</p>
-                    <p className="font-mono text-sm text-blue-400 font-bold">{result.commonSheetsNeeded} Common<br/>{result.smallSheetsNeeded} Small</p>
-                  </div>
-                  <div>
-                    <p className="text-stone-400 text-sm">Common Board Size</p>
-                    <p className="font-mono text-sm">{result.boardLengthCommon} x {result.boardWidthCommon} mm</p>
-                  </div>
-                  <div>
-                    <p className="text-stone-400 text-sm">Small Board Size</p>
-                    <p className="font-mono text-sm">{result.boardLengthSmall} x {result.boardWidthSmall} mm</p>
-                  </div>
-                  <div className="col-span-2">
-                    <p className="text-stone-400 text-sm">Total Combined Area (sq.m)</p>
-                    <p className="font-mono text-lg">{result.totalArea}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-stone-700">
-                  <div><p className="text-stone-400 text-sm">Board / Sheet Size Needed</p><p className="font-mono text-lg">{result.boardLength} mm x {result.boardWidth} mm</p></div>
-                  <div><p className="text-stone-400 text-sm">Total Area (sq.m)</p><p className="font-mono text-lg">{result.totalArea}</p></div>
+
+                  {showLayerEditor && (
+                    <div className="space-y-2 pt-2 border-t border-amber-200">
+                      <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                        {customLayers.map((lyr, lIdx) => (
+                          <div key={lyr.id || lIdx} className="bg-white p-2.5 rounded-lg border border-amber-200 text-xs shadow-xs space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <input
+                                type="text"
+                                className="font-bold text-stone-800 border-b border-dashed border-stone-300 pb-0.5 outline-none flex-1"
+                                value={lyr.name || `Layer ${lIdx + 1}`}
+                                onChange={e => handleLayerChange(lIdx, 'name', e.target.value)}
+                              />
+                              <div className="flex items-center gap-2">
+                                <label className="flex items-center gap-1 text-[11px] font-medium text-stone-600 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!lyr.isFlute}
+                                    onChange={e => handleLayerChange(lIdx, 'isFlute', e.target.checked)}
+                                  />
+                                  Flute
+                                </label>
+                                {customLayers.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveLayer(lIdx)}
+                                    className="text-red-500 hover:text-red-700 font-bold px-1"
+                                    title="Remove layer"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-4 gap-2">
+                              <div>
+                                <span className="block text-[9px] font-bold text-stone-500 uppercase">Quality</span>
+                                <select
+                                  className="w-full p-1 border rounded text-[11px] bg-stone-50 font-bold"
+                                  value={lyr.type || 'Kraft'}
+                                  onChange={e => handleLayerChange(lIdx, 'type', e.target.value)}
+                                >
+                                  <option value="Golden">Golden</option>
+                                  <option value="Kraft">Kraft</option>
+                                  <option value="Semi-Chemical">Semi-Chem</option>
+                                  <option value="Duplex">Duplex</option>
+                                  <option value="Testliner">Testliner</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <span className="block text-[9px] font-bold text-stone-500 uppercase">GSM</span>
+                                <input
+                                  type="number"
+                                  className="w-full p-1 border rounded text-[11px] font-mono font-bold text-center bg-stone-50"
+                                  value={lyr.gsm}
+                                  onChange={e => handleLayerChange(lIdx, 'gsm', e.target.value)}
+                                />
+                              </div>
+
+                              <div>
+                                <span className="block text-[9px] font-bold text-stone-500 uppercase">BF</span>
+                                <input
+                                  type="text"
+                                  className="w-full p-1 border rounded text-[11px] font-mono font-bold text-center bg-stone-50"
+                                  value={lyr.bf}
+                                  onChange={e => handleLayerChange(lIdx, 'bf', e.target.value)}
+                                />
+                              </div>
+
+                              <div>
+                                <span className="block text-[9px] font-bold text-stone-500 uppercase">Take-Up</span>
+                                <input
+                                  type="number"
+                                  step="0.05"
+                                  className="w-full p-1 border rounded text-[11px] font-mono font-bold text-center bg-stone-50"
+                                  value={lyr.takeUp}
+                                  onChange={e => handleLayerChange(lIdx, 'takeUp', e.target.value)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAddLayer}
+                        className="w-full py-1.5 text-center text-xs font-bold text-amber-800 hover:text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md transition"
+                      >
+                        + Add Custom Layer
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              <div className="pt-4 border-t border-stone-700">
-                <p className="text-stone-400 text-sm">Estimated Paper Required</p>
-                <p className="text-3xl font-bold text-white">{result.paperRequired} <span className="text-lg font-normal text-stone-400">kg</span></p>
-                {result.wastagePercent > 0 && (
-                  <p className="text-xs text-amber-400 font-bold mt-1">
-                    Includes +{result.wastagePercent}% wastage ({result.netPaperRequired} kg net theoretical)
+              {isPPC && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
+                  <p className="text-xs font-bold text-blue-800 uppercase tracking-wider mb-2">PPC Die &amp; Set Requirements</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="block text-[10px] text-blue-700 mb-1">Common Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={commonPerSet} onChange={e => setCommonPerSet(e.target.value)} /></div>
+                    <div><label className="block text-[10px] text-blue-700 mb-1">Small Pockets/Set</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={smallPerSet} onChange={e => setSmallPerSet(e.target.value)} /></div>
+                    
+                    <div><label className="block text-[10px] text-blue-700 mb-1">Base Common Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseCommonUps} onChange={e => setBaseCommonUps(e.target.value)} /></div>
+                    <div><label className="block text-[10px] text-blue-700 mb-1">Base Small Ups (Die)</label><input required type="number" min="1" className="w-full p-2 border rounded text-sm" value={baseSmallUps} onChange={e => setBaseSmallUps(e.target.value)} /></div>
+                    
+                    <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Common Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsCommon} onChange={e => setPlannedUpsCommon(e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-blue-700 mb-1">Planned Ups (Small Sht)</label><input required type="number" min="1" className="w-full p-2 border border-blue-300 rounded text-sm font-bold" value={plannedUpsSmall} onChange={e => setPlannedUpsSmall(e.target.value)} /></div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-sm font-medium text-stone-700">Trimming / Sheet Wastage %</label>
+                  <span className="text-[11px] font-bold text-stone-500 font-mono">(Adds % to gross paper needed)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-mono font-bold"
+                    value={calcWastage}
+                    onChange={(e) => setCalcWastage(e.target.value)}
+                    placeholder="e.g. 10"
+                  />
+                  <span className="font-bold text-stone-600">%</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">{isPPC ? 'Order Quantity (Sets)' : 'Order Quantity (Pcs)'}</label>
+                <input type="number" min="1" className="w-full p-2 border border-stone-300 rounded-md bg-stone-50 font-bold font-mono" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 5000" required />
+              </div>
+              <button type="submit" className="w-full bg-stone-900 text-white py-3 rounded-md hover:bg-stone-800 transition font-bold shadow-sm">Calculate Raw Material</button>
+            </form>
+          </div>
+
+          {/* Quick Output Summary Card */}
+          {result ? (
+            <div className="bg-stone-900 text-stone-100 p-6 rounded-xl shadow-lg border border-stone-800 space-y-4">
+              <div className="flex justify-between items-start border-b border-stone-700 pb-3">
+                <div>
+                  <span className="text-[10px] text-stone-400 uppercase font-bold tracking-wider">Calculation Output</span>
+                  <h3 className="text-xl font-black text-white">{result.itemDetails?.name || result.itemDetails?.Item_Name}</h3>
+                  <p className="text-xs text-amber-400 font-mono mt-0.5">
+                    {result.itemDetails?.itemType || result.itemDetails?.Item_Type} · {result.layers?.length || 3}-Ply Board ({result.itemDetails?.fluteType || result.itemDetails?.Flute_Type || 'B'} Flute)
                   </p>
-                )}
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-stone-400 uppercase font-bold block">Order Quantity</span>
+                  <span className="text-lg font-black font-mono text-emerald-400">{result.qty?.toLocaleString()} pcs</span>
+                </div>
+              </div>
+
+              {/* Geometry stats */}
+              <div className="grid grid-cols-2 gap-3 bg-stone-800/80 p-3 rounded-lg border border-stone-700 text-xs">
+                <div>
+                  <span className="text-stone-400 block text-[10px] uppercase">Blank / Board Size</span>
+                  <span className="font-mono font-bold text-white text-sm">
+                    {result.isPpc ? `${result.boardLengthCommon}×${result.boardWidthCommon} mm` : `${result.boardLength} × ${result.boardWidth} mm`}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-stone-400 block text-[10px] uppercase">Total Board Area</span>
+                  <span className="font-mono font-bold text-cyan-400 text-sm">{result.totalArea} m²</span>
+                </div>
+                <div>
+                  <span className="text-stone-400 block text-[10px] uppercase">Box Net Unit Weight</span>
+                  <span className="font-mono font-bold text-amber-300 text-sm">{result.boxNetWeightGrams} g</span>
+                </div>
+                <div>
+                  <span className="text-stone-400 block text-[10px] uppercase">Box Gross Weight (+{result.wastagePercent}%)</span>
+                  <span className="font-mono font-bold text-orange-400 text-sm">{result.boxGrossWeightGrams} g</span>
+                </div>
+              </div>
+
+              {/* PPC Pieces Segregation Details */}
+              {result.isPpc && (
+                <div className="grid grid-cols-2 gap-3 bg-blue-950/60 p-3 rounded-lg border border-blue-800/60 text-xs">
+                  <div>
+                    <span className="text-blue-300 block text-[10px] uppercase">Pieces Needed</span>
+                    <span className="font-mono font-bold text-white">{result.cNeeded} Common / {result.sNeeded} Small</span>
+                  </div>
+                  <div>
+                    <span className="text-blue-300 block text-[10px] uppercase">Segregated Sheets</span>
+                    <span className="font-mono font-bold text-blue-300">{result.commonSheetsNeeded} Common / {result.smallSheetsNeeded} Small</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Overall paper weight headline */}
+              <div className="bg-gradient-to-r from-stone-800 to-stone-800/60 p-4 rounded-xl border border-stone-700">
+                <span className="text-stone-400 text-xs font-bold uppercase tracking-wider block">Estimated Gross Paper Required</span>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-4xl font-black text-emerald-400 font-mono">{result.paperRequired}</span>
+                  <span className="text-lg font-bold text-stone-300">kg</span>
+                </div>
+                <p className="text-xs text-stone-400 mt-1">
+                  Theoretical Net: <strong className="text-stone-200 font-mono">{result.netPaperRequired} kg</strong>
+                  {result.wastagePercent > 0 && <span className="text-amber-400 ml-1 font-bold">(+{result.wastagePercent}% trimming wastage)</span>}
+                </p>
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="border-2 border-dashed border-stone-300 rounded-xl flex items-center justify-center text-stone-400 p-6 text-center">
-            Fill out the form and click Calculate to see raw material requirements.
+          ) : (
+            <div className="border-2 border-dashed border-stone-300 rounded-xl flex items-center justify-center text-stone-400 p-8 text-center min-h-[300px]">
+              <div>
+                <span className="text-3xl block mb-2">📦</span>
+                <p className="font-medium text-sm text-stone-600">Choose a unit and box item to calculate paper requirements.</p>
+                <p className="text-xs text-stone-400 mt-1">Supports multi-GSM, BF combinations, and layer-by-layer paper analysis.</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* FULL-WIDTH LAYER-WISE BREAKDOWN TABLE & REEL PULL LIST */}
+        {result && result.layers && result.layers.length > 0 && (
+          <div className="space-y-6 pt-2">
+            {/* Table Card */}
+            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
+              <div className="p-4 bg-stone-50 border-b border-stone-200 flex flex-wrap justify-between items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">📑</span>
+                  <div>
+                    <h3 className="font-bold text-stone-900 text-sm">Layer-Wise Paper Requirement Breakdown</h3>
+                    <p className="text-xs text-stone-500">
+                      Calculated for {result.qty?.toLocaleString()} pcs of {result.itemDetails?.name || 'Item'} ({result.layers.length} layers, multi-GSM &amp; BF combinations)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportLayerBreakdownCsv}
+                    className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg shadow-xs transition"
+                  >
+                    Export Breakdown CSV
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-stone-100 text-stone-600 uppercase text-[10px] font-bold border-b border-stone-200">
+                    <tr>
+                      <th className="p-3">#</th>
+                      <th className="p-3">Layer Name</th>
+                      <th className="p-3">Paper Quality</th>
+                      <th className="p-3 text-center">GSM</th>
+                      <th className="p-3 text-center">BF</th>
+                      <th className="p-3 text-center">Take-Up</th>
+                      <th className="p-3 text-right">Net Wt/Pc</th>
+                      <th className="p-3 text-right">Gross Wt/Pc</th>
+                      <th className="p-3 text-right">Net Reqd (kg)</th>
+                      <th className="p-3 text-right text-emerald-950 font-black">Gross Reqd (kg)</th>
+                      <th className="p-3 text-right">% Share</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100 font-medium">
+                    {result.layers.map((lyr) => {
+                      const isGolden = (lyr.type || '').toLowerCase().includes('gold');
+                      const isDuplex = (lyr.type || '').toLowerCase().includes('duplex');
+                      return (
+                        <tr key={lyr.index} className="hover:bg-amber-50/40 transition">
+                          <td className="p-3 font-bold text-stone-400 font-mono">{lyr.index}</td>
+                          <td className="p-3 font-bold text-stone-800">
+                            {lyr.name}
+                            {lyr.isFlute && (
+                              <span className="ml-1.5 text-[9px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">
+                                Flute Medium
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${isGolden ? 'bg-amber-100 text-amber-900 border border-amber-300' : isDuplex ? 'bg-indigo-100 text-indigo-900 border border-indigo-300' : 'bg-stone-100 text-stone-800 border border-stone-200'}`}>
+                              {lyr.type}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold text-stone-900">{lyr.gsm}</td>
+                          <td className="p-3 text-center font-mono font-bold text-stone-700">{lyr.bf}</td>
+                          <td className="p-3 text-center font-mono text-stone-600">{lyr.takeUp.toFixed(2)}x</td>
+                          <td className="p-3 text-right font-mono text-stone-700">{lyr.weightNetGrams} g</td>
+                          <td className="p-3 text-right font-mono font-bold text-stone-900">{lyr.weightGrossGrams} g</td>
+                          <td className="p-3 text-right font-mono text-stone-600">{lyr.netKg.toFixed(2)} kg</td>
+                          <td className="p-3 text-right font-mono font-extrabold text-emerald-700 text-sm">{lyr.grossKg.toFixed(2)} kg</td>
+                          <td className="p-3 text-right font-mono font-bold text-stone-500">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <span>{lyr.sharePct}%</span>
+                              <div className="w-12 bg-stone-100 rounded-full h-1.5 overflow-hidden">
+                                <div className="bg-emerald-600 h-1.5 rounded-full" style={{ width: `${Math.min(100, lyr.sharePct)}%` }}></div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-stone-900 text-white font-bold text-xs">
+                    <tr>
+                      <td className="p-3" colSpan={3}>TOTAL REQUIREMENTS ({result.qty?.toLocaleString()} PCS)</td>
+                      <td className="p-3 text-center">-</td>
+                      <td className="p-3 text-center">-</td>
+                      <td className="p-3 text-center">-</td>
+                      <td className="p-3 text-right font-mono text-stone-300">{result.boxNetWeightGrams} g</td>
+                      <td className="p-3 text-right font-mono text-amber-300">{result.boxGrossWeightGrams} g</td>
+                      <td className="p-3 text-right font-mono text-stone-300">{result.netPaperRequired} kg</td>
+                      <td className="p-3 text-right font-mono text-emerald-400 font-black text-sm">{result.paperRequired} kg</td>
+                      <td className="p-3 text-right font-mono">100%</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* Reel Stock Requisition Pull List */}
+            {result.reelRequisitionList && result.reelRequisitionList.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-5 space-y-3">
+                <div className="flex items-center justify-between border-b border-stone-200 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🧻</span>
+                    <h4 className="font-bold text-stone-900 text-sm">Reel Stock Requisition List (Godown Pull List)</h4>
+                  </div>
+                  <span className="text-xs text-stone-500 font-mono font-bold">
+                    {result.reelRequisitionList.length} Distinct Paper Grades Needed
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
+                  {result.reelRequisitionList.map((r, idx) => (
+                    <div key={idx} className="p-3.5 bg-stone-50 hover:bg-stone-100 rounded-xl border border-stone-300 flex flex-col justify-between transition">
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="font-black text-xs text-stone-900 uppercase tracking-wider">
+                            {r.type} {r.gsm} GSM
+                          </span>
+                          <span className="text-[10px] font-black bg-stone-200 text-stone-800 px-1.5 py-0.5 rounded font-mono">
+                            {r.bf} BF
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-stone-500">
+                          Used in: <strong className="text-stone-700">{r.layers.join(', ')}</strong>
+                        </p>
+                      </div>
+
+                      <div className="mt-3 pt-2 border-t border-stone-200 flex items-baseline justify-between">
+                        <span className="text-[10px] text-stone-500 font-bold uppercase">Required:</span>
+                        <div className="text-right font-mono">
+                          <span className="text-base font-black text-emerald-700">{r.grossKg.toFixed(1)} kg</span>
+                          <span className="text-[10px] text-stone-400 block">Net: {r.netKg.toFixed(1)} kg</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -10511,26 +10989,57 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       const boardAreaSqFt = Math.round(boardAreaSqM * 10.7639 * 1000) / 1000;
 
       // 3. LAYER-BY-LAYER WEIGHT & COST CALCULATION (USING EXACT DECKLE & CUTTING BLANK SIZE)
-      const effectivePlies = part.useGlobalSpec ? globalSpec.plyDetails : (part.plyDetails || globalSpec.plyDetails);
-      let netWeightKg = 0;
-      let netMaterialCost = 0;
-
-      if (boardAreaSqM > 0) {
-        effectivePlies.forEach(ply => {
-          const gsm = parseFloat(ply.gsm) || 120;
-          const factor = parseFloat(ply.factor) || (ply.isFlute ? 1.35 : 1.0);
-          const rate = parseFloat(ply.rate) || 40;
-          const layerWt = (boardAreaSqM * gsm * factor) / 1000;
-          netWeightKg += layerWt;
-          netMaterialCost += (layerWt * rate);
-        });
-      }
-
-      // 4. APPLY TRIMMING / PRODUCTION WASTAGE % ACCORDING TO DECKLE & CUTTING
+      const rawEffectivePlies = part.useGlobalSpec ? globalSpec.plyDetails : (part.plyDetails || globalSpec.plyDetails);
+      
       const wastagePct = part.useGlobalSpec
         ? (parseFloat(globalSpec.wastagePercent) || 0)
         : (parseFloat(part.wastagePercent) || 0);
       const wastageMultiplier = 1 + (Math.max(0, wastagePct) / 100);
+
+      let netWeightKg = 0;
+      let netMaterialCost = 0;
+
+      const calculatedPlies = (rawEffectivePlies || []).map((ply, pIdx) => {
+        const gsm = parseFloat(ply.gsm) || 120;
+        const factor = parseFloat(ply.factor) || (ply.isFlute ? 1.35 : 1.0);
+        const rate = parseFloat(ply.rate) || 40;
+        
+        // Exact net layer weight per box (kg & grams)
+        const layerNetWtKg = boardAreaSqM > 0 ? (boardAreaSqM * gsm * factor) / 1000 : 0;
+        const layerNetWtGrams = Math.round(layerNetWtKg * 1000 * 10) / 10;
+        
+        // Gross layer weight with wastage (kg & grams)
+        const layerGrossWtKg = Math.round(layerNetWtKg * wastageMultiplier * 1000) / 1000;
+        const layerGrossWtGrams = Math.round(layerNetWtGrams * wastageMultiplier * 10) / 10;
+        
+        // Total batch weight in kg for this layer
+        const layerBatchWtKg = Math.round((layerGrossWtKg * qty) * 100) / 100;
+        
+        // Layer cost per pc and for batch
+        const layerCostPerPc = Math.round((layerGrossWtKg * rate) * 100) / 100;
+        const layerBatchCost = Math.round((layerCostPerPc * qty) * 100) / 100;
+
+        netWeightKg += layerNetWtKg;
+        netMaterialCost += (layerNetWtKg * rate);
+
+        return {
+          ...ply,
+          gsm,
+          factor,
+          rate,
+          layerNetWtKg,
+          layerNetWtGrams,
+          layerGrossWtKg,
+          layerGrossWtGrams,
+          layerBatchWtKg,
+          layerCostPerPc,
+          layerBatchCost,
+          // Convenient aliases
+          weightGrams: layerGrossWtGrams,
+          netWeightGrams: layerNetWtGrams,
+          totalWeightKg: layerBatchWtKg
+        };
+      });
 
       const singleWeightKg = netWeightKg * wastageMultiplier;
       const singleMaterialCost = netMaterialCost * wastageMultiplier;
@@ -10571,7 +11080,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
         totalWeightKg: Math.round(totalWeightKg * 100) / 100,
         totalCost: Math.round(totalCost * 100) / 100,
         totalQuotedValue: Math.round(totalQuotedValue * 100) / 100,
-        effectivePlies
+        effectivePlies: calculatedPlies
       };
     });
   }, [parts, globalUnit, globalSpec, sharedBlendedRate]);
@@ -10588,6 +11097,29 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     const blendedRatePerKg = totalWeightKg > 0 ? parseFloat((totalQuotationAmount / totalWeightKg).toFixed(2)) : 0;
     const averageRatePerBox = totalQuantityPcs > 0 ? parseFloat((totalQuotationAmount / totalQuantityPcs).toFixed(2)) : 0;
 
+    // Aggregate paper consumption by Grade (Type + GSM + BF)
+    const gradeMap = {};
+    calculatedParts.forEach(p => {
+      if (p.effectivePlies) {
+        p.effectivePlies.forEach(ply => {
+          const key = `${ply.type || 'Kraft'}__${ply.gsm || 120}__${ply.bf || 16}`;
+          if (!gradeMap[key]) {
+            gradeMap[key] = {
+              type: ply.type || 'Kraft',
+              gsm: ply.gsm || 120,
+              bf: ply.bf || 16,
+              totalKg: 0
+            };
+          }
+          gradeMap[key].totalKg += (ply.layerBatchWtKg || 0);
+        });
+      }
+    });
+    const paperGradeSummary = Object.values(gradeMap).map(g => ({
+      ...g,
+      totalKg: Math.round(g.totalKg * 100) / 100
+    }));
+
     return {
       totalBoxesCount,
       totalQuantityPcs,
@@ -10597,7 +11129,8 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       totalNetCost: parseFloat(totalNetCost.toFixed(2)),
       totalQuotationAmount: parseFloat(totalQuotationAmount.toFixed(2)),
       blendedRatePerKg,
-      averageRatePerBox
+      averageRatePerBox,
+      paperGradeSummary
     };
   }, [calculatedParts]);
 
@@ -10608,6 +11141,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       'Length (in)', 'Width (in)', 'Height (in)', 'Length (mm)', 'Width (mm)', 'Height (mm)',
       'Blank Cut (mm)', 'Blank Deckle (mm)', 'Blank Cut (in)', 'Blank Deckle (in)', 'Board Area (m²)',
       'Net Weight (g)', 'Wastage (%)', 'Gross Weight (g)', 'Gross Weight (kg)',
+      'Layer Weights (g/box)',
       'Paper Cost (₹)', 'Conversion (₹)', 'Net Cost (₹)', 'Quoted Rate (₹)',
       'Order Qty (pcs)', 'Total Weight (kg)', 'Total Value (₹)'
     ];
@@ -10618,6 +11152,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       p.parsedDimensions.L_mm, p.parsedDimensions.W_mm, p.parsedDimensions.H_mm,
       p.blankCutLengthMm, p.blankDeckleMm, p.blankCutLengthIn, p.blankDeckleIn, p.boardAreaSqM,
       p.netWeightGrams, p.wastagePercent || 0, p.singleWeightGrams, p.singleWeightKg,
+      `"${(p.effectivePlies || []).map(l => `${l.name || 'L'}: ${l.layerGrossWtGrams || l.weightGrams}g`).join('; ')}"`,
       p.singleMaterialCost, p.conversionCost || globalSpec.conversionCostPerPc,
       p.singleTotalCost, p.quotedRate,
       p.qtyPerSet, p.totalWeightKg, p.totalQuotedValue
@@ -10629,7 +11164,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
     link.href = URL.createObjectURL(blob);
     link.download = `Box_Costing_Export_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
-    if (addLog) addLog(`Exported ${calculatedParts.length} box specifications to CSV`);
+    if (addLog) addLog(`Exported ${calculatedParts.length} box specifications with layer weights to CSV`);
   };
 
   // ── BATCH CSV FILE HANDLER ──
@@ -11049,6 +11584,21 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                             +{part.wastagePercent}% Waste ({part.netWeightGrams}g net)
                           </span>
                         )}
+                        {/* Quick layer weights inline badges */}
+                        {part.effectivePlies && part.effectivePlies.length > 0 && (
+                          <div className="flex items-center flex-wrap gap-1 mt-1 text-[10px] font-mono">
+                            <span className="font-bold text-stone-500 text-[9px] uppercase">Layers:</span>
+                            {part.effectivePlies.map((p, idx) => (
+                              <span
+                                key={idx}
+                                className="bg-stone-200/90 text-stone-800 px-1.5 py-0.5 rounded text-[9px] font-bold border border-stone-300/60"
+                                title={`${p.name || `Layer ${idx+1}`}: ${p.layerGrossWtGrams || p.weightGrams || 0}g gross (${p.layerNetWtGrams || p.netWeightGrams || 0}g net) · Order Total: ${p.layerBatchWtKg || 0} kg`}
+                              >
+                                {p.name?.replace(' Medium', '').replace(' Liner', '') || `L${idx+1}`}: {p.layerGrossWtGrams || p.weightGrams || 0}g
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <span className="text-stone-500 font-bold text-[10px] uppercase mr-1">Quoted Rate:</span>
@@ -11203,74 +11753,191 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         )}
                       </div>
 
+                      {/* Shared Spec Layers & Weights Table (Linked Mode) */}
+                      {part.useGlobalSpec && (
+                        <div className="bg-white rounded-xl border border-emerald-300 overflow-hidden shadow-xs">
+                          <div className="p-3 bg-emerald-50/80 border-b border-emerald-200 flex flex-wrap justify-between items-center gap-2 text-xs">
+                            <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                              <span>🔗</span> Layer Weight Breakdown (Using Shared Spec · Box Total: <strong>{part.singleWeightGrams}g</strong>)
+                            </span>
+                            <span className="text-[10px] text-emerald-800 font-mono font-bold">
+                              Batch: {part.qtyPerSet.toLocaleString()} pcs · {part.totalWeightKg.toLocaleString()} kg Total Paper
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-stone-100 text-stone-600 uppercase text-[10px] font-bold border-b border-stone-200">
+                                <tr>
+                                  <th className="p-2.5">Layer Name</th>
+                                  <th className="p-2.5">Paper Quality</th>
+                                  <th className="p-2.5 text-center">GSM</th>
+                                  <th className="p-2.5 text-center">BF</th>
+                                  <th className="p-2.5 text-center">Take-Up</th>
+                                  <th className="p-2.5 text-right font-black text-amber-900 bg-amber-50/70">Net Wt/Pc (g)</th>
+                                  <th className="p-2.5 text-right font-black text-orange-900 bg-orange-50/70">Gross Wt/Pc (g)</th>
+                                  <th className="p-2.5 text-right font-black text-emerald-900 bg-emerald-50/70">Total Layer Wt (kg)</th>
+                                  <th className="p-2.5 text-right">Paper Rate</th>
+                                  <th className="p-2.5 text-right font-bold text-stone-800">Cost / Pc</th>
+                                  <th className="p-2.5 text-right font-black text-emerald-700">Batch Cost</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-stone-100 font-medium">
+                                {(part.effectivePlies || []).map((ply, pIdx) => (
+                                  <tr key={ply.id ?? pIdx} className="hover:bg-emerald-50/30">
+                                    <td className="p-2.5 font-bold text-stone-800">{ply.name}</td>
+                                    <td className="p-2.5">
+                                      <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-stone-100 text-stone-800 border border-stone-200">
+                                        {ply.type || 'Kraft'}
+                                      </span>
+                                    </td>
+                                    <td className="p-2.5 text-center font-mono font-bold text-stone-900">{ply.gsm}</td>
+                                    <td className="p-2.5 text-center font-mono font-bold text-stone-700">{ply.bf}</td>
+                                    <td className="p-2.5 text-center font-mono text-stone-600">{ply.factor}x</td>
+                                    <td className="p-2.5 text-right font-mono text-stone-700 bg-amber-50/40 font-bold">{ply.layerNetWtGrams} g</td>
+                                    <td className="p-2.5 text-right font-mono text-orange-800 bg-orange-50/40 font-extrabold">{ply.layerGrossWtGrams} g</td>
+                                    <td className="p-2.5 text-right font-mono font-black text-emerald-800 bg-emerald-50/40">{ply.layerBatchWtKg} kg</td>
+                                    <td className="p-2.5 text-right font-mono text-stone-600">₹{ply.rate}/kg</td>
+                                    <td className="p-2.5 text-right font-mono text-stone-800 font-bold">₹{ply.layerCostPerPc.toFixed(2)}</td>
+                                    <td className="p-2.5 text-right font-mono font-black text-emerald-700">₹{ply.layerBatchCost.toLocaleString('en-IN')}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot className="bg-stone-100 font-bold text-xs border-t-2 border-stone-300">
+                                <tr>
+                                  <td className="p-2.5" colSpan={5}>TOTAL MATERIAL SPECIFICATION</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-800">{part.netWeightGrams} g</td>
+                                  <td className="p-2.5 text-right font-mono text-orange-900 font-black">{part.singleWeightGrams} g</td>
+                                  <td className="p-2.5 text-right font-mono text-emerald-800 font-black">{part.totalWeightKg} kg</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-500">Blended ₹{sharedBlendedRate}</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-900 font-black">₹{part.singleMaterialCost.toFixed(2)}</td>
+                                  <td className="p-2.5 text-right font-mono text-emerald-700 font-black">₹{(part.singleMaterialCost * part.qtyPerSet).toLocaleString('en-IN')}</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Custom Plies Table if Overridden */}
                       {!part.useGlobalSpec && (
-                        <div className="bg-white rounded-xl border border-stone-300 overflow-hidden">
-                          <table className="w-full text-left text-xs">
-                            <thead className="bg-stone-100 text-stone-600 uppercase text-[10px] font-bold">
-                              <tr>
-                                <th className="p-2.5">Layer Name</th>
-                                <th className="p-2.5">Type</th>
-                                <th className="p-2.5">GSM</th>
-                                <th className="p-2.5">BF</th>
-                                <th className="p-2.5">Flute Factor</th>
-                                <th className="p-2.5 text-right">Paper Rate (₹/kg)</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-stone-100">
-                              {part.plyDetails.map((ply, pIdx) => (
-                                <tr key={ply.id ?? pIdx}>
-                                  <td className="p-2 font-bold text-stone-800">{ply.name}</td>
-                                  <td className="p-2">
-                                    <select
-                                      className="p-1 border rounded text-xs bg-white"
-                                      value={ply.type || 'Kraft'}
-                                      onChange={e => handlePlyChange(part.id, pIdx, 'type', e.target.value)}
-                                    >
-                                      <option value="Kraft">Kraft</option>
-                                      <option value="Golden">Golden</option>
-                                      <option value="Semi-Chemical">Semi-Chemical</option>
-                                      <option value="Duplex">Duplex</option>
-                                    </select>
-                                  </td>
-                                  <td className="p-2">
-                                    <input
-                                      type="number"
-                                      className="w-16 p-1 border rounded text-xs font-mono text-center"
-                                      value={ply.gsm}
-                                      onChange={e => handlePlyChange(part.id, pIdx, 'gsm', e.target.value)}
-                                    />
-                                  </td>
-                                  <td className="p-2">
-                                    <input
-                                      type="number"
-                                      className="w-14 p-1 border rounded text-xs font-mono text-center"
-                                      value={ply.bf}
-                                      onChange={e => handlePlyChange(part.id, pIdx, 'bf', e.target.value)}
-                                    />
-                                  </td>
-                                  <td className="p-2">
-                                    <input
-                                      type="number"
-                                      step="0.05"
-                                      className="w-16 p-1 border rounded text-xs font-mono text-center"
-                                      value={ply.factor}
-                                      onChange={e => handlePlyChange(part.id, pIdx, 'factor', e.target.value)}
-                                    />
-                                  </td>
-                                  <td className="p-2 text-right">
-                                    <input
-                                      type="number"
-                                      step="0.5"
-                                      className="w-20 p-1 border rounded text-xs font-mono text-right font-bold"
-                                      value={ply.rate}
-                                      onChange={e => handlePlyChange(part.id, pIdx, 'rate', e.target.value)}
-                                    />
-                                  </td>
+                        <div className="bg-white rounded-xl border border-stone-300 overflow-hidden shadow-xs">
+                          <div className="p-3 bg-amber-50/80 border-b border-amber-200 flex flex-wrap justify-between items-center gap-2 text-xs">
+                            <span className="font-bold text-amber-950 flex items-center gap-1.5">
+                              <span>✎</span> Custom Layer Specifications &amp; Live Weights
+                            </span>
+                            <span className="text-[10px] text-amber-800 font-mono font-bold">
+                              Box Unit Weight: <strong>{part.singleWeightGrams}g</strong> ({part.totalWeightKg} kg total)
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-stone-100 text-stone-600 uppercase text-[10px] font-bold border-b border-stone-200">
+                                <tr>
+                                  <th className="p-2.5">Layer Name</th>
+                                  <th className="p-2.5">Type</th>
+                                  <th className="p-2.5 text-center">GSM</th>
+                                  <th className="p-2.5 text-center">BF</th>
+                                  <th className="p-2.5 text-center">Flute Factor</th>
+                                  <th className="p-2.5 text-right font-black text-amber-900 bg-amber-50/70">Net Wt/Pc (g)</th>
+                                  <th className="p-2.5 text-right font-black text-orange-900 bg-orange-50/70">Gross Wt/Pc (g)</th>
+                                  <th className="p-2.5 text-right font-black text-emerald-900 bg-emerald-50/70">Total Layer Wt (kg)</th>
+                                  <th className="p-2.5 text-right">Paper Rate (₹/kg)</th>
+                                  <th className="p-2.5 text-right font-bold text-stone-800">Cost / Pc</th>
+                                  <th className="p-2.5 text-right font-black text-emerald-700">Batch Cost</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody className="divide-y divide-stone-100">
+                                {part.plyDetails.map((ply, pIdx) => {
+                                  const calcPly = part.effectivePlies?.[pIdx] || {};
+                                  return (
+                                    <tr key={ply.id ?? pIdx} className="hover:bg-amber-50/30">
+                                      <td className="p-2 font-bold text-stone-800">
+                                        <input
+                                          type="text"
+                                          className="w-full p-1 border rounded text-xs font-bold"
+                                          value={ply.name}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'name', e.target.value)}
+                                        />
+                                      </td>
+                                      <td className="p-2">
+                                        <select
+                                          className="p-1 border rounded text-xs bg-white font-bold"
+                                          value={ply.type || 'Kraft'}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'type', e.target.value)}
+                                        >
+                                          <option value="Kraft">Kraft</option>
+                                          <option value="Golden">Golden</option>
+                                          <option value="Semi-Chemical">Semi-Chemical</option>
+                                          <option value="Duplex">Duplex</option>
+                                          <option value="Testliner">Testliner</option>
+                                        </select>
+                                      </td>
+                                      <td className="p-2">
+                                        <input
+                                          type="number"
+                                          className="w-16 p-1 border rounded text-xs font-mono text-center font-bold"
+                                          value={ply.gsm}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'gsm', e.target.value)}
+                                        />
+                                      </td>
+                                      <td className="p-2">
+                                        <input
+                                          type="number"
+                                          className="w-14 p-1 border rounded text-xs font-mono text-center font-bold"
+                                          value={ply.bf}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'bf', e.target.value)}
+                                        />
+                                      </td>
+                                      <td className="p-2">
+                                        <input
+                                          type="number"
+                                          step="0.05"
+                                          className="w-16 p-1 border rounded text-xs font-mono text-center font-bold"
+                                          value={ply.factor}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'factor', e.target.value)}
+                                        />
+                                      </td>
+                                      <td className="p-2 text-right font-mono font-bold text-stone-700 bg-amber-50/40">
+                                        {calcPly.layerNetWtGrams ?? 0} g
+                                      </td>
+                                      <td className="p-2 text-right font-mono font-black text-orange-800 bg-orange-50/40">
+                                        {calcPly.layerGrossWtGrams ?? 0} g
+                                      </td>
+                                      <td className="p-2 text-right font-mono font-black text-emerald-800 bg-emerald-50/40">
+                                        {calcPly.layerBatchWtKg ?? 0} kg
+                                      </td>
+                                      <td className="p-2 text-right">
+                                        <input
+                                          type="number"
+                                          step="0.5"
+                                          className="w-20 p-1 border rounded text-xs font-mono text-right font-bold"
+                                          value={ply.rate}
+                                          onChange={e => handlePlyChange(part.id, pIdx, 'rate', e.target.value)}
+                                        />
+                                      </td>
+                                      <td className="p-2 text-right font-mono font-bold text-stone-800">
+                                        ₹{(calcPly.layerCostPerPc ?? 0).toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-right font-mono font-black text-emerald-700">
+                                        ₹{(calcPly.layerBatchCost ?? 0).toLocaleString('en-IN')}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                              <tfoot className="bg-stone-100 font-bold text-xs border-t-2 border-stone-300">
+                                <tr>
+                                  <td className="p-2.5" colSpan={5}>TOTAL CUSTOM SPECIFICATION</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-800">{part.netWeightGrams} g</td>
+                                  <td className="p-2.5 text-right font-mono text-orange-900 font-black">{part.singleWeightGrams} g</td>
+                                  <td className="p-2.5 text-right font-mono text-emerald-800 font-black">{part.totalWeightKg} kg</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-500">-</td>
+                                  <td className="p-2.5 text-right font-mono text-stone-900 font-black">₹{part.singleMaterialCost.toFixed(2)}</td>
+                                  <td className="p-2.5 text-right font-mono text-emerald-700 font-black">₹{(part.singleMaterialCost * part.qtyPerSet).toLocaleString('en-IN')}</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
                         </div>
                       )}
 
@@ -11343,6 +12010,34 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                   <span className="text-[10px] text-emerald-300 block">Avg ₹{totals.averageRatePerBox}/box</span>
                 </div>
               </div>
+
+              {/* Consolidated Paper Consumption by Grade (Quality + GSM + BF) */}
+              {totals.paperGradeSummary && totals.paperGradeSummary.length > 0 && (
+                <div className="pt-3 border-t border-stone-800">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-[10px] text-stone-400 uppercase font-bold tracking-wider flex items-center gap-1.5">
+                      <span>🧻</span> Paper Grades Required Across All Boxes
+                    </span>
+                    <span className="text-[10px] text-stone-500 font-mono">
+                      {totals.paperGradeSummary.length} Paper Varieties
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {totals.paperGradeSummary.map((g, gIdx) => (
+                      <div key={gIdx} className="bg-stone-800/90 p-2.5 rounded-lg border border-stone-700 text-xs flex flex-col justify-between">
+                        <div className="flex justify-between items-center text-[11px] font-bold text-stone-200 mb-1">
+                          <span className="truncate">{g.type} {g.gsm} GSM</span>
+                          <span className="text-[9px] font-mono text-amber-400 bg-stone-900 px-1.5 py-0.5 rounded border border-stone-700">{g.bf} BF</span>
+                        </div>
+                        <div className="flex justify-between items-baseline pt-1 border-t border-stone-700/60 font-mono">
+                          <span className="text-[10px] text-stone-400">Total Paper:</span>
+                          <span className="font-black text-emerald-400 text-xs">{g.totalKg.toLocaleString()} kg</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Right: Save to Item Master Database */}
