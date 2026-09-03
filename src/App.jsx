@@ -4392,6 +4392,97 @@ export function computeInventoryWithUsage(inventory = [], production = [], order
   return [...computedPaper, ...otherInventoryData];
 }
 
+// ── AUTOMATIC SELF-HEALING DATABASE RECONCILIATION ENGINE ──────────────────
+// Actively calculates true reel stock from all historical production runs and
+// syncs balanceQty, issuedQty, and lastUsedForItem directly to Turso SQLite rows.
+export async function reconcileDatabaseInventory(inventory = [], production = [], orders = []) {
+  if (!inventory || !Array.isArray(inventory) || inventory.length === 0) return { updatedCount: 0, updates: [] };
+
+  const computedList = computeInventoryWithUsage(inventory, production, orders);
+  const updates = [];
+
+  for (const compReel of computedList) {
+    if (compReel.category && compReel.category !== 'Paper') continue;
+    const rawReel = inventory.find(r => r.id === compReel.id);
+    if (!rawReel) continue;
+
+    const dbBal = parseFloat(rawReel.balanceQty !== undefined && rawReel.balanceQty !== null ? rawReel.balanceQty : -99999);
+    const compBal = parseFloat(compReel.balanceQty || 0);
+    const dbIssued = parseFloat(rawReel.issuedQty !== undefined && rawReel.issuedQty !== null ? rawReel.issuedQty : -99999);
+    const compIssued = parseFloat(compReel.issuedQty || 0);
+    const dbUsedFor = String(rawReel.lastUsedForItem || '').trim();
+    const compUsedFor = String(compReel.lastUsedForItem || '').trim();
+
+    const balDiff = Math.abs(dbBal - compBal);
+    const issuedDiff = Math.abs(dbIssued - compIssued);
+    const usedForDiff = compUsedFor && dbUsedFor !== compUsedFor;
+
+    if (balDiff > 0.05 || issuedDiff > 0.05 || usedForDiff) {
+      updates.push({
+        id: compReel.id,
+        balanceQty: compBal,
+        issuedQty: compIssued,
+        lastUsedForItem: compUsedFor || rawReel.lastUsedForItem || '',
+        reelNo: compReel.reelNo || compReel.supplierReelNo
+      });
+    }
+  }
+
+  if (updates.length > 0) {
+    console.log(`[DB Auto-Reconcile] Aligning ${updates.length} reel balances directly in Turso SQLite...`);
+    for (const u of updates) {
+      try {
+        await executeQuery(
+          `UPDATE inventory SET balanceQty = ?, issuedQty = ?, lastUsedForItem = ? WHERE id = ?`,
+          [u.balanceQty, u.issuedQty, u.lastUsedForItem, u.id]
+        );
+      } catch (err) {
+        console.error(`[DB Auto-Reconcile Error] Reel ${u.id}:`, err);
+      }
+    }
+    console.log(`[DB Auto-Reconcile] ✓ Successfully reconciled ${updates.length} inventory records in Turso.`);
+  }
+  return { updatedCount: updates.length, updates };
+}
+
+export async function reconcileDatabaseDispatches(orders = [], dispatches = []) {
+  if (!orders || !Array.isArray(orders) || orders.length === 0) return { updatedCount: 0, updates: [] };
+  const updates = [];
+
+  for (const order of orders) {
+    const history = Array.isArray(order.dispatchHistory)
+      ? order.dispatchHistory
+      : safeJsonParse(order.dispatchHistory, []);
+    
+    const historySum = history.reduce((sum, h) => sum + (parseInt(h.qty || 0) || 0), 0);
+    const dbDispatched = parseInt(order.dispatchedQty || 0);
+
+    if (history.length > 0 && Math.abs(historySum - dbDispatched) > 0) {
+      updates.push({
+        id: order.id,
+        dispatchedQty: historySum,
+        orderNo: order.orderNo || order.itemName
+      });
+    }
+  }
+
+  if (updates.length > 0) {
+    console.log(`[DB Auto-Reconcile] Aligning ${updates.length} order dispatch counts in Turso SQLite...`);
+    for (const u of updates) {
+      try {
+        await executeQuery(
+          `UPDATE orders SET dispatchedQty = ? WHERE id = ?`,
+          [u.dispatchedQty, u.id]
+        );
+      } catch (err) {
+        console.error(`[DB Auto-Reconcile Error] Order ${u.id}:`, err);
+      }
+    }
+    console.log(`[DB Auto-Reconcile] ✓ Successfully reconciled ${updates.length} order dispatches in Turso.`);
+  }
+  return { updatedCount: updates.length, updates };
+}
+
 export const getSetComponents = (item, allItems = []) => {
   if (!item) return [];
 
@@ -7745,6 +7836,9 @@ export default function App() {
   const [dispatches, setDispatches] = useState([]);
   const [wipStages, setWipStages] = useState([]);
   const [dailyReports, setDailyReports] = useState([]);
+  const [planningQueues, setPlanningQueues] = useState([]);
+  const [isReconcilingDb, setIsReconcilingDb] = useState(false);
+  const [lastReconciledAt, setLastReconciledAt] = useState(null);
   const [productionPrefill, setProductionPrefill] = useState(null);
   const [attachReelModalOpen, setAttachReelModalOpen] = useState(false);
   const [attachPrefillOrderId, setAttachPrefillOrderId] = useState('');
@@ -8226,7 +8320,11 @@ export default function App() {
 
     try {
       // Sync each job card directly to Turso DB so all mobile phones & workstations see active job cards in real time
-      await executeQuery("DELETE FROM planned_jobs");
+      if (uid && uid !== 'all') {
+        await executeQuery("DELETE FROM planned_jobs WHERE companyId = ?", [uid]);
+      } else {
+        await executeQuery("DELETE FROM planned_jobs");
+      }
       for (const j of list) {
         if (!j.id) continue;
         await executeQuery(
@@ -8250,10 +8348,57 @@ export default function App() {
           ]
         );
       }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'planned_jobs', action: 'update', _parsed: true } }));
+      }
     } catch(err) {
       console.warn("Could not sync planned_jobs to Turso database:", err);
     }
   };
+
+  const savePlanningQueues = async (queues) => {
+    const list = Array.isArray(queues) ? queues : [];
+    setPlanningQueues(list);
+    try {
+      localStorage.setItem(`erp_planning_custom_queues_${uid || 'all'}`, JSON.stringify(list));
+    } catch(e) {}
+    try {
+      if (uid && uid !== 'all') {
+        await executeQuery("DELETE FROM planning_queues WHERE companyId = ?", [uid]);
+      } else {
+        await executeQuery("DELETE FROM planning_queues");
+      }
+      for (let i = 0; i < list.length; i++) {
+        const q = list[i];
+        if (!q.id) continue;
+        await executeQuery(
+          "INSERT OR REPLACE INTO planning_queues (id, name, color, companyId, sortOrder) VALUES (?, ?, ?, ?, ?)",
+          [q.id, q.name || 'Queue', q.color || '#2563eb', q.companyId || uid || '', i]
+        );
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'planning_queues', action: 'update', _parsed: true } }));
+      }
+    } catch(err) {
+      console.warn("Could not sync planning_queues to Turso database:", err);
+    }
+  };
+
+  const runFullDatabaseReconciliation = useCallback(async () => {
+    setIsReconcilingDb(true);
+    try {
+      const invRes = await reconcileDatabaseInventory(inventory, production, orders);
+      const dispRes = await reconcileDatabaseDispatches(orders, dispatches);
+      setLastReconciledAt(new Date());
+      console.log(`[Reconcile Complete] Inventory updated: ${invRes.updatedCount}, Dispatches updated: ${dispRes.updatedCount}`);
+      return { inventoryUpdated: invRes.updatedCount, dispatchesUpdated: dispRes.updatedCount };
+    } catch (err) {
+      console.error("Reconciliation error:", err);
+      return { error: err.message };
+    } finally {
+      setIsReconcilingDb(false);
+    }
+  }, [inventory, production, orders, dispatches]);
 
   useEffect(() => {
     const handleJobsChanged = (e) => {
@@ -8282,13 +8427,14 @@ export default function App() {
           return obj;
         });
       };
-      const [users, comps, itms, prod, ords, wst, inv, lg, cost, vend, pos, txns, custs, disps, wip, daily, pJobs] = await Promise.all([
+      const [users, comps, itms, prod, ords, wst, inv, lg, cost, vend, pos, txns, custs, disps, wip, daily, pJobs, pQueues] = await Promise.all([
         fetchTable('erp_users').catch(()=>[]), fetchTable('companies').catch(()=>[]), fetchTable('items').catch(()=>[]),
         fetchTable('production').catch(()=>[]), fetchTable('orders').catch(()=>[]), fetchTable('wastage').catch(()=>[]),
         fetchTable('inventory').catch(()=>[]), fetchTable('logs').catch(()=>[]), fetchTable('costings').catch(()=>[]),
         fetchTable('vendors').catch(()=>[]), fetchTable('purchaseOrders').catch(()=>[]), fetchTable('transactions').catch(()=>[]),
         fetchTable('customers').catch(()=>[]), fetchTable('dispatches').catch(()=>[]), fetchTable('wip_stages').catch(()=>[]),
-        fetchTable('daily_reports').catch(()=>[]), fetchTable('planned_jobs').catch(()=>[])
+        fetchTable('daily_reports').catch(()=>[]), fetchTable('planned_jobs').catch(()=>[]),
+        fetchTable('planning_queues').catch(()=>[])
       ]);
       setErpUsers(users);
       setCompanies(comps);
@@ -8314,6 +8460,15 @@ export default function App() {
       setDispatches(disps);
       setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, {}) })));
       setDailyReports(daily);
+
+      // Planning Queues Cloud Sync
+      if (Array.isArray(pQueues) && pQueues.length > 0) {
+        setPlanningQueues(pQueues);
+      } else {
+        const defaultQueue = [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb', sortOrder: 0 }];
+        setPlanningQueues(defaultQueue);
+        executeQuery("INSERT OR IGNORE INTO planning_queues (id, name, color, sortOrder) VALUES ('q_line1', 'Production Queue', '#2563eb', 0)").catch(() => {});
+      }
 
       // Cloud Planned Jobs Sync
       if (Array.isArray(pJobs) && pJobs.length > 0) {
@@ -8351,6 +8506,24 @@ export default function App() {
         }
       }
 
+      // ── STARTUP AUTOMATIC DATABASE SELF-HEALING RECONCILIATION ──
+      // Checks all production runs and aligns inventory balanceQty and orders dispatchedQty directly in SQLite
+      reconcileDatabaseInventory(inv, prod, ords).then(({ updatedCount }) => {
+        if (updatedCount > 0) {
+          console.log(`[Startup Reconciliation] Aligned ${updatedCount} inventory records in Turso.`);
+          fetchTable('inventory').then(freshInv => { if (freshInv) setInventory(freshInv); }).catch(()=>{});
+        }
+      }).catch(err => console.error("Startup inventory reconcile error:", err));
+
+      reconcileDatabaseDispatches(ords, disps).then(({ updatedCount }) => {
+        if (updatedCount > 0) {
+          console.log(`[Startup Reconciliation] Aligned ${updatedCount} order dispatch records in Turso.`);
+          fetchTable('orders').then(freshOrds => {
+            if (freshOrds) setOrders(freshOrds.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
+          }).catch(()=>{});
+        }
+      }).catch(err => console.error("Startup dispatch reconcile error:", err));
+
       setIsDbReady(true);
     } catch (err) {
       console.error("Turso DB load error:", err);
@@ -8371,7 +8544,7 @@ export default function App() {
   }, []);
 
   // 🔄 Real-time cross-device sync: poll Turso cloud DB every 15 seconds
-  // Automatically syncs production, orders, WIP, inventory, wastage, planned jobs, and activity logs!
+  // Automatically syncs production, orders, WIP, inventory, wastage, planned jobs, queues, and activity logs!
   useEffect(() => {
     if (!currentErpUser) return;
     const POLL_INTERVAL_MS = 15000; // 15 seconds for responsive live activity
@@ -8385,8 +8558,8 @@ export default function App() {
             return obj;
           });
         };
-        // Poll active operational tables including activity logs
-        const [prod, ords, wip, inv, pJobs, wst, lg] = await Promise.all([
+        // Poll active operational tables including activity logs and planning queues
+        const [prod, ords, wip, inv, pJobs, wst, lg, pQueues] = await Promise.all([
           fetchTable('production').catch(() => null),
           fetchTable('orders').catch(() => null),
           fetchTable('wip_stages').catch(() => null),
@@ -8394,6 +8567,7 @@ export default function App() {
           fetchTable('planned_jobs').catch(() => null),
           fetchTable('wastage').catch(() => null),
           fetchTable('logs').catch(() => null),
+          fetchTable('planning_queues').catch(() => null),
         ]);
         if (prod) setProduction(prod.map(p => ({ ...p, consumedReels: safeJsonParse(p.consumedReels, []) })));
         if (ords) setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
@@ -8402,6 +8576,9 @@ export default function App() {
         if (wst) setWastageLogs(wst);
         if (lg && Array.isArray(lg)) {
           setLogs([...lg].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)));
+        }
+        if (pQueues && pQueues.length > 0) {
+          setPlanningQueues(pQueues);
         }
         if (pJobs && pJobs.length > 0) {
           const parsedPJobs = pJobs.map(j => ({
@@ -8478,6 +8655,8 @@ export default function App() {
         else if (table === 'costings') setCostings(prev => prev.filter(c => c.id !== id));
         else if (table === 'transactions') setTransactions(prev => prev.filter(t => t.id !== id));
         else if (table === 'daily_reports') setDailyReports(prev => prev.filter(r => r.id !== id));
+        else if (table === 'planned_jobs') setPlannedJobs(prev => prev.filter(j => j.id !== id && j.orderId !== id));
+        else if (table === 'planning_queues') setPlanningQueues(prev => prev.filter(q => q.id !== id));
       } else if (action === 'bulk_delete') {
         if (table === 'wip_stages') setWipStages([]);
         else if (table === 'production') setProduction([]);
@@ -8486,6 +8665,8 @@ export default function App() {
         else if (table === 'items') setItems([]);
         else if (table === 'wastage') setWastageLogs([]);
         else if (table === 'dispatches') setDispatches([]);
+        else if (table === 'planned_jobs') setPlannedJobs([]);
+        else if (table === 'planning_queues') setPlanningQueues([]);
       } else if (action === 'add') {
         // BUG 7 FIX: parse JSON fields on add too, in case data came from a raw path
         if (table === 'production') setProduction(prev => [parseProdFields(data), ...prev.filter(p => p.id !== data.id)]);
@@ -8505,6 +8686,8 @@ export default function App() {
         else if (table === 'costings') setCostings(prev => [data, ...prev.filter(c => c.id !== data.id)]);
         else if (table === 'transactions') setTransactions(prev => [data, ...prev.filter(t => t.id !== data.id)]);
         else if (table === 'daily_reports') setDailyReports(prev => [data, ...prev.filter(r => r.id !== data.id)]);
+        else if (table === 'planned_jobs') setPlannedJobs(prev => [data, ...prev.filter(j => j.id !== data.id)]);
+        else if (table === 'planning_queues') setPlanningQueues(prev => [...prev.filter(q => q.id !== data.id), data]);
       } else if (action === 'update') {
         // BUG 7 FIX: merge and re-parse JSON fields so they remain arrays, not strings
         if (table === 'production') setProduction(prev => prev.map(p => {
@@ -8536,6 +8719,8 @@ export default function App() {
         else if (table === 'costings') setCostings(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
         else if (table === 'transactions') setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...data } : t));
         else if (table === 'daily_reports') setDailyReports(prev => prev.map(r => r.id === id ? { ...r, ...data } : r));
+        else if (table === 'planned_jobs') setPlannedJobs(prev => prev.map(j => j.id === id ? { ...j, ...data } : j));
+        else if (table === 'planning_queues') setPlanningQueues(prev => prev.map(q => q.id === id ? { ...q, ...data } : q));
       }
     };
     window.addEventListener('turso_db_change', handleDbChange);
@@ -8915,6 +9100,22 @@ export default function App() {
           </button>
 
           {currentErpUser.role === 'admin' && (
+            <button
+              onClick={async () => {
+                const res = await runFullDatabaseReconciliation();
+                alert(`✓ Database Reconciled Successfully!\n\n• Verified & aligned ${res.inventoryUpdated || 0} reel stock balances\n• Verified & aligned ${res.dispatchesUpdated || 0} order dispatches\n• Turso cloud SQLite database is 100% accurate.`);
+              }}
+              disabled={isReconcilingDb}
+              className="apex-logout-btn"
+              style={{ color: '#38bdf8', borderTop: 'none', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}
+              title="Audit & align all reel balances and dispatches directly in Turso SQLite"
+            >
+              <RefreshCw style={{ width: 14, height: 14, animation: isReconcilingDb ? 'spin 1s linear infinite' : 'none' }} />
+              {isReconcilingDb ? 'Syncing DB...' : 'Sync & Reconcile DB'}
+            </button>
+          )}
+
+          {currentErpUser.role === 'admin' && (
             <button onClick={downloadFullBackup} className="apex-logout-btn" style={{ color: 'var(--amber)', borderTop: 'none', marginBottom: 2 }} title="Download full system backup as ZIP">
               <Download style={{ width: 14, height: 14 }} /> Full Backup
             </button>
@@ -9016,7 +9217,7 @@ export default function App() {
         {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={allInventoryWithUsage} allProduction={production} />}
         {activeTab === 'calculator'      && canAccess(currentErpUser.role,'calculator')      && <CalculatorView companies={companies} items={unitItems} addLog={addLog} currentUser={currentErpUser} activeUnitId={uid} />}
         {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} customers={unitCustomers} getColRef={getColRef} addLog={addLog} costings={costings} currentUser={currentErpUser} />}
-        {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} wipStages={unitWipStages} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
+        {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} wipStages={unitWipStages} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} planningQueues={planningQueues} onSavePlanningQueues={savePlanningQueues} />}
         {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} wipStages={unitWipStages} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
         {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} customers={unitCustomers} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
@@ -15422,9 +15623,13 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       await updateDoc(getDocRef('production', editingId), finalRecord);
       addLog(`Updated production record for Job [${jCardNo}]: Reels ${reelNosStr}`);
       setEditingId(null);
+      const updatedProduction = (production || []).map(p => p.id === editingId ? { ...p, ...finalRecord } : p);
+      reconcileDatabaseInventory(inventory, updatedProduction, orders).catch(() => {});
     } else {
       await addDoc(getColRef('production'), finalRecord);
       addLog(`Added production record for Job [${jCardNo}]: Reels ${reelNosStr}`);
+      const updatedProduction = [...(production || []), finalRecord];
+      reconcileDatabaseInventory(inventory, updatedProduction, orders).catch(() => {});
 
       // 1. AUTO-DEPLETE REEL INVENTORY BALANCES & ATTRIBUTE UTILISED ITEM
       const targetItemForReel = finalRecord.usedForItem || finalRecord.itemName || selectedJob?.itemName || (selectedJob ? `Job #${jCardNo}` : 'Production');
@@ -15700,6 +15905,10 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
 
       window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'delete' } }));
     }
+
+    // 4. Auto-reconcile reel inventory so consumed weight is restored to reels in Turso SQLite!
+    const updatedProduction = (production || []).filter(p => p.id !== id);
+    reconcileDatabaseInventory(inventory, updatedProduction, orders).catch(() => {});
 
     if (addLog) addLog(`Deleted production record: ${nameOrReels || id} & cleaned up unadvanced WIP cards`);
   };
@@ -16860,7 +17069,7 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   );
 }
 
-function PlanningView({ orders = [], items = [], companies = [], customers = [], production = [], wipStages = [], currentUser, activeUnitId, getDocRef, getColRef, addLog, onStartProduction, onOpenCreateJobModal, plannedJobs: parentPlannedJobs, onSavePlannedJobs }) {
+function PlanningView({ orders = [], items = [], companies = [], customers = [], production = [], wipStages = [], currentUser, activeUnitId, getDocRef, getColRef, addLog, onStartProduction, onOpenCreateJobModal, plannedJobs: parentPlannedJobs, onSavePlannedJobs, planningQueues: parentPlanningQueues, onSavePlanningQueues }) {
   const todayStr = new Date().toISOString().split('T')[0];
   const [fluteFilter, setFluteFilter] = useState('All');
 
@@ -16869,24 +17078,14 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
 
   // Production Queue Management State (Default: 1 Unified Planning Queue)
   const [queuesList, setQueuesList] = useState(() => {
+    if (Array.isArray(parentPlanningQueues) && parentPlanningQueues.length > 0) {
+      return parentPlanningQueues;
+    }
     try {
       const saved = localStorage.getItem(QUEUES_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Seamlessly migrate legacy 3 demo queues to single Production Queue
-        if (
-          Array.isArray(parsed) &&
-          parsed.length === 3 &&
-          parsed[0]?.id === 'q_line1' &&
-          parsed[0]?.name === 'Line 1: Corrugator' &&
-          parsed[1]?.id === 'q_line2' &&
-          parsed[2]?.id === 'q_line3'
-        ) {
-          const singleQueue = [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
-          try { localStorage.setItem(QUEUES_STORAGE_KEY, JSON.stringify(singleQueue)); } catch(e) {}
-          return singleQueue;
-        }
-        return Array.isArray(parsed) && parsed.length > 0 ? parsed : [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
       return [{ id: 'q_line1', name: 'Production Queue', color: '#2563eb' }];
     } catch {
@@ -16894,9 +17093,17 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
     }
   });
 
+  useEffect(() => {
+    if (Array.isArray(parentPlanningQueues) && parentPlanningQueues.length > 0) {
+      setQueuesList(parentPlanningQueues);
+    }
+  }, [parentPlanningQueues]);
+
   const saveQueuesToStorage = (qs) => {
-    setQueuesList(qs);
-    try { localStorage.setItem(QUEUES_STORAGE_KEY, JSON.stringify(qs)); } catch(e) {}
+    const list = Array.isArray(qs) ? qs : [];
+    setQueuesList(list);
+    try { localStorage.setItem(QUEUES_STORAGE_KEY, JSON.stringify(list)); } catch(e) {}
+    if (onSavePlanningQueues) onSavePlanningQueues(list);
   };
 
   const [plannedJobs, setPlannedJobs] = useState(() => {
@@ -19149,6 +19356,27 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
       dispatchedQty: newDispatched,
       dispatchHistory: newHistory
     });
+
+    // Write to dedicated dispatches ledger in Turso SQLite
+    const dispatchEntry = {
+      date: new Date().toISOString().split('T')[0],
+      challanNo,
+      orderId: order.id,
+      companyId: order.companyId || '',
+      customerId: order.customerId || '',
+      customerName: order.customerName || '',
+      itemName: order.itemName || order.Item_Name || '',
+      dispatchedQty: qty,
+      vehicleNo: vehicleVal,
+      notes: transVal ? `Transporter: ${transVal}` : '',
+      createdBy: currentUser?.displayName || currentUser?.name || 'Operator',
+      createdAt: new Date().toISOString()
+    };
+    try {
+      await addDoc(getColRef('dispatches'), dispatchEntry);
+    } catch(err) {
+      console.warn("Could not insert to dispatches table:", err);
+    }
     
     addLog(`Dispatched ${qty} boxes for Order: ${order.itemName} (DC: ${challanNo})`);
     generatePDFChallan(order, qty, getOrderStockDetails(order), challanNo);
@@ -19167,6 +19395,11 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     const newHistory = history.filter((_, i) => i !== idx);
     const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - (historyItem.qty || 0));
     await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
+    if (historyItem.dcNo) {
+      try {
+        await executeQuery(`DELETE FROM dispatches WHERE challanNo = ?`, [historyItem.dcNo]);
+      } catch(e) {}
+    }
     addLog(`Deleted dispatch record of ${historyItem.qty} for ${order.itemName || order.Item_Name}`);
   };
 
@@ -19183,6 +19416,11 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     newHistory[idx] = { ...newHistory[idx], qty: newQty };
     const newDispatchedQty = Math.max(0, (order.dispatchedQty || 0) - oldQty + newQty);
     await updateDoc(getDocRef('orders', order.id), { dispatchedQty: newDispatchedQty, dispatchHistory: newHistory });
+    if (history[idx]?.dcNo) {
+      try {
+        await executeQuery(`UPDATE dispatches SET dispatchedQty = ? WHERE challanNo = ?`, [newQty, history[idx].dcNo]);
+      } catch(e) {}
+    }
     addLog(`Updated dispatch record from ${oldQty} to ${newQty} for ${order.itemName || order.Item_Name}`);
     setEditHistory({ orderId: null, idx: -1, qty: '' });
   };

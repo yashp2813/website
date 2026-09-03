@@ -218,6 +218,9 @@ export const initDb = async () => {
       paymentStatus TEXT,
       amountPaid TEXT,
       reelNo TEXT,
+      supplierReelNo TEXT,
+      uniqueReelId TEXT,
+      systemReelId TEXT,
       size TEXT,
       gsm TEXT,
       bf TEXT,
@@ -226,10 +229,18 @@ export const initDb = async () => {
       initialIssuedQty TEXT,
       ratePerKg TEXT,
       category TEXT,
+      stockType TEXT DEFAULT 'factory',
+      clientId TEXT,
+      clientName TEXT,
       issuedQty REAL,
       balanceQty REAL,
+      lastUsedForItem TEXT,
+      lastUsedDate TEXT,
+      lastUsedJobNo TEXT,
       usageLog TEXT,
-      uniqueId TEXT
+      uniqueId TEXT,
+      notes TEXT,
+      stand TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS production (
       id TEXT PRIMARY KEY,
@@ -264,7 +275,9 @@ export const initDb = async () => {
       reelNos TEXT,
       batchNo TEXT,
       hasEndOfRunData INTEGER DEFAULT 0,
-      jobCardNo TEXT
+      jobCardNo TEXT,
+      jobNo TEXT,
+      notes TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS wastage (
       id TEXT PRIMARY KEY,
@@ -284,9 +297,12 @@ export const initDb = async () => {
       itemId TEXT,
       itemName TEXT,
       qty INTEGER,
+      sheets INTEGER,
+      orderQty INTEGER,
       currentStage TEXT,
       stages TEXT,
-      createdAt TEXT
+      createdAt TEXT,
+      updatedAt TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS purchaseOrders (
       id TEXT PRIMARY KEY,
@@ -367,6 +383,8 @@ export const initDb = async () => {
     "ALTER TABLE production ADD COLUMN batchNo TEXT",
     "ALTER TABLE production ADD COLUMN hasEndOfRunData INTEGER DEFAULT 0",
     "ALTER TABLE production ADD COLUMN jobCardNo TEXT",
+    "ALTER TABLE production ADD COLUMN jobNo TEXT",
+    "ALTER TABLE production ADD COLUMN notes TEXT",
     "ALTER TABLE production ADD COLUMN useKg TEXT",
     "ALTER TABLE production ADD COLUMN reelNos TEXT",
     "ALTER TABLE erp_users ADD COLUMN companyId TEXT",
@@ -375,13 +393,35 @@ export const initDb = async () => {
     "ALTER TABLE companies ADD COLUMN code TEXT",
     "ALTER TABLE companies ADD COLUMN isActive INTEGER DEFAULT 1",
     "ALTER TABLE items ADD COLUMN categoryId TEXT",
+    "ALTER TABLE items ADD COLUMN layers TEXT",
+    "ALTER TABLE items ADD COLUMN createdAt TEXT",
+    "ALTER TABLE items ADD COLUMN updatedAt TEXT",
     "ALTER TABLE orders ADD COLUMN dispatchSchedule TEXT",
     "ALTER TABLE orders ADD COLUMN isParentSetOrder INTEGER DEFAULT 0",
     "ALTER TABLE orders ADD COLUMN isComponentOrder INTEGER DEFAULT 0",
     "ALTER TABLE orders ADD COLUMN parentOrderId TEXT",
     "ALTER TABLE orders ADD COLUMN componentQtyPerSet INTEGER",
+    "ALTER TABLE orders ADD COLUMN orderType TEXT DEFAULT 'regular'",
+    "ALTER TABLE orders ADD COLUMN jobWorkType TEXT",
+    "ALTER TABLE orders ADD COLUMN clientInwardRef TEXT",
+    "ALTER TABLE orders ADD COLUMN fluteType TEXT",
+    "ALTER TABLE orders ADD COLUMN updatedAt TEXT",
     "ALTER TABLE wip_stages ADD COLUMN itemId TEXT",
+    "ALTER TABLE wip_stages ADD COLUMN sheets INTEGER",
+    "ALTER TABLE wip_stages ADD COLUMN orderQty INTEGER",
+    "ALTER TABLE wip_stages ADD COLUMN updatedAt TEXT",
     "ALTER TABLE inventory ADD COLUMN uniqueId TEXT",
+    "ALTER TABLE inventory ADD COLUMN supplierReelNo TEXT",
+    "ALTER TABLE inventory ADD COLUMN uniqueReelId TEXT",
+    "ALTER TABLE inventory ADD COLUMN systemReelId TEXT",
+    "ALTER TABLE inventory ADD COLUMN stockType TEXT DEFAULT 'factory'",
+    "ALTER TABLE inventory ADD COLUMN clientId TEXT",
+    "ALTER TABLE inventory ADD COLUMN clientName TEXT",
+    "ALTER TABLE inventory ADD COLUMN lastUsedForItem TEXT",
+    "ALTER TABLE inventory ADD COLUMN lastUsedDate TEXT",
+    "ALTER TABLE inventory ADD COLUMN lastUsedJobNo TEXT",
+    "ALTER TABLE inventory ADD COLUMN notes TEXT",
+    "ALTER TABLE inventory ADD COLUMN stand TEXT",
     "ALTER TABLE customers ADD COLUMN code TEXT",
     "ALTER TABLE customers ADD COLUMN clientType TEXT",
     "ALTER TABLE customers ADD COLUMN phone TEXT",
@@ -389,9 +429,10 @@ export const initDb = async () => {
     "ALTER TABLE customers ADD COLUMN billingAddress TEXT",
     "ALTER TABLE customers ADD COLUMN unitName TEXT",
     "ALTER TABLE customers ADD COLUMN email TEXT",
+    "ALTER TABLE customers ADD COLUMN createdAt TEXT",
+    "ALTER TABLE customers ADD COLUMN updatedAt TEXT",
     "ALTER TABLE items ADD COLUMN customerId TEXT",
     "ALTER TABLE items ADD COLUMN isJobWorkItem INTEGER DEFAULT 0",
-    // New fields for ID/OD dimensions, flute type, and production specs
     "ALTER TABLE items ADD COLUMN fluteType TEXT",
     "ALTER TABLE items ADD COLUMN dimensionType TEXT DEFAULT 'ID'",
     "ALTER TABLE items ADD COLUMN idSize TEXT",
@@ -405,13 +446,12 @@ export const initDb = async () => {
     "ALTER TABLE items ADD COLUMN longUpsWidth TEXT",
     "ALTER TABLE items ADD COLUMN latUpsLength TEXT",
     "ALTER TABLE items ADD COLUMN latUpsWidth TEXT",
-    // Orders fields
     "ALTER TABLE orders ADD COLUMN orderNo TEXT",
     "ALTER TABLE orders ADD COLUMN poNumber TEXT",
     "ALTER TABLE orders ADD COLUMN createdAt TEXT",
     "ALTER TABLE orders ADD COLUMN notes TEXT",
     "ALTER TABLE orders ADD COLUMN isParentSetOrder INTEGER DEFAULT 0",
-    "ALTER TABLE orders ADD COLUMN attachedReels TEXT",
+    "ALTER TABLE orders ADD COLUMN attachedReels TEXT"
   ];
 
   try {
@@ -440,7 +480,7 @@ export const initDb = async () => {
     } catch (e) {}
 
     // Mark as initialized so subsequent page loads take 0ms
-    localStorage.setItem('apex_turso_db_init_v3', 'true');
+    localStorage.setItem('apex_turso_db_init_v4', 'true');
     console.log("Database initialized and cached.");
   } catch (err) {
     console.error("Database initialization notice:", err);
