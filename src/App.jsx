@@ -15157,7 +15157,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const printedId = idMap.get(matchedReel.id) || matchedReel.systemReelId || matchedReel.supplierReelNo || matchedReel.reelNo || code.trim().toUpperCase();
       setConsumedReels(prev => {
         const filtered = prev.filter(r => r.reelNo.trim() !== '');
-        return [...filtered, { reelNo: printedId, weight: availKg > 0 ? String(availKg) : '' }];
+        return [...filtered, { reelNo: printedId, weight: '' }];
       });
       if (matchedReel.millName && !newRecord.millName) {
         setNewRecord(r => ({ ...r, millName: matchedReel.millName }));
@@ -16036,7 +16036,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                   const idMap = buildInventoryIdMap(inventory);
                   const printedId = idMap.get(scannedReel.id) || scannedReel.systemReelId || scannedReel.supplierReelNo || scannedReel.reelNo || scannedReel.id || '';
                   const availKg = parseFloat(scannedReel.balanceQty !== undefined ? scannedReel.balanceQty : (scannedReel.receivedQty || 0));
-                  setConsumedReels(prev => [...prev.filter(r => r.reelNo.trim() !== ''), { reelNo: printedId, weight: availKg > 0 ? String(availKg) : '' }]);
+                  setConsumedReels(prev => [...prev.filter(r => r.reelNo.trim() !== ''), { reelNo: printedId, weight: '' }]);
                   if (scannedReel.millName && !newRecord.millName) setNewRecord(r => ({ ...r, millName: scannedReel.millName }));
                   if (addLog) addLog(`Barcode Scanned Reel #${printedId}`);
                 }
@@ -16072,16 +16072,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                             const val = e.target.value;
                             const upd = [...consumedReels];
                             upd[idx].reelNo = val;
-                            
-                            // Auto prefill weight from matched reel if current weight is empty
-                            const match = findInventoryReel(inventory, val);
-                            if (match) {
-                              const bKg = parseFloat(match.balanceQty !== undefined ? match.balanceQty : (match.receivedQty || 0));
-                              if (bKg > 0 && !upd[idx].weight) {
-                                upd[idx].weight = String(bKg.toFixed(1));
-                                delete upd[idx].customBalance;
-                              }
-                            }
+                            delete upd[idx].customBalance;
                             setConsumedReels(upd);
                           }}
                         />
