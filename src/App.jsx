@@ -2958,7 +2958,8 @@ function buildInventoryIdMap(inventory) {
       return String(a.id || '').localeCompare(String(b.id || ''));
     });
     sorted.forEach((item, idx) => {
-      const formatted = `RL-${String(idx + 1).padStart(5, '0')}`;
+      const prefix = item.stockType === 'job_work' ? 'RL-JW' : 'RL';
+      const formatted = `${prefix}-${String(idx + 1).padStart(5, '0')}`;
       if (item.id) map.set(item.id, formatted);
       if (item.reelNo) map.set(String(item.reelNo), formatted);
       if (item.supplierReelNo) map.set(String(item.supplierReelNo), formatted);
@@ -4362,9 +4363,14 @@ export function computeInventoryWithUsage(inventory = [], production = [], order
     const initialIssued = parseFloat(reel.initialIssuedQty || 0);
     const issuedQty = stats.issued + initialIssued;
     const received = parseFloat(reel.receivedQty || 0);
+    const maxPossibleBal = Math.max(0, received - issuedQty);
+    const rawBal = (reel.balanceQty !== undefined && reel.balanceQty !== null)
+      ? parseFloat(reel.balanceQty)
+      : maxPossibleBal;
+    // Critical guard: balanceQty can NEVER exceed received - issuedQty. If received is 0, balanceQty MUST be 0!
     const balanceQty = (stats.issued > 0 || initialIssued > 0)
-      ? Math.max(0, received - issuedQty)
-      : (reel.balanceQty !== undefined ? parseFloat(reel.balanceQty) : Math.max(0, received - issuedQty));
+      ? maxPossibleBal
+      : Math.min(rawBal, maxPossibleBal);
     const rate = parseFloat(reel.ratePerKg || 0);
     const value = balanceQty * rate;
     const systemReelId = reel.systemReelId || formatSystemReelId(reel, paperInventoryData);
@@ -4390,6 +4396,138 @@ export function computeInventoryWithUsage(inventory = [], production = [], order
   });
 
   return [...computedPaper, ...otherInventoryData];
+}
+
+// ── LIVE INVENTORY DEDUPLICATION & ZERO-STOCK PURGE ENGINE ──────────────────
+export async function deduplicateDatabaseInventory(inventory = [], production = []) {
+  if (!inventory || !Array.isArray(inventory) || inventory.length === 0) {
+    return { deletedDuplicates: 0, deletedZeroReels: 0, fixedBalances: 0, details: [] };
+  }
+
+  // 1. Build production usage map
+  const usageByReel = {};
+  (production || []).forEach(p => {
+    let consumed = [];
+    try {
+      consumed = Array.isArray(p.consumedReels) ? p.consumedReels : JSON.parse(p.consumedReels || '[]');
+    } catch(e) {}
+    consumed.forEach(c => {
+      const r = String(c.reelNo || '').trim().toLowerCase();
+      const wt = parseFloat(c.weight) || 0;
+      if (r) {
+        usageByReel[r] = (usageByReel[r] || 0) + wt;
+        const noHash = r.replace(/^#/, '');
+        if (noHash !== r) usageByReel[noHash] = (usageByReel[noHash] || 0) + wt;
+      }
+    });
+  });
+
+  // 2. Identify exact duplicate groups
+  const exactDupMap = {};
+  inventory.forEach(r => {
+    if (r.category && r.category !== 'Paper') return;
+    const sup = String(r.supplierReelNo || r.reelNo || '').trim().toLowerCase();
+    const mill = String(r.millName || '').trim().toLowerCase();
+    const size = parseFloat(r.size) || 0;
+    const gsm = parseFloat(r.gsm) || 0;
+    const bf = parseFloat(r.bf) || 0;
+    const recv = parseFloat(r.receivedQty) || 0;
+
+    const key = (sup && sup !== '-') 
+      ? `${sup}__${mill}__${size}__${gsm}__${bf}__${recv}`
+      : `${mill}__${size}__${gsm}__${bf}__${recv}__${r.date}__${r.stockType}`;
+    
+    if (!exactDupMap[key]) exactDupMap[key] = [];
+    exactDupMap[key].push(r);
+  });
+
+  const duplicateGroups = Object.entries(exactDupMap).filter(([k, list]) => list.length > 1);
+  const deleteIds = [];
+  const details = [];
+
+  duplicateGroups.forEach(([k, list]) => {
+    let bestIdx = 0;
+    let bestScore = -1;
+    list.forEach((r, idx) => {
+      const idKey = String(r.id).toLowerCase();
+      const supKey = String(r.supplierReelNo || '').toLowerCase();
+      const sysKey = String(r.systemReelId || '').toLowerCase();
+      const usage = (usageByReel[idKey] || 0) + (usageByReel[supKey] || 0) + (usageByReel[sysKey] || 0);
+      let score = usage * 1000 + (idx === 0 ? 10 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = idx;
+      }
+    });
+
+    list.forEach((r, idx) => {
+      if (idx !== bestIdx) {
+        deleteIds.push(r.id);
+        details.push(`Removed duplicate reel #${r.systemReelId || r.supplierReelNo} (${r.millName || ''} ${r.size}cm, ${r.receivedQty} kg)`);
+      }
+    });
+  });
+
+  // 3. Delete 0-KG ghost reels that have never been used in production
+  const zeroGhostIds = [];
+  inventory.forEach(r => {
+    if (deleteIds.includes(r.id) || (r.category && r.category !== 'Paper')) return;
+    const recv = parseFloat(r.receivedQty) || 0;
+    const idKey = String(r.id).toLowerCase();
+    const supKey = String(r.supplierReelNo || '').toLowerCase();
+    const sysKey = String(r.systemReelId || '').toLowerCase();
+    const usage = (usageByReel[idKey] || 0) + (usageByReel[supKey] || 0) + (usageByReel[sysKey] || 0);
+
+    if (recv === 0 && usage === 0) {
+      zeroGhostIds.push(r.id);
+      details.push(`Purged 0-KG ghost reel #${r.systemReelId || r.supplierReelNo}`);
+    }
+  });
+
+  const allDeletes = [...new Set([...deleteIds, ...zeroGhostIds])];
+  for (const id of allDeletes) {
+    try {
+      await executeQuery("DELETE FROM inventory WHERE id = ?", [id]);
+    } catch(e) {
+      console.error(`Error deleting duplicate reel ${id}:`, e);
+    }
+  }
+
+  // 4. Fix desynced balances
+  const allDeletesSet = new Set(allDeletes);
+  let fixedBalances = 0;
+  for (const r of inventory) {
+    if (allDeletesSet.has(r.id) || (r.category && r.category !== 'Paper')) continue;
+    const recv = parseFloat(r.receivedQty) || 0;
+    const issued = parseFloat(r.issuedQty) || 0;
+    const initIssued = parseFloat(r.initialIssuedQty) || 0;
+    const currentBal = parseFloat(r.balanceQty) || 0;
+
+    const idKey = String(r.id).toLowerCase();
+    const supKey = String(r.supplierReelNo || '').toLowerCase();
+    const sysKey = String(r.systemReelId || '').toLowerCase();
+    const prodUsage = Math.max(usageByReel[idKey] || 0, usageByReel[supKey] || 0, usageByReel[sysKey] || 0);
+
+    const totalIssued = Math.max(issued, prodUsage, initIssued);
+    const correctBal = Math.max(0, recv - totalIssued);
+
+    if (Math.abs(currentBal - correctBal) > 0.05 || (recv === 0 && currentBal > 0)) {
+      try {
+        await executeQuery(
+          "UPDATE inventory SET balanceQty = ?, issuedQty = ?, updatedAt = ? WHERE id = ?",
+          [correctBal, totalIssued, new Date().toISOString(), r.id]
+        );
+        fixedBalances++;
+      } catch(e) {}
+    }
+  }
+
+  return {
+    deletedDuplicates: deleteIds.length,
+    deletedZeroReels: zeroGhostIds.length,
+    fixedBalances,
+    details
+  };
 }
 
 // ── AUTOMATIC SELF-HEALING DATABASE RECONCILIATION ENGINE ──────────────────
@@ -5143,13 +5281,18 @@ function UniversalCsvImportModal({
 
   // Convert raw rows to normalized ERP objects with existing reel duplicate protection
   const processRawRows = (rawRows, currentMode, clientOverride = selectedJobWorkClient, customName = customClientName) => {
-    const existingMax = (inventory || []).reduce((max, cur) => {
-      const fid = formatSystemReelId(cur, inventory);
-      const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
-      return !isNaN(n) && n > max ? n : max;
-    }, 0);
-
     const prefix = currentMode === 'job_work_stock' ? 'RL-JW' : 'RL';
+    const existingMax = (inventory || []).reduce((max, cur) => {
+      const fid = String(cur.systemReelId || cur.uniqueReelId || formatSystemReelId(cur, inventory));
+      if (prefix === 'RL-JW' && fid.startsWith('RL-JW-')) {
+        const n = parseInt(fid.replace('RL-JW-', ''), 10);
+        return !isNaN(n) && n > max ? n : max;
+      } else if (prefix === 'RL' && fid.startsWith('RL-') && !fid.startsWith('RL-JW-')) {
+        const n = parseInt(fid.replace('RL-', ''), 10);
+        return !isNaN(n) && n > max ? n : max;
+      }
+      return max;
+    }, 0);
     const seenReelsInBatch = new Set();
     let newReelIndex = 0;
 
@@ -6884,8 +7027,23 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
     const reelTag = targetReel.systemReelId || targetReel.uniqueReelId || targetReel.reelNo || targetReel.supplierReelNo || id;
 
     try {
-      await updateDoc(getDocRef('inventory', id), { [dbField]: updatedVal, updatedAt: new Date().toISOString() });
-      if (addLog) addLog(`Excel Stock Reel [${reelTag}]: updated ${field === 'utilisedFor' ? 'Utilised for' : field} from "${prevVal}" to "${updatedVal}"`);
+      const updatePayload = { [dbField]: updatedVal, updatedAt: new Date().toISOString() };
+
+      // Auto-recalculate and sync balanceQty whenever receivedQty or initialIssuedQty is edited
+      if (field === 'receivedQty') {
+        const initIssued = parseFloat(targetReel.initialIssuedQty || 0);
+        const issued = parseFloat(targetReel.issuedQty || 0);
+        const newBal = Math.max(0, updatedVal - initIssued - issued);
+        updatePayload.balanceQty = newBal;
+      } else if (field === 'initialIssuedQty') {
+        const recv = parseFloat(targetReel.receivedQty || 0);
+        const issued = parseFloat(targetReel.issuedQty || 0);
+        const newBal = Math.max(0, recv - updatedVal - issued);
+        updatePayload.balanceQty = newBal;
+      }
+
+      await updateDoc(getDocRef('inventory', id), updatePayload);
+      if (addLog) addLog(`Edited Stock Reel [${reelTag}]: changed ${field === 'utilisedFor' ? 'Utilised for' : field} from "${prevVal}" to "${updatedVal}"`);
       setSavedCell({ id, field });
       if (activeCell && activeCell.id === id && activeCell.field === field) {
         setActiveCell(prev => prev ? { ...prev, val: updatedVal } : null);
@@ -13204,16 +13362,36 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
           const supNo = (reel.supplierReelNo || reel.reelNo || '').trim();
           if (!supNo && !reel.size && !reel.gsm && !reel.receivedQty) continue;
 
-          const existingMax = (inventory || []).reduce((max, cur) => {
-            const fid = cur.systemReelId || formatSystemReelId(cur, inventory);
-            const n = parseInt(fid.replace('RL-', '').replace('RL-JW-', ''), 10);
-            return !isNaN(n) && n > max ? n : max;
-          }, 0);
           const prefix = commonData.stockType === 'job_work' ? 'RL-JW' : 'RL';
+          const existingMax = (inventory || []).reduce((max, cur) => {
+            const fid = String(cur.systemReelId || cur.uniqueReelId || '');
+            if (prefix === 'RL-JW' && fid.startsWith('RL-JW-')) {
+              const n = parseInt(fid.replace('RL-JW-', ''), 10);
+              return !isNaN(n) && n > max ? n : max;
+            } else if (prefix === 'RL' && fid.startsWith('RL-') && !fid.startsWith('RL-JW-')) {
+              const n = parseInt(fid.replace('RL-', ''), 10);
+              return !isNaN(n) && n > max ? n : max;
+            }
+            return max;
+          }, 0);
           const autoReelId = (reel.uniqueReelId && reel.uniqueReelId.trim())
             ? reel.uniqueReelId.trim()
             : `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
           const finalSupNo = supNo || autoReelId;
+
+          // Duplicate protection check
+          if (supNo && supNo !== '-') {
+            const isDup = (inventory || []).some(existing => {
+              const exSup = (existing.supplierReelNo || existing.reelNo || '').trim();
+              const exMill = (existing.millName || '').trim().toLowerCase();
+              const thisMill = (finalCommon.millName || '').trim().toLowerCase();
+              return exSup.toLowerCase() === supNo.toLowerCase() && exMill === thisMill;
+            });
+            if (isDup) {
+              const proceed = window.confirm(`Warning: Reel number "${supNo}" already exists in inventory for mill "${finalCommon.millName}". Are you sure you want to add this duplicate reel?`);
+              if (!proceed) continue;
+            }
+          }
           const newId = generateId();
           
           const nowIso = new Date().toISOString();
@@ -13721,6 +13899,27 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
             >
               📥 Import CSV / Excel
             </button>
+
+            {role === 'admin' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (window.confirm("Scan database and remove exact duplicate reels, purge 0-kg ghost reels, and fix out-of-sync balances?")) {
+                    const res = await deduplicateDatabaseInventory(inventory, production);
+                    if (res.deletedDuplicates > 0 || res.deletedZeroReels > 0 || res.fixedBalances > 0) {
+                      alert(`✓ Inventory Cleaned:\n• Removed ${res.deletedDuplicates} duplicate reels\n• Purged ${res.deletedZeroReels} 0-kg ghost reels\n• Corrected ${res.fixedBalances} desynced reel balances`);
+                      if (addLog) addLog(`Deduplicated inventory: removed ${res.deletedDuplicates} duplicate reels, ${res.deletedZeroReels} ghost reels, fixed ${res.fixedBalances} balances`);
+                    } else {
+                      alert("✓ All inventory reels are clean! No duplicate reels or balance discrepancies found.");
+                    }
+                  }
+                }}
+                className="flex items-center gap-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-3.5 py-2 rounded-lg font-bold text-sm transition shadow-xs"
+                title="Scan database to detect and clean duplicate reels and align balances"
+              >
+                🔍 Deduplicate Stock
+              </button>
+            )}
 
             <button onClick={handleExport} className="flex items-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg hover:bg-stone-300 font-medium text-sm transition">Export</button>
           </div>
