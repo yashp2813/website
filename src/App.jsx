@@ -7708,7 +7708,11 @@ export default function App() {
       setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
       setWastageLogs(wst);
       setInventory(inv);
-      setLogs(lg);
+      if (Array.isArray(lg)) {
+        setLogs([...lg].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)));
+      } else {
+        setLogs([]);
+      }
       setCostings(cost);
       setVendors(vend);
       setPurchaseOrders(pos);
@@ -7773,11 +7777,11 @@ export default function App() {
     init();
   }, []);
 
-  // 🔄 Real-time cross-device sync: poll Turso cloud DB every 30 seconds
-  // BUG 19 FIX: Only run background poll while user is authenticated
+  // 🔄 Real-time cross-device sync: poll Turso cloud DB every 15 seconds
+  // Automatically syncs production, orders, WIP, inventory, wastage, planned jobs, and activity logs!
   useEffect(() => {
     if (!currentErpUser) return;
-    const POLL_INTERVAL_MS = 30000; // 30 seconds
+    const POLL_INTERVAL_MS = 15000; // 15 seconds for responsive live activity
     const intervalId = setInterval(async () => {
       try {
         const fetchTable = async (table) => {
@@ -7788,20 +7792,24 @@ export default function App() {
             return obj;
           });
         };
-        // Only poll the most frequently changing tables for efficiency
-        const [prod, ords, wip, inv, pJobs, wst] = await Promise.all([
+        // Poll active operational tables including activity logs
+        const [prod, ords, wip, inv, pJobs, wst, lg] = await Promise.all([
           fetchTable('production').catch(() => null),
           fetchTable('orders').catch(() => null),
           fetchTable('wip_stages').catch(() => null),
           fetchTable('inventory').catch(() => null),
           fetchTable('planned_jobs').catch(() => null),
           fetchTable('wastage').catch(() => null),
+          fetchTable('logs').catch(() => null),
         ]);
         if (prod) setProduction(prod.map(p => ({ ...p, consumedReels: safeJsonParse(p.consumedReels, []) })));
         if (ords) setOrders(ords.map(o => ({ ...o, dispatchSchedule: safeJsonParse(o.dispatchSchedule, []), dispatchHistory: safeJsonParse(o.dispatchHistory, []), attachedReels: safeJsonParse(o.attachedReels, []) })));
         if (wip) setWipStages(wip.map(w => ({ ...w, stages: safeJsonParse(w.stages, {}) })));
         if (inv) setInventory(inv);
         if (wst) setWastageLogs(wst);
+        if (lg && Array.isArray(lg)) {
+          setLogs([...lg].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)));
+        }
         if (pJobs && pJobs.length > 0) {
           const parsedPJobs = pJobs.map(j => ({
             ...j,
@@ -7979,13 +7987,32 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  const getColRef = (colName) => colName;
-  const getDocRef = (colName, docId) => ({ table: colName, id: docId });
-
   const addLog = async (action, specificUser = null) => {
-    
+    if (!action) return;
     const userToLog = specificUser || currentErpUser;
-    await addDoc(getColRef('logs'), { userId: userToLog?.id || 'System', userName: userToLog?.name || 'System', action: action, time: new Date().toISOString() });
+    const logId = generateId();
+    const newLog = {
+      id: logId,
+      userId: userToLog?.id || 'System',
+      userName: userToLog?.name || 'System',
+      action: action,
+      time: new Date().toISOString()
+    };
+
+    // 1. INSTANT LOCAL STATE UPDATE (Shows in Activity Logs immediately without refresh)
+    setLogs(prev => [newLog, ...(prev || []).filter(l => l.id !== logId)]);
+
+    // 2. BROADCAST REAL-TIME EVENT
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'logs', action: 'add', data: newLog, _parsed: true } }));
+    }
+
+    // 3. PERSIST ASYNCHRONOUSLY IN DATABASE
+    try {
+      await addDoc(getColRef('logs'), newLog);
+    } catch (err) {
+      console.warn("Failed to persist log to Turso DB:", err);
+    }
   };
 
   const createInitialAdmin = async () => {
