@@ -6524,8 +6524,10 @@ function InventoryPaginationControls({
   );
 }
 
-function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, getDocRef, deleteDoc, addDoc, addLog, lowStockThreshold, onPrintBarcode, onOpenCsvImport }) {
+function ExcelStockInventory({ inventory = [], companies = [], orders = [], role, updateDoc, getDocRef, deleteDoc, addDoc, addLog, lowStockThreshold, onPrintBarcode, onOpenCsvImport }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [activeCell, setActiveCell] = useState(null); // { id, field, colLetter, rowNum, colLabel, val }
+  const [formulaValue, setFormulaValue] = useState('');
   const [editingCell, setEditingCell] = useState(null); // { id, field }
   const [editValue, setEditValue] = useState('');
   const [savedCell, setSavedCell] = useState(null); // { id, field } for green flash
@@ -6533,7 +6535,9 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
   const [remnantReelItem, setRemnantReelItem] = useState(null);
 
-  const [batchModal, setBatchModal] = useState(null); // 'rate' | 'mill' | 'location'
+  const [activeSheetTab, setActiveSheetTab] = useState('all'); // 'all' | 'available' | 'consumed' | 'job_work' | 'factory'
+
+  const [batchModal, setBatchModal] = useState(null); // 'rate' | 'mill' | 'utilisedFor'
   const [batchVal, setBatchVal] = useState('');
 
   const [pageSize, setPageSize] = useState(() => {
@@ -6546,16 +6550,44 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   });
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Reset page when inventory size or sort order changes
+  // Multi-sheet workbook tab counts
+  const sheetCounts = useMemo(() => {
+    let avail = 0, consumed = 0, jw = 0, factory = 0;
+    (inventory || []).forEach(r => {
+      const bal = parseFloat(r.balanceQty) || 0;
+      if (bal > 0) avail++;
+      else consumed++;
+      if (r.stockType === 'job_work') jw++;
+      else factory++;
+    });
+    return {
+      all: (inventory || []).length,
+      available: avail,
+      consumed: consumed,
+      job_work: jw,
+      factory: factory
+    };
+  }, [inventory]);
+
+  // Inventory filtered by active Excel sheet tab
+  const sheetInventory = useMemo(() => {
+    if (activeSheetTab === 'available') return (inventory || []).filter(r => (parseFloat(r.balanceQty) || 0) > 0);
+    if (activeSheetTab === 'consumed') return (inventory || []).filter(r => (parseFloat(r.balanceQty) || 0) <= 0);
+    if (activeSheetTab === 'job_work') return (inventory || []).filter(r => r.stockType === 'job_work');
+    if (activeSheetTab === 'factory') return (inventory || []).filter(r => r.stockType !== 'job_work');
+    return inventory || [];
+  }, [inventory, activeSheetTab]);
+
+  // Reset page when inventory size, sheet tab, or sort order changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [inventory.length, sortConfig.key, sortConfig.direction]);
+  }, [sheetInventory.length, activeSheetTab, sortConfig.key, sortConfig.direction]);
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === inventory.length) {
+    if (selectedIds.size === sheetInventory.length && sheetInventory.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(inventory.map(r => r.id)));
+      setSelectedIds(new Set(sheetInventory.map(r => r.id)));
     }
   };
 
@@ -6566,39 +6598,56 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     setSelectedIds(next);
   };
 
+  const selectCell = (r, field, colLetter, rowNum, colLabel, val) => {
+    setActiveCell({ id: r.id, field, colLetter, rowNum, colLabel, val });
+    setFormulaValue(val !== undefined && val !== null ? String(val) : '');
+  };
+
   const startEdit = (id, field, currentValue) => {
     setEditingCell({ id, field });
     setEditValue(currentValue !== undefined && currentValue !== null ? String(currentValue) : '');
   };
 
-  const saveCell = async (id, field) => {
-    if (!editingCell || editingCell.id !== id || editingCell.field !== field) return;
+  const saveCell = async (id, field, overrideVal = null) => {
     const targetReel = inventory.find(r => r.id === id);
-    if (!targetReel) return;
-
-    let updatedVal = editValue.trim();
-    if (['gsm', 'bf', 'size', 'receivedQty', 'initialIssuedQty', 'ratePerKg'].includes(field)) {
-      updatedVal = parseFloat(updatedVal) || 0;
-    }
-
-    if (targetReel[field] === updatedVal) {
+    if (!targetReel) {
       setEditingCell(null);
       return;
     }
 
-    const prevVal = targetReel[field] !== undefined && targetReel[field] !== null ? targetReel[field] : '-';
+    let updatedVal = overrideVal !== null ? String(overrideVal).trim() : editValue.trim();
+    if (['gsm', 'bf', 'size', 'receivedQty', 'initialIssuedQty', 'ratePerKg'].includes(field)) {
+      updatedVal = parseFloat(updatedVal) || 0;
+    }
+
+    const dbField = field === 'utilisedFor' ? 'lastUsedForItem' : field;
+    if (targetReel[dbField] === updatedVal) {
+      setEditingCell(null);
+      return;
+    }
+
+    const prevVal = targetReel[dbField] !== undefined && targetReel[dbField] !== null ? targetReel[dbField] : '-';
     const reelTag = targetReel.systemReelId || targetReel.uniqueReelId || targetReel.reelNo || targetReel.supplierReelNo || id;
 
     try {
-      await updateDoc(getDocRef('inventory', id), { [field]: updatedVal, updatedAt: new Date().toISOString() });
-      if (addLog) addLog(`Edited Stock Reel [${reelTag}]: changed ${field} from "${prevVal}" to "${updatedVal}"`);
+      await updateDoc(getDocRef('inventory', id), { [dbField]: updatedVal, updatedAt: new Date().toISOString() });
+      if (addLog) addLog(`Excel Stock Reel [${reelTag}]: updated ${field === 'utilisedFor' ? 'Utilised for' : field} from "${prevVal}" to "${updatedVal}"`);
       setSavedCell({ id, field });
+      if (activeCell && activeCell.id === id && activeCell.field === field) {
+        setActiveCell(prev => prev ? { ...prev, val: updatedVal } : null);
+        setFormulaValue(String(updatedVal));
+      }
       setTimeout(() => setSavedCell(null), 1200);
     } catch(e) {
       console.error('Cell update failed:', e);
     } finally {
       setEditingCell(null);
     }
+  };
+
+  const handleFormulaBarSave = () => {
+    if (!activeCell) return;
+    saveCell(activeCell.id, activeCell.field, formulaValue);
   };
 
   const handleKeyDown = (e, id, field) => {
@@ -6612,7 +6661,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
 
   const handleBatchApply = async () => {
     if (selectedIds.size === 0 || !batchModal || !batchVal.trim()) return;
-    const targetField = batchModal === 'rate' ? 'ratePerKg' : (batchModal === 'mill' ? 'millName' : 'location');
+    const targetField = batchModal === 'rate' ? 'ratePerKg' : (batchModal === 'mill' ? 'millName' : 'lastUsedForItem');
     const val = batchModal === 'rate' ? parseFloat(batchVal) : batchVal.trim();
 
     try {
@@ -6689,7 +6738,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   };
 
   const sortedInventory = useMemo(() => {
-    return [...(inventory || [])].sort((a, b) => {
+    return [...(sheetInventory || [])].sort((a, b) => {
       const key = sortConfig.key;
       const dir = sortConfig.direction === 'asc' ? 1 : -1;
       const numFields = ['size', 'gsm', 'bf', 'receivedQty', 'balanceQty', 'initialIssuedQty', 'issuedQty', 'ratePerKg', 'value'];
@@ -6704,13 +6753,18 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
         const timeB = new Date(b.date || 0).getTime() || 0;
         return (timeA - timeB) * dir;
       }
+      if (key === 'utilisedFor') {
+        const aItems = (a.utilisedForItems || (a.lastUsedForItem ? [a.lastUsedForItem] : [])).join(', ').toLowerCase();
+        const bItems = (b.utilisedForItems || (b.lastUsedForItem ? [b.lastUsedForItem] : [])).join(', ').toLowerCase();
+        return aItems.localeCompare(bItems) * dir;
+      }
       const strA = String(a[key] || '').toLowerCase();
       const strB = String(b[key] || '').toLowerCase();
       return strA.localeCompare(strB) * dir;
     });
-  }, [inventory, sortConfig]);
+  }, [sheetInventory, sortConfig]);
 
-  // Paginated slice of inventory for high performance 60fps rendering
+  // Paginated slice of inventory for high performance rendering
   const pagedInventory = useMemo(() => {
     if (pageSize === 'all') return sortedInventory;
     const start = (currentPage - 1) * pageSize;
@@ -6723,7 +6777,6 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
     } else if (sortConfig.direction === 'asc') {
       setSortConfig({ key, direction: 'desc' });
     } else {
-      // 3rd click resets back to default (Date newest first)
       setSortConfig({ key: 'date', direction: 'desc' });
     }
   };
@@ -6769,7 +6822,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
   }, [sortedInventory]);
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
       {remnantReelItem && (
         <ReturnRemnantModal
           isOpen={true}
@@ -6794,23 +6847,22 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
           }}
         />
       )}
-      {/* --- TOP SUMMARY BAR (Always visible without scrolling) --- */}
-      <div style={{ marginBottom: 14, padding: '12px 18px', background: '#0f172a', color: '#fff', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: 'var(--font-mono)', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8' }}>📊 STOCK SUMMARY</span>
-          <span>REELS: <strong style={{ color: '#fbbf24' }}>{totalCount} Total</strong> (<strong style={{ color: '#4ade80' }}>{activeCount} Active</strong>)</span>
-        </div>
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span>TOTAL STOCK: <strong style={{ color: '#4ade80', fontSize: 13 }}>{sumBalance.toFixed(1)} KG ({ (sumBalance/1000).toFixed(2) } MT)</strong></span>
-          <span>TOTAL VALUE: <strong style={{ color: '#f59e0b', fontSize: 13 }}>₹{sumValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
-          <span>FRESH (&le;30d): <strong style={{ color: '#4ade80' }}>{freshMt} MT</strong></span>
-          <span>AGING (&gt;60d): <strong style={{ color: '#f87171' }}>{agingMt} MT</strong></span>
-          <span>AVG GSM: <strong style={{ color: '#cbd5e1' }}>{avgGsm}</strong></span>
-          <span>AVG BF: <strong style={{ color: '#cbd5e1' }}>{avgBf}</strong></span>
-        </div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
+
+      {/* ========================================================= */}
+      {/* 1. EXCEL TITLE BAR & WORKBOOK RIBBON (Microsoft Excel 365) */}
+      {/* ========================================================= */}
+      <div style={{ background: '#107c41', color: '#fff', borderRadius: '8px 8px 0 0', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 800, fontSize: 13.5, letterSpacing: '0.01em' }}>
+            <span style={{ fontSize: 18 }}>📗</span>
+            <span>Apex_Stock_Inventory_Master.xlsx</span>
+            <span style={{ background: 'rgba(255,255,255,0.22)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 4 }}>
+              LIVE EXCEL SHEET
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => {
@@ -6822,82 +6874,186 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
               }
             }}
             className="apex-btn"
-            style={{ background: '#0f172a', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}
+            style={{ background: '#ffffff', color: '#107c41', fontWeight: 800, padding: '5px 12px', fontSize: 12, border: 'none', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 5, boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}
           >
             <span>➕</span> Inward New Reel
           </button>
-          <button onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : setIsPasteOpen(true)} className="apex-btn" style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>📥</span> Import CSV / Excel File
+          <button
+            onClick={() => onOpenCsvImport ? onOpenCsvImport('own_stock') : setIsPasteOpen(true)}
+            className="apex-btn"
+            style={{ background: 'rgba(255,255,255,0.16)', color: '#fff', fontWeight: 700, padding: '5px 12px', fontSize: 12, border: '1px solid rgba(255,255,255,0.3)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 5 }}
+          >
+            <span>📥</span> Import CSV / Excel
           </button>
-          <button onClick={() => setIsPasteOpen(true)} className="apex-btn" style={{ background: '#16a34a', color: '#fff', fontWeight: 800, padding: '6px 14px' }}>
-            📋 Paste Cells
+          <button
+            onClick={() => setIsPasteOpen(true)}
+            className="apex-btn"
+            style={{ background: 'rgba(255,255,255,0.16)', color: '#fff', fontWeight: 700, padding: '5px 12px', fontSize: 12, border: '1px solid rgba(255,255,255,0.3)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 5 }}
+          >
+            <span>📋</span> Paste Cells (Ctrl+V)
           </button>
+
           {selectedIds.size > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#eff6ff', border: '1px solid #bfdbfe', padding: '4px 10px', borderRadius: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>{selectedIds.size} Selected:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#ffffff', padding: '3px 8px', borderRadius: 4, marginLeft: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: '#107c41' }}>{selectedIds.size} Selected:</span>
               <button
                 onClick={() => {
                   const selectedReels = inventory.filter(r => selectedIds.has(r.id));
                   if (onPrintBarcode) onPrintBarcode(selectedReels);
                 }}
-                className="apex-btn apex-btn-sm"
-                style={{ background: '#2563eb', color: '#fff', fontWeight: 800, padding: '4px 10px' }}
+                className="apex-btn"
+                style={{ background: '#107c41', color: '#fff', fontWeight: 800, padding: '3px 8px', fontSize: 11, border: 'none', borderRadius: 3 }}
               >
-                🖨️ Print Barcode Stickers ({selectedIds.size})
+                🖨️ Barcodes ({selectedIds.size})
               </button>
-              <button onClick={() => setBatchModal('rate')} className="apex-btn apex-btn-ghost apex-btn-sm">Set Rate</button>
-              <button onClick={() => setBatchModal('mill')} className="apex-btn apex-btn-ghost apex-btn-sm">Set Mill</button>
-              <button onClick={handleBatchDelete} className="apex-btn apex-btn-danger apex-btn-sm">Delete</button>
+              <button onClick={() => setBatchModal('rate')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Set Rate</button>
+              <button onClick={() => setBatchModal('mill')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Set Mill</button>
+              <button onClick={() => setBatchModal('utilisedFor')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px', color: '#1e40af', fontWeight: 800 }}>Set Utilised For</button>
+              <button onClick={handleBatchDelete} className="apex-btn apex-btn-danger apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Delete</button>
             </div>
           )}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          💡 <em>Click any column header to sort. Click cell to edit inline. Press Enter / Tab to save instantly.</em>
-        </div>
       </div>
 
-      {/* Top Pagination Bar */}
-      <InventoryPaginationControls
-        totalItems={sortedInventory.length}
-        pageSize={pageSize}
-        setPageSize={setPageSize}
-        currentPage={currentPage}
-        setCurrentPage={setCurrentPage}
-      />
+      {/* ========================================================= */}
+      {/* 2. EXCEL FORMULA BAR (Interactive Name Box + fx Formula) */}
+      {/* ========================================================= */}
+      <div style={{ background: '#f8fafc', borderLeft: '1.5px solid #cbd5e1', borderRight: '1.5px solid #cbd5e1', borderBottom: '1.5px solid #cbd5e1', display: 'flex', alignItems: 'center', padding: '4px 10px', gap: 8, fontSize: 12 }}>
+        {/* Active Cell Reference Coordinate Box (e.g. Q4 or L12) */}
+        <div style={{ width: 85, minWidth: 85, background: '#fff', border: '1.5px solid #cbd5e1', padding: '3px 6px', borderRadius: 3, fontWeight: 800, textAlign: 'center', color: '#0f172a', fontSize: 11, fontFamily: 'monospace' }}>
+          {activeCell ? `${activeCell.colLetter}${activeCell.rowNum}` : 'A1'}
+        </div>
 
-      <div className="apex-table-wrap" style={{ border: '1.5px solid #cbd5e1', borderRadius: 8, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', overflowX: 'auto' }}>
-        <table className="apex-table" style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse', fontSize: 12.5 }}>
+        <div style={{ height: 18, width: 1, background: '#cbd5e1' }} />
+
+        {/* Formula symbol fx */}
+        <span style={{ fontWeight: 800, color: '#64748b', fontStyle: 'italic', fontSize: 13, userSelect: 'none' }}>fx</span>
+
+        {/* Formula / Cell Value input */}
+        <input
+          type="text"
+          value={formulaValue}
+          onChange={e => setFormulaValue(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && activeCell) {
+              handleFormulaBarSave();
+            } else if (e.key === 'Escape') {
+              setFormulaValue(activeCell ? String(activeCell.val || '') : '');
+            }
+          }}
+          placeholder={activeCell ? `Formula bar: edit value for [${activeCell.colLabel || activeCell.field}] (Press Enter to save)...` : "Click any cell to inspect or edit in formula bar..."}
+          style={{ flex: 1, background: '#fff', border: '1px solid #cbd5e1', borderRadius: 3, padding: '3px 8px', fontSize: 12, outline: 'none', color: '#0f172a' }}
+        />
+
+        {activeCell && formulaValue !== String(activeCell.val || '') && (
+          <button
+            onClick={handleFormulaBarSave}
+            title="Commit edit to cell"
+            style={{ background: '#107c41', color: '#fff', border: 'none', borderRadius: 3, padding: '3px 10px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}
+          >
+            ✓ Save
+          </button>
+        )}
+      </div>
+
+      {/* ========================================================= */}
+      {/* 3. EXCEL SPREADSHEET GRID (Crisp Gridlines & Authentic UX) */}
+      {/* ========================================================= */}
+      <div className="apex-table-wrap" style={{ borderLeft: '1.5px solid #cbd5e1', borderRight: '1.5px solid #cbd5e1', overflowX: 'auto', background: '#fff' }}>
+        <table style={{ width: '100%', minWidth: 1380, borderCollapse: 'collapse', fontSize: 11.5 }}>
           <thead>
-            <tr style={{ background: '#1e293b', color: '#fff' }}>
-              <th style={{ width: 36, textAlign: 'center', padding: 8 }}>
-                <input type="checkbox" checked={selectedIds.size === inventory.length && inventory.length > 0} onChange={toggleSelectAll} />
+            {/* ROW 1: Excel Column Letters Row (A, B, C, D...) */}
+            <tr style={{ background: '#e2e8f0', color: '#475569', fontSize: 10.5, fontWeight: 800, userSelect: 'none' }}>
+              <th style={{ width: 34, border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}></th>
+              <th style={{ width: 38, border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}></th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>A</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>B</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>C</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>D</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>E</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>F</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>G</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>H</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>I</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>J</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>K</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>L</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>M</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>N</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>O</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>P</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center', background: '#dbeafe', color: '#1e40af' }}>Q</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>R</th>
+            </tr>
+
+            {/* ROW 2: Excel Column Names Row */}
+            <tr style={{ background: '#f1f5f9', color: '#0f172a', fontWeight: 700, fontSize: 11.5 }}>
+              <th style={{ width: 34, textAlign: 'center', border: '1px solid #cbd5e1', padding: '4px 0' }}>
+                <input type="checkbox" checked={selectedIds.size === sheetInventory.length && sheetInventory.length > 0} onChange={toggleSelectAll} />
               </th>
-              <th style={{ width: 40, textAlign: 'center', color: '#94a3b8' }}>#</th>
-              <th onClick={() => requestSort('date')} style={{ cursor: 'pointer', userSelect: 'none' }}>Date {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('millName')} style={{ cursor: 'pointer', userSelect: 'none' }}>Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('invoiceNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Invoice No. {sortConfig.key === 'invoiceNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('vehicleNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Vehicle No. {sortConfig.key === 'vehicleNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('systemReelId')} style={{ cursor: 'pointer', userSelect: 'none' }}>System Reel ID {sortConfig.key === 'systemReelId' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('reelNo')} style={{ cursor: 'pointer', userSelect: 'none' }}>Supplier Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('size')} style={{ cursor: 'pointer', userSelect: 'none' }}>Size (cm) {sortConfig.key === 'size' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('gsm')} style={{ cursor: 'pointer', userSelect: 'none' }}>GSM {sortConfig.key === 'gsm' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('bf')} style={{ cursor: 'pointer', userSelect: 'none' }}>BF {sortConfig.key === 'bf' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('colour')} style={{ cursor: 'pointer', userSelect: 'none' }}>Colour {sortConfig.key === 'colour' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('receivedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Recv (KG) {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Bal (KG) {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-              <th>Linear Meters</th>
-              <th>Stock Age</th>
-              <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate/KG</th>
-              <th onClick={() => requestSort('value')} style={{ cursor: 'pointer', userSelect: 'none' }}>Value (₹)</th>
-              <th>Location</th>
-              <th style={{ textAlign: 'center' }}>Actions</th>
+              <th style={{ width: 38, textAlign: 'center', border: '1px solid #cbd5e1', color: '#64748b', fontSize: 11 }}>#</th>
+              <th onClick={() => requestSort('date')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Date {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('millName')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Mill / Party {sortConfig.key === 'millName' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('invoiceNo')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Invoice No. {sortConfig.key === 'invoiceNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('vehicleNo')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Vehicle No. {sortConfig.key === 'vehicleNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('systemReelId')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                System Reel ID {sortConfig.key === 'systemReelId' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('reelNo')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Supplier Reel No. {sortConfig.key === 'reelNo' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('size')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Size (cm) {sortConfig.key === 'size' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('gsm')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                GSM {sortConfig.key === 'gsm' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('bf')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                BF {sortConfig.key === 'bf' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('colour')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Colour {sortConfig.key === 'colour' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('receivedQty')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Recv (KG) {sortConfig.key === 'receivedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('balanceQty')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', background: '#ecfdf5', color: '#166534' }}>
+                Bal (KG) {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                Linear Meters
+              </th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                Stock Age
+              </th>
+              <th onClick={() => requestSort('ratePerKg')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Rate/KG {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th onClick={() => requestSort('value')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                Value (₹) {sortConfig.key === 'value' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              {/* EXACT REPLACEMENT: Location is replaced by 'Utilised for' */}
+              <th onClick={() => requestSort('utilisedFor')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', minWidth: 170, background: '#eff6ff', color: '#1d4ed8' }}>
+                Utilised for {sortConfig.key === 'utilisedFor' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
             {sortedInventory.length === 0 && (
               <tr>
-                <td colSpan="20" style={{ textAlign: 'center', padding: 32, fontStyle: 'italic', color: '#94a3b8' }}>
-                  No inventory reels found. Use "Receive New Invoice" or "Paste from Excel" to add stock.
+                <td colSpan="20" style={{ textAlign: 'center', padding: 32, fontStyle: 'italic', color: '#94a3b8', border: '1px solid #cbd5e1' }}>
+                  No inventory reels found in this view. Use "Inward New Reel" or "Paste Cells" to add stock.
                 </td>
               </tr>
             )}
@@ -6906,11 +7062,19 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
               const rowIndex = (pageSize === 'all' ? 0 : (currentPage - 1) * pageSize) + idx + 1;
               const isSelected = selectedIds.has(r.id);
               const isAvailable = (r.balanceQty || 0) > 0;
-              const isLow = isAvailable && (r.balanceQty || 0) < lowStockThreshold;
 
-              const renderCell = (field, currentVal, type = 'text', options = null) => {
+              const renderCell = (field, currentVal, colLetter, colLabel, type = 'text', align = 'left', options = null) => {
                 const isEditing = editingCell?.id === r.id && editingCell?.field === field;
                 const isJustSaved = savedCell?.id === r.id && savedCell?.field === field;
+                const isActive = activeCell?.id === r.id && activeCell?.field === field;
+
+                const handleCellClick = () => {
+                  selectCell(r, field, colLetter, rowIndex, colLabel, currentVal);
+                };
+
+                const handleCellDoubleClick = () => {
+                  startEdit(r.id, field, currentVal);
+                };
 
                 if (isEditing) {
                   if (type === 'select' && options) {
@@ -6921,7 +7085,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                         onChange={e => setEditValue(e.target.value)}
                         onBlur={() => saveCell(r.id, field)}
                         onKeyDown={e => handleKeyDown(e, r.id, field)}
-                        style={{ width: '100%', padding: '2px 4px', fontSize: 12, border: '2px solid #2563eb', borderRadius: 4 }}
+                        style={{ width: '100%', height: 24, padding: '1px 3px', fontSize: 11.5, border: '2px solid #107c41', outline: 'none', background: '#fff', borderRadius: 2 }}
                       >
                         {options.map(o => <option key={o} value={o}>{o}</option>)}
                       </select>
@@ -6935,97 +7099,292 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                       onChange={e => setEditValue(e.target.value)}
                       onBlur={() => saveCell(r.id, field)}
                       onKeyDown={e => handleKeyDown(e, r.id, field)}
-                      style={{ width: '100%', padding: '2px 4px', fontSize: 12, border: '2px solid #2563eb', background: '#eff6ff', borderRadius: 4, fontWeight: 700 }}
+                      style={{ width: '100%', height: 24, padding: '1px 4px', fontSize: 11.5, border: '2px solid #107c41', outline: 'none', background: '#eff6ff', borderRadius: 2, fontWeight: 700, textAlign: align }}
                     />
                   );
                 }
 
                 return (
                   <div
-                    onClick={() => startEdit(r.id, field, currentVal)}
-                    title="Click to edit cell"
+                    onClick={handleCellClick}
+                    onDoubleClick={handleCellDoubleClick}
+                    title="Click to select | Double-click to edit cell"
                     style={{
-                      cursor: 'pointer',
-                      padding: '4px 6px',
-                      borderRadius: 4,
+                      cursor: 'cell',
+                      padding: '2px 4px',
                       minHeight: 22,
-                      background: isJustSaved ? '#bbf7d0' : (isSelected ? '#e0f2fe' : 'transparent'),
-                      transition: 'background 0.3s',
-                      fontWeight: ['reelNo', 'balanceQty', 'value'].includes(field) ? 700 : 400
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: align === 'right' ? 'flex-end' : (align === 'center' ? 'center' : 'flex-start'),
+                      background: isJustSaved ? '#bbf7d0' : (isActive ? '#f0fdf4' : 'transparent'),
+                      outline: isActive ? '2px solid #107c41' : 'none',
+                      outlineOffset: -1,
+                      position: 'relative',
+                      zIndex: isActive ? 5 : 1,
+                      fontWeight: ['reelNo', 'balanceQty', 'value'].includes(field) ? 700 : 400,
+                      fontFamily: align === 'right' || ['systemReelId', 'reelNo', 'invoiceNo', 'vehicleNo'].includes(field) ? 'var(--font-mono, monospace)' : 'inherit',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}
                   >
                     {currentVal !== undefined && currentVal !== null && currentVal !== '' ? currentVal : <span style={{ color: '#cbd5e1' }}>—</span>}
+                    {/* Excel Auto-Fill Handle on active cell */}
+                    {isActive && (
+                      <div style={{ position: 'absolute', bottom: -1, right: -1, width: 5, height: 5, background: '#107c41', border: '1px solid #ffffff', zIndex: 6, pointerEvents: 'none' }} />
+                    )}
                   </div>
                 );
               };
 
               return (
-                <tr key={r.id} style={{ background: isSelected ? '#f0f9ff' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc'), opacity: !isAvailable ? 0.6 : 1 }}>
-                  <td style={{ textAlign: 'center', padding: 4 }}>
+                <tr
+                  key={r.id}
+                  style={{
+                    background: isSelected ? '#ecfdf5' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc'),
+                    opacity: !isAvailable ? 0.65 : 1,
+                    transition: 'background 0.1s'
+                  }}
+                  onMouseEnter={e => {
+                    if (!isSelected) e.currentTarget.style.background = '#f0fdf4';
+                  }}
+                  onMouseLeave={e => {
+                    if (!isSelected) e.currentTarget.style.background = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+                  }}
+                >
+                  {/* Select Checkbox */}
+                  <td style={{ textAlign: 'center', border: '1px solid #cbd5e1', padding: '2px 0' }}>
                     <input type="checkbox" checked={isSelected} onChange={() => toggleSelectRow(r.id)} />
                   </td>
-                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>{rowIndex}</td>
-                  <td>{renderCell('date', r.date, 'date')}</td>
-                  <td>
-                    {renderCell('millName', r.millName)}
-                    {r.stockType === 'job_work' ? (
-                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, marginTop: 2, display: 'inline-block' }}>
-                        🤝 JW: {r.clientName || 'Client'}
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, marginTop: 2, display: 'inline-block' }}>
-                        🏭 Factory
-                      </span>
-                    )}
+
+                  {/* Excel Row Index Header (#) */}
+                  <td style={{ textAlign: 'center', border: '1px solid #cbd5e1', background: '#f8fafc', color: '#64748b', fontSize: 11, fontWeight: 700, userSelect: 'none' }}>
+                    {rowIndex}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#475569' }}>
-                    {renderCell('invoiceNo', r.invoiceNo)}
+
+                  {/* Col A: Date */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('date', r.date, 'A', 'Date', 'date', 'left')}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#475569' }}>
-                    {renderCell('vehicleNo', r.vehicleNo)}
+
+                  {/* Col B: Mill / Party */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 4 }}>
+                      <div style={{ flex: 1 }}>{renderCell('millName', r.millName, 'B', 'Mill / Party', 'text', 'left')}</div>
+                      {r.stockType === 'job_work' ? (
+                        <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                          🤝 JW
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          🏭 Own
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#2563eb', whiteSpace: 'nowrap' }}>
-                    {r.systemReelId || r.uniqueReelId || r.supplierReelNo || r.reelNo || '-'}
+
+                  {/* Col C: Invoice No. */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('invoiceNo', r.invoiceNo, 'C', 'Invoice No.', 'text', 'left')}
                   </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {renderCell('reelNo', r.supplierReelNo || r.reelNo)}
+
+                  {/* Col D: Vehicle No. */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('vehicleNo', r.vehicleNo, 'D', 'Vehicle No.', 'text', 'left')}
                   </td>
-                  <td>{renderCell('size', r.size, 'number')}</td>
-                  <td>{renderCell('gsm', r.gsm, 'number')}</td>
-                  <td>{renderCell('bf', r.bf, 'number')}</td>
-                  <td>{renderCell('colour', r.colour || 'Kraft', 'select', ['Kraft', 'Golden', 'Duplex'])}</td>
-                  <td>{renderCell('receivedQty', r.receivedQty, 'number')}</td>
-                  <td style={{ fontWeight: 800, color: isAvailable ? '#16a34a' : '#94a3b8' }}>
-                    {(r.balanceQty || 0).toFixed(1)} kg
+
+                  {/* Col E: System Reel ID */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0, color: '#2563eb', fontWeight: 800 }}>
+                    {renderCell('systemReelId', r.systemReelId || r.uniqueReelId || r.supplierReelNo || r.reelNo || '-', 'E', 'System Reel ID', 'text', 'left')}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0284c7' }}>
+
+                  {/* Col F: Supplier Reel No. */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0, fontWeight: 700 }}>
+                    {renderCell('reelNo', r.supplierReelNo || r.reelNo, 'F', 'Supplier Reel No.', 'text', 'left')}
+                  </td>
+
+                  {/* Col G: Size (cm) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('size', r.size, 'G', 'Size (cm)', 'number', 'right')}
+                  </td>
+
+                  {/* Col H: GSM */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('gsm', r.gsm, 'H', 'GSM', 'number', 'right')}
+                  </td>
+
+                  {/* Col I: BF */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('bf', r.bf, 'I', 'BF', 'number', 'right')}
+                  </td>
+
+                  {/* Col J: Colour */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('colour', r.colour || 'Kraft', 'J', 'Colour', 'select', 'left', ['Kraft', 'Golden', 'Duplex', 'White', 'Semi-Kraft'])}
+                  </td>
+
+                  {/* Col K: Recv (KG) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('receivedQty', r.receivedQty, 'K', 'Recv (KG)', 'number', 'right')}
+                  </td>
+
+                  {/* Col L: Bal (KG) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0, background: isAvailable ? '#f0fdf4' : '#f8fafc' }}>
+                    <div
+                      onClick={() => selectCell(r, 'balanceQty', 'L', rowIndex, 'Bal (KG)', (r.balanceQty || 0).toFixed(1))}
+                      onDoubleClick={() => startEdit(r.id, 'balanceQty', r.balanceQty)}
+                      style={{
+                        padding: '2px 6px',
+                        textAlign: 'right',
+                        fontWeight: 800,
+                        color: isAvailable ? '#15803d' : '#94a3b8',
+                        fontFamily: 'var(--font-mono, monospace)',
+                        outline: activeCell?.id === r.id && activeCell?.field === 'balanceQty' ? '2px solid #107c41' : 'none',
+                        outlineOffset: -1,
+                        position: 'relative',
+                        zIndex: activeCell?.id === r.id && activeCell?.field === 'balanceQty' ? 5 : 1
+                      }}
+                    >
+                      {editingCell?.id === r.id && editingCell?.field === 'balanceQty' ? (
+                        <input
+                          autoFocus
+                          type="number"
+                          step="0.1"
+                          value={editValue}
+                          onChange={e => setEditValue(e.target.value)}
+                          onBlur={() => saveCell(r.id, 'balanceQty')}
+                          onKeyDown={e => handleKeyDown(e, r.id, 'balanceQty')}
+                          style={{ width: '100%', height: 22, padding: '1px 4px', fontSize: 11.5, border: '2px solid #107c41', outline: 'none', background: '#eff6ff', textAlign: 'right', fontWeight: 800 }}
+                        />
+                      ) : (
+                        <span>{(parseFloat(r.balanceQty) || 0).toFixed(1)} kg</span>
+                      )}
+                      {activeCell?.id === r.id && activeCell?.field === 'balanceQty' && editingCell?.id !== r.id && (
+                        <div style={{ position: 'absolute', bottom: -1, right: -1, width: 5, height: 5, background: '#107c41', border: '1px solid #ffffff', zIndex: 6, pointerEvents: 'none' }} />
+                      )}
+                    </div>
+                  </td>
+
+                  {/* Col M: Linear Meters */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: '2px 6px', textAlign: 'right', fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, color: '#0284c7' }}>
                     {(parseFloat(r.size) > 0 && parseFloat(r.gsm) > 0 && (r.balanceQty || 0) > 0) ? Math.round(((parseFloat(r.balanceQty) || 0) * 100000) / (parseFloat(r.size) * parseFloat(r.gsm))).toLocaleString() + ' m' : '—'}
                   </td>
-                  <td>
+
+                  {/* Col N: Stock Age */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: '2px 4px', textAlign: 'center' }}>
                     {(() => {
                       const days = Math.max(0, Math.floor((Date.now() - new Date(r.date || Date.now()).getTime()) / (1000 * 60 * 60 * 24)));
-                      if (days <= 30) return <span style={{ background: '#dcfce7', color: '#15803d', padding: '2px 6px', borderRadius: 4, fontWeight: 800, fontSize: 10 }}>🟢 {days}d Fresh</span>;
-                      if (days <= 60) return <span style={{ background: '#fef3c7', color: '#b45309', padding: '2px 6px', borderRadius: 4, fontWeight: 800, fontSize: 10 }}>🟡 {days}d Moderate</span>;
-                      return <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '2px 6px', borderRadius: 4, fontWeight: 800, fontSize: 10 }}>🔴 {days}d Aging</span>;
+                      if (days <= 30) return <span style={{ background: '#dcfce7', color: '#15803d', padding: '1px 5px', borderRadius: 3, fontWeight: 800, fontSize: 10 }}>🟢 {days}d</span>;
+                      if (days <= 60) return <span style={{ background: '#fef3c7', color: '#b45309', padding: '1px 5px', borderRadius: 3, fontWeight: 800, fontSize: 10 }}>🟡 {days}d</span>;
+                      return <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '1px 5px', borderRadius: 3, fontWeight: 800, fontSize: 10 }}>🔴 {days}d</span>;
                     })()}
                   </td>
-                  <td>{renderCell('ratePerKg', r.ratePerKg, 'number')}</td>
-                  <td style={{ fontWeight: 800, color: '#0f172a' }}>
+
+                  {/* Col O: Rate/KG */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0 }}>
+                    {renderCell('ratePerKg', r.ratePerKg, 'O', 'Rate/KG', 'number', 'right')}
+                  </td>
+
+                  {/* Col P: Value (₹) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: '2px 6px', textAlign: 'right', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono, monospace)' }}>
                     ₹{parseFloat(r.value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </td>
-                  <td>{renderCell('location', r.location || 'Rack-A')}</td>
-                  <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+
+                  {/* Col Q: UTILISED FOR (Directly replaces Reel Location, fully interactive & editable) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: '2px 6px', minWidth: 170, background: '#f8fafc' }}>
+                    {(() => {
+                      const itemNames = (r.utilisedForItems && r.utilisedForItems.length > 0)
+                        ? r.utilisedForItems
+                        : (r.lastUsedForItem ? [r.lastUsedForItem] : (r.usageLog || []).map(u => u.usedFor).filter(u => u && u !== 'Initial / CSV Import'));
+                      const uniqueItems = [...new Set(itemNames)];
+                      const isEditingThis = editingCell?.id === r.id && editingCell?.field === 'utilisedFor';
+                      const isActiveThis = activeCell?.id === r.id && activeCell?.field === 'utilisedFor';
+
+                      if (isEditingThis) {
+                        return (
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Enter utilised item name..."
+                            value={editValue}
+                            onChange={e => setEditValue(e.target.value)}
+                            onBlur={() => saveCell(r.id, 'utilisedFor')}
+                            onKeyDown={e => handleKeyDown(e, r.id, 'utilisedFor')}
+                            style={{ width: '100%', height: 22, padding: '1px 4px', fontSize: 11.5, border: '2px solid #107c41', outline: 'none', background: '#eff6ff', borderRadius: 3, fontWeight: 700 }}
+                          />
+                        );
+                      }
+
+                      return (
+                        <div
+                          onClick={() => selectCell(r, 'utilisedFor', 'Q', rowIndex, 'Utilised for', r.lastUsedForItem || (uniqueItems[0] || ''))}
+                          onDoubleClick={() => startEdit(r.id, 'utilisedFor', r.lastUsedForItem || (uniqueItems[0] || ''))}
+                          title="Click to select | Double-click to edit Utilised For item"
+                          style={{
+                            cursor: 'cell',
+                            minHeight: 22,
+                            display: 'flex',
+                            alignItems: 'center',
+                            outline: isActiveThis ? '2px solid #107c41' : 'none',
+                            outlineOffset: -1,
+                            position: 'relative',
+                            padding: '1px 2px',
+                            background: isActiveThis ? '#f0fdf4' : 'transparent',
+                            zIndex: isActiveThis ? 5 : 1
+                          }}
+                        >
+                          {uniqueItems.length > 0 ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                              {uniqueItems.map((item, i) => (
+                                <span
+                                  key={i}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 3,
+                                    background: '#eff6ff',
+                                    color: '#1d4ed8',
+                                    border: '1px solid #bfdbfe',
+                                    borderRadius: 4,
+                                    padding: '1px 6px',
+                                    fontSize: 10.5,
+                                    fontWeight: 700,
+                                    maxWidth: 200,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                  title={`Utilised for: ${item}`}
+                                >
+                                  <span>📦</span>
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>—</span>
+                          )}
+                          {isActiveThis && (
+                            <div style={{ position: 'absolute', bottom: -1, right: -1, width: 5, height: 5, background: '#107c41', border: '1px solid #ffffff', zIndex: 6, pointerEvents: 'none' }} />
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
+
+                  {/* Col R: Actions */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: '2px 4px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <button
                       onClick={() => setRemnantReelItem(r)}
                       title="Return from Floor & Print Remnant Tag"
-                      style={{ background: '#d97706', color: '#fff', border: 'none', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 800, cursor: 'pointer', marginRight: 4 }}
+                      style={{ background: '#d97706', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 800, cursor: 'pointer', marginRight: 3 }}
                     >
                       🔄 Remnant
                     </button>
                     <button
                       onClick={() => onPrintBarcode && onPrintBarcode(r)}
                       title="Print Barcode Tag"
-                      style={{ background: '#334155', color: '#fff', border: 'none', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', marginRight: 4 }}
+                      style={{ background: '#334155', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, cursor: 'pointer', marginRight: 3 }}
                     >
                       🖨️ Tag
                     </button>
@@ -7033,7 +7392,7 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
                       <button
                         onClick={() => handleDeleteSingle(r)}
                         title="Delete this reel from inventory"
-                        style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', padding: '3px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, cursor: 'pointer' }}
+                        style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
                       >
                         🗑️
                       </button>
@@ -7046,47 +7405,116 @@ function ExcelStockInventory({ inventory = [], companies = [], role, updateDoc, 
         </table>
       </div>
 
-      {/* Bottom Pagination Bar */}
-      <InventoryPaginationControls
-        totalItems={sortedInventory.length}
-        pageSize={pageSize}
-        setPageSize={setPageSize}
-        currentPage={currentPage}
-        setCurrentPage={setCurrentPage}
-      />
-
-      <div style={{ marginTop: 12, padding: '10px 16px', background: '#0f172a', color: '#fff', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: 'var(--font-mono)' }}>
-        <div style={{ display: 'flex', gap: 16 }}>
-          <span>COUNT: <strong style={{ color: '#fbbf24' }}>{totalCount} Reels</strong></span>
-          <span>ACTIVE: <strong style={{ color: '#4ade80' }}>{activeCount} Reels</strong></span>
+      {/* ========================================================= */}
+      {/* 4. EXCEL WORKSHEET TABS BAR (Sheet1: All, Sheet2: Avail)  */}
+      {/* ========================================================= */}
+      <div style={{ background: '#e2e8f0', borderLeft: '1.5px solid #cbd5e1', borderRight: '1.5px solid #cbd5e1', borderBottom: '1px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 10px 0 10px', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, overflowX: 'auto' }}>
+          {[
+            { id: 'all', label: 'All Stock', icon: '📄', count: sheetCounts.all },
+            { id: 'available', label: 'Available (>0 kg)', icon: '🟢', count: sheetCounts.available },
+            { id: 'consumed', label: 'Consumed (0 kg)', icon: '🔴', count: sheetCounts.consumed },
+            { id: 'job_work', label: 'Job Work (Nashik)', icon: '🤝', count: sheetCounts.job_work },
+            { id: 'factory', label: 'Factory Stock', icon: '🏭', count: sheetCounts.factory },
+          ].map(tab => {
+            const isActiveTab = activeSheetTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  setActiveSheetTab(tab.id);
+                  setCurrentPage(1);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '5px 12px',
+                  fontSize: 11.5,
+                  fontWeight: isActiveTab ? 800 : 600,
+                  color: isActiveTab ? '#107c41' : '#475569',
+                  background: isActiveTab ? '#ffffff' : '#f1f5f9',
+                  borderTop: isActiveTab ? '2.5px solid #107c41' : '1px solid #cbd5e1',
+                  borderLeft: '1px solid #cbd5e1',
+                  borderRight: '1px solid #cbd5e1',
+                  borderBottom: isActiveTab ? '1px solid #ffffff' : '1px solid #cbd5e1',
+                  borderRadius: '4px 4px 0 0',
+                  cursor: 'pointer',
+                  marginBottom: isActiveTab ? -1 : 0,
+                  position: 'relative',
+                  zIndex: isActiveTab ? 2 : 1,
+                  transition: 'all 0.15s'
+                }}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+                <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 8, background: isActiveTab ? '#dcfce7' : '#e2e8f0', color: isActiveTab ? '#166534' : '#64748b', fontWeight: 800 }}>
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
         </div>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <span>SUM(Recv): <strong style={{ color: '#38bdf8' }}>{sumReceived.toFixed(1)} KG ({ (sumReceived/1000).toFixed(2) } MT)</strong></span>
-          <span>SUM(Bal): <strong style={{ color: '#4ade80' }}>{sumBalance.toFixed(1)} KG ({ (sumBalance/1000).toFixed(2) } MT)</strong></span>
-          <span>SUM(Value): <strong style={{ color: '#f59e0b' }}>₹{sumValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
-          <span>AVG(GSM): <strong style={{ color: '#cbd5e1' }}>{avgGsm}</strong></span>
-          <span>AVG(BF): <strong style={{ color: '#cbd5e1' }}>{avgBf}</strong></span>
+
+        {/* Excel Pagination Controls right beside tabs */}
+        <div style={{ marginBottom: 4 }}>
+          <InventoryPaginationControls
+            totalItems={sortedInventory.length}
+            pageSize={pageSize}
+            setPageSize={setPageSize}
+            currentPage={currentPage}
+            setCurrentPage={setCurrentPage}
+          />
         </div>
       </div>
 
+      {/* ========================================================= */}
+      {/* 5. EXCEL STATUS BAR (Bottom Metric Ribbon)                */}
+      {/* ========================================================= */}
+      <div style={{ background: '#107c41', color: '#fff', borderRadius: '0 0 8px 8px', padding: '6px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontWeight: 800, letterSpacing: '0.04em', background: 'rgba(255,255,255,0.22)', padding: '1px 6px', borderRadius: 3 }}>READY</span>
+          {selectedIds.size > 0 && <span>SELECTED: <strong style={{ color: '#fef08a' }}>{selectedIds.size}</strong></span>}
+          <span>COUNT: <strong style={{ color: '#fef08a' }}>{totalCount} Reels</strong></span>
+          <span>ACTIVE: <strong style={{ color: '#86efac' }}>{activeCount}</strong></span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span>TOTAL BAL: <strong style={{ color: '#86efac' }}>{sumBalance.toFixed(1)} KG ({ (sumBalance/1000).toFixed(2) } MT)</strong></span>
+          <span>VALUE: <strong style={{ color: '#fef08a' }}>₹{sumValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
+          <span>AVG GSM: <strong style={{ color: '#e2e8f0' }}>{avgGsm}</strong></span>
+          <span>AVG BF: <strong style={{ color: '#e2e8f0' }}>{avgBf}</strong></span>
+          <span style={{ opacity: 0.85 }}>100% 🔍</span>
+        </div>
+      </div>
+
+      {/* Excel Paste Cells Modal */}
       <ExcelPasteModal isOpen={isPasteOpen} onClose={() => setIsPasteOpen(false)} onImportRows={handleImportPastedRows} />
 
+      {/* Batch Edit Modal (Rate, Mill, Utilised For) */}
       {batchModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
-          <div className="apex-card" style={{ maxWidth: 360, width: '100%', padding: 20, background: '#fff' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
+          <div className="apex-card" style={{ maxWidth: 380, width: '100%', padding: 22, background: '#fff' }}>
             <h4 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>
-              Batch Set {batchModal === 'rate' ? 'Rate/KG (₹)' : (batchModal === 'mill' ? 'Mill Name' : 'Location')}
+              Batch Set {batchModal === 'rate' ? 'Rate/KG (₹)' : (batchModal === 'mill' ? 'Mill Name' : 'Utilised For (Item)')}
             </h4>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+              Apply this value to all <strong>{selectedIds.size}</strong> selected inventory reels simultaneously.
+            </p>
             <input
               type={batchModal === 'rate' ? 'number' : 'text'}
-              placeholder={`Enter new ${batchModal}...`}
+              placeholder={batchModal === 'rate' ? 'e.g. 38.5' : (batchModal === 'mill' ? 'e.g. Century Pulp & Paper' : 'e.g. 3-Ply Printed Box')}
               className="apex-input"
               value={batchVal}
               onChange={e => setBatchVal(e.target.value)}
               style={{ width: '100%', marginBottom: 14 }}
+              autoFocus
             />
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={handleBatchApply} className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center' }}>Apply to {selectedIds.size} Reels</button>
+              <button onClick={handleBatchApply} className="apex-btn apex-btn-primary" style={{ flex: 1, justifyContent: 'center', background: '#107c41', color: '#fff', fontWeight: 800 }}>
+                Apply to {selectedIds.size} Reels
+              </button>
               <button onClick={() => setBatchModal(null)} className="apex-btn apex-btn-secondary">Cancel</button>
             </div>
           </div>
@@ -8429,7 +8857,7 @@ export default function App() {
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} customers={unitCustomers} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
-        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'own_stock' })} />}
+        {activeTab === 'inventory'       && canAccess(currentErpUser.role,'inventory')       && <InventoryView inventory={unitInventory} production={unitProduction} orders={unitOrders} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} companies={companies} customers={unitCustomers} activeUnitId={uid} autoSetUnit={autoSetUnit} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'own_stock' })} />}
         {activeTab === 'items'           && canAccess(currentErpUser.role,'items')           && <ItemsView items={unitItems} companies={companies} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} costings={costings} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
         {activeTab === 'reports'         && canAccess(currentErpUser.role,'reports')         && <ReportsView inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} wastageLogs={unitWastageLogs} companies={companies} customers={unitCustomers} items={unitItems} transactions={transactions} activeUnitId={uid} addLog={addLog} currentUser={currentErpUser} getColRef={getColRef} getDocRef={getDocRef} dailyReports={dailyReports} addDoc={addDoc} updateDoc={updateDoc} deleteDoc={deleteDoc} />}
         {activeTab === 'customers'       && canAccess(currentErpUser.role,'customers')       && <CustomersView customers={unitCustomers} companies={companies} inventory={unitInventory} orders={unitOrders} production={unitProduction} wipStages={unitWipStages} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} activeUnitId={uid} autoSetUnit={autoSetUnit} setActiveTab={setActiveTab} onOpenCsvImport={(mode) => setCsvImportModal({ isOpen: true, mode: mode || 'job_work_stock' })} />}
@@ -11349,7 +11777,7 @@ function InventoryWeightFilterDropdown({
 }
 
 // --- INVENTORY VIEW ---
-function InventoryView({ inventory = [], production = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
+function InventoryView({ inventory = [], production = [], orders = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
   const allowedCompanyId = activeUnitId || 'all';
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
 
@@ -11855,10 +12283,22 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
     const usageStats = {}; 
     const reelNoToIds = {}; 
 
+    const addKey = (key, reelId) => {
+      if (!key) return;
+      const clean = String(key).trim().toLowerCase();
+      if (!clean) return;
+      if (!reelNoToIds[clean]) reelNoToIds[clean] = [];
+      if (!reelNoToIds[clean].includes(reelId)) reelNoToIds[clean].push(reelId);
+      const noHash = clean.replace(/^#/, '');
+      if (noHash && noHash !== clean) {
+        if (!reelNoToIds[noHash]) reelNoToIds[noHash] = [];
+        if (!reelNoToIds[noHash].includes(reelId)) reelNoToIds[noHash].push(reelId);
+      }
+    };
+
     for (let i = 0; i < paperInventoryData.length; i++) {
       const reel = paperInventoryData[i];
       const id = reel.id;
-      const rNo = String(reel.reelNo || '').trim().toLowerCase();
       const initialIssued = parseFloat(reel.initialIssuedQty || 0);
       balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
       usageStats[id] = { issued: 0, log: [] };
@@ -11867,11 +12307,16 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         usageStats[id].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
       }
 
-      if (rNo) {
-        if (!reelNoToIds[rNo]) reelNoToIds[rNo] = [];
-        reelNoToIds[rNo].push(id);
-      }
+      addKey(reel.reelNo, id);
+      addKey(reel.supplierReelNo, id);
+      addKey(reel.uniqueReelId, id);
+      addKey(reel.systemReelId, id);
+      addKey(reel.id, id);
     }
+
+    const resolveItemName = (p) => {
+      return p.usedForItem || p.itemName || (orders && orders.find(o => o.id === p.orderId)?.itemName) || (p.jobNo ? `Job #${p.jobNo}` : '') || p.paperUsedFor || 'Production';
+    };
 
     if (production && production.length > 0) {
       const sortedProd = [...production].sort((a,b) => {
@@ -11883,46 +12328,58 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       for (let pIdx = 0; pIdx < sortedProd.length; pIdx++) {
         const p = sortedProd[pIdx];
         const consumed = getConsumedReels(p);
+        const itemName = resolveItemName(p);
+        const jobTag = p.jobNo || (orders && orders.find(o => o.id === p.orderId)?.orderNo) || '';
+
         if (consumed.length > 0) {
           for (let cIdx = 0; cIdx < consumed.length; cIdx++) {
             const cr = consumed[cIdx];
             const rNo = String(cr.reelNo || '').trim().toLowerCase();
+            const cleanRNo = rNo.replace(/^#/, '');
             let remainingDeduct = parseFloat(cr.weight || 0);
+            const matchedIds = reelNoToIds[rNo] || reelNoToIds[cleanRNo];
             
-            if (remainingDeduct > 0 && reelNoToIds[rNo]) {
-              const ids = reelNoToIds[rNo];
-              for (let idIdx = 0; idIdx < ids.length; idIdx++) {
-                const id = ids[idIdx];
-                if (remainingDeduct <= 0) break;
-                const available = balances[id] || 0;
-                if (available > 0) {
-                  const deduct = Math.min(available, remainingDeduct);
-                  balances[id] -= deduct;
-                  usageStats[id].issued += deduct;
-                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
-                  remainingDeduct -= deduct;
-                }
-              }
+            if (matchedIds && matchedIds.length > 0) {
               if (remainingDeduct > 0) {
-                const lastId = ids[ids.length - 1];
-                balances[lastId] -= remainingDeduct;
-                usageStats[lastId].issued += remainingDeduct;
-                usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: remainingDeduct.toFixed(1) });
+                for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
+                  const id = matchedIds[idIdx];
+                  if (remainingDeduct <= 0) break;
+                  const available = balances[id] || 0;
+                  if (available > 0) {
+                    const deduct = Math.min(available, remainingDeduct);
+                    balances[id] -= deduct;
+                    usageStats[id].issued += deduct;
+                    usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
+                    remainingDeduct -= deduct;
+                  }
+                }
+                if (remainingDeduct > 0) {
+                  const lastId = matchedIds[matchedIds.length - 1];
+                  balances[lastId] -= remainingDeduct;
+                  usageStats[lastId].issued += remainingDeduct;
+                  usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: remainingDeduct.toFixed(1) });
+                }
+              } else {
+                for (const id of matchedIds) {
+                  if (!usageStats[id].log.some(l => l.usedFor === itemName && l.date === p.date)) {
+                    usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: '0.0' });
+                  }
+                }
               }
             }
           }
         } else if (p.reelNos && p.useKg) {
-          const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase()).filter(Boolean);
+          const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase().replace(/^#/, '')).filter(Boolean);
           if (pReels.length > 0) {
             let remainingUse = parseFloat(p.useKg || 0);
             for (let index = 0; index < pReels.length; index++) {
               const rNo = pReels[index];
-              if (remainingUse <= 0 || !reelNoToIds[rNo]) continue;
+              const matchedIds = reelNoToIds[rNo];
+              if (remainingUse <= 0 || !matchedIds) continue;
               const isLast = (index === pReels.length - 1);
-              const ids = reelNoToIds[rNo];
               
-              for (let idIdx = 0; idIdx < ids.length; idIdx++) {
-                const id = ids[idIdx];
+              for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
+                const id = matchedIds[idIdx];
                 if (remainingUse <= 0) break;
                 const available = balances[id] || 0;
                 let deduct = 0;
@@ -11935,7 +12392,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                 if (deduct > 0) {
                   balances[id] -= deduct;
                   usageStats[id].issued += deduct;
-                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: p.usedForItem || p.paperUsedFor || 'Unknown', kg: deduct.toFixed(1) });
+                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
                   remainingUse -= deduct;
                 }
               }
@@ -11951,13 +12408,33 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       const initialIssued = parseFloat(reel.initialIssuedQty || 0);
       const issuedQty = stats.issued + initialIssued;
       const received = parseFloat(reel.receivedQty || 0);
-      const balanceQty = Math.max(0, received - issuedQty);
+      const balanceQty = (stats.issued > 0 || initialIssued > 0)
+        ? Math.max(0, received - issuedQty)
+        : (reel.balanceQty !== undefined ? parseFloat(reel.balanceQty) : Math.max(0, received - issuedQty));
       const rate = parseFloat(reel.ratePerKg || 0);
       const value = balanceQty * rate;
       const systemReelId = reel.systemReelId || formatSystemReelId(reel, paperInventoryData);
-      return { ...reel, systemReelId, issuedQty, balanceQty, value, ratePerKg: rate, usageLog: stats.log || [] };
+
+      const itemNamesFromLog = (stats.log || []).map(l => l.usedFor).filter(u => u && u !== 'Initial / CSV Import');
+      if (reel.lastUsedForItem && !itemNamesFromLog.includes(reel.lastUsedForItem)) {
+        itemNamesFromLog.push(reel.lastUsedForItem);
+      }
+      const utilisedForItems = [...new Set(itemNamesFromLog)];
+      const lastUsedForItem = utilisedForItems[utilisedForItems.length - 1] || reel.lastUsedForItem || '';
+
+      return { 
+        ...reel, 
+        systemReelId, 
+        issuedQty, 
+        balanceQty, 
+        value, 
+        ratePerKg: rate, 
+        usageLog: stats.log || [],
+        utilisedForItems,
+        lastUsedForItem
+      };
     });
-  }, [inventory, production]);
+  }, [inventory, production, orders]);
 
   // Base inventory strictly scoped to current plant, ownership, and active stock status
   const baseAvailableInventory = useMemo(() => {
@@ -12129,7 +12606,10 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const matchSize = String(reel.size || '').includes(sQ);
         const matchGsm = String(reel.gsm || '').includes(sQ);
         const matchBf = String(reel.bf || '').includes(sQ);
-        if (!matchReelNo && !matchSupNo && !matchSysId && !matchInv && !matchVeh && !matchMill && !matchClient && !matchSize && !matchGsm && !matchBf) return false;
+        const matchUtilised = (reel.utilisedForItems || []).some(item => String(item).toLowerCase().includes(sQ)) ||
+          String(reel.lastUsedForItem || '').toLowerCase().includes(sQ) ||
+          (reel.usageLog || []).some(l => String(l.usedFor || '').toLowerCase().includes(sQ));
+        if (!matchReelNo && !matchSupNo && !matchSysId && !matchInv && !matchVeh && !matchMill && !matchClient && !matchSize && !matchGsm && !matchBf && !matchUtilised) return false;
       }
 
       if (filters.status === 'Available' && (reel.balanceQty || 0) <= 0) return false;
@@ -12172,6 +12652,11 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
         const compA = companies.find(c => c.id === a.companyId)?.name || '';
         const compB = companies.find(c => c.id === b.companyId)?.name || '';
         return compA.localeCompare(compB) * dir;
+      }
+      if (key === 'utilisedFor') {
+        const aItems = (a.utilisedForItems || (a.lastUsedForItem ? [a.lastUsedForItem] : [])).join(', ').toLowerCase();
+        const bItems = (b.utilisedForItems || (b.lastUsedForItem ? [b.lastUsedForItem] : [])).join(', ').toLowerCase();
+        return aItems.localeCompare(bItems) * dir;
       }
       const strA = String(a[key] || '').toLowerCase();
       const strB = String(b[key] || '').toLowerCase();
@@ -12234,6 +12719,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
       Initial_Issued: reel.initialIssuedQty || '0',
       Total_Issued_Qty: (reel.issuedQty || 0).toFixed(2),
       Balance_Qty: (reel.balanceQty || 0).toFixed(2),
+      Utilised_For_Item: (reel.utilisedForItems && reel.utilisedForItems.length > 0 ? reel.utilisedForItems.join(', ') : (reel.lastUsedForItem || 'Not yet utilised')),
       Rate_per_KG: reel.ratePerKg || 0,
       Current_Value: (reel.value || 0).toFixed(2),
       Used_For_History: (reel.usageLog || []).map(l => `${l.date}: ${l.usedFor} (${l.kg}kg)`).join(' | ')
@@ -13212,6 +13698,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
               <ExcelStockInventory
                 inventory={sortedFilteredInventory}
                 companies={companies}
+                orders={orders}
                 role={role}
                 updateDoc={updateDoc}
                 getDocRef={getDocRef}
@@ -13247,7 +13734,7 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                     <th onClick={() => requestSort('issuedQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Issued {sortConfig.key === 'issuedQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Balance {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate &amp; Value {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                    <th>Usage History</th>
+                    <th onClick={() => requestSort('utilisedFor')} style={{ cursor: 'pointer', userSelect: 'none', minWidth: 170 }}>Utilised For &amp; History {sortConfig.key === 'utilisedFor' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     {role === 'admin' && <th style={{ textAlign: 'right' }}>Actions</th>}
                   </tr>
                 </thead>
@@ -13283,10 +13770,18 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                           )}
                         </td>
                         <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, color: isAvailable ? '#1d4ed8' : 'var(--text-muted)' }}>{reel.reelNo || '-'}</span>
-                            {!isAvailable && <span className="apex-badge apex-badge-stone" style={{ fontSize: 9.5 }}>EMPTY</span>}
-                            {isLow && <span className="apex-badge apex-badge-amber" style={{ fontSize: 9.5 }}>LOW</span>}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, color: isAvailable ? '#1d4ed8' : 'var(--text-muted)' }}>{reel.reelNo || '-'}</span>
+                              {!isAvailable && <span className="apex-badge apex-badge-stone" style={{ fontSize: 9.5 }}>EMPTY</span>}
+                              {isLow && <span className="apex-badge apex-badge-amber" style={{ fontSize: 9.5 }}>LOW</span>}
+                            </div>
+                            {reel.lastUsedForItem && (
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginTop: 1, fontSize: 10.5, color: '#1d4ed8', fontWeight: 700 }} title={`Utilised for: ${reel.lastUsedForItem}`}>
+                                <span>📦</span>
+                                <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reel.lastUsedForItem}</span>
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td>
@@ -13304,19 +13799,39 @@ function InventoryView({ inventory = [], production = [], addLog, role, getColRe
                           <div style={{ fontWeight: 700, fontSize: 13 }}>₹{parseFloat(reel.value||0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
                         </td>
                         <td>
-                          {(reel.usageLog || []).length === 0
-                            ? <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Not yet used</span>
-                            : <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                {(reel.usageLog || []).slice(0, 3).map((log, i) => (
-                                  <div key={i} style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{log.date || '-'}</span>
-                                    <span style={{ fontSize: 10.5, fontWeight: 500 }}>{log.usedFor || '-'}</span>
-                                    <span className="apex-badge apex-badge-orange" style={{ fontSize: 9.5 }}>{log.kg || 0} kg</span>
+                          {(() => {
+                            const itemNames = (reel.utilisedForItems && reel.utilisedForItems.length > 0)
+                              ? reel.utilisedForItems
+                              : (reel.lastUsedForItem ? [reel.lastUsedForItem] : (reel.usageLog || []).map(u => u.usedFor).filter(u => u && u !== 'Initial / CSV Import'));
+                            const uniqueItems = [...new Set(itemNames)];
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {uniqueItems.length > 0 ? (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                                    {uniqueItems.map((item, i) => (
+                                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 4, padding: '1px 6px', fontSize: 10.5, fontWeight: 700 }} title={`Utilised for: ${item}`}>
+                                        <span>📦</span> {item}
+                                      </span>
+                                    ))}
                                   </div>
-                                ))}
-                                {(reel.usageLog || []).length > 3 && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{(reel.usageLog||[]).length - 3} more</span>}
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Not yet utilised</span>
+                                )}
+                                {(reel.usageLog || []).length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+                                    {(reel.usageLog || []).slice(0, 3).map((log, i) => (
+                                      <div key={i} style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{log.date || '-'}</span>
+                                        <span style={{ fontSize: 10, fontWeight: 500 }}>{log.usedFor || '-'}</span>
+                                        <span className="apex-badge apex-badge-orange" style={{ fontSize: 9 }}>{log.kg || 0} kg</span>
+                                      </div>
+                                    ))}
+                                    {(reel.usageLog || []).length > 3 && <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>+{(reel.usageLog||[]).length - 3} more</span>}
+                                  </div>
+                                )}
                               </div>
-                          }
+                            );
+                          })()}
                         </td>
                         {role === 'admin' && (
                           <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -14901,19 +15416,14 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       await addDoc(getColRef('production'), finalRecord);
       addLog(`Added production record for Job [${jCardNo}]: Reels ${reelNosStr}`);
 
-      // 1. AUTO-DEPLETE REEL INVENTORY BALANCES
-      // BUG 2 FIX: aggregate total usage per reel ID first to handle duplicate reel entries
+      // 1. AUTO-DEPLETE REEL INVENTORY BALANCES & ATTRIBUTE UTILISED ITEM
+      const targetItemForReel = finalRecord.usedForItem || finalRecord.itemName || selectedJob?.itemName || (selectedJob ? `Job #${jCardNo}` : 'Production');
       const reelUsageMap = new Map(); // reelInventoryId -> { matched, totalUsedKg }
       for (const rItem of consumedReels) {
         if (!rItem.reelNo || !rItem.weight) continue;
         const usedKg = parseFloat(rItem.weight || 0);
         if (usedKg <= 0) continue;
-        const matched = inventory.find(i =>
-          String(i.reelNo || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
-          String(i.supplierReelNo || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
-          String(i.uniqueReelId || '').trim().toLowerCase() === rItem.reelNo.trim().toLowerCase() ||
-          i.id === rItem.reelNo
-        );
+        const matched = findInventoryReel(inventory, rItem.reelNo);
         if (matched && getDocRef) {
           const entry = reelUsageMap.get(matched.id);
           if (entry) {
@@ -14923,13 +15433,18 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           }
         }
       }
-      // Now do one DB write per unique reel, using the original balance from inventory state
+      // Do one DB write per unique reel, persisting updated balanceQty and lastUsedForItem
       for (const [, { matched, totalUsedKg }] of reelUsageMap) {
         const currentBal = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
         const newBal = Math.max(0, currentBal - totalUsedKg);
         try {
-          await updateDoc(getDocRef('inventory', matched.id), { balanceQty: newBal });
-          if (addLog) addLog(`Auto-depleted ${totalUsedKg.toFixed(1)}kg from reel #${matched.supplierReelNo || matched.reelNo} (Remaining Bal: ${newBal.toFixed(1)}kg)`);
+          await updateDoc(getDocRef('inventory', matched.id), {
+            balanceQty: newBal,
+            lastUsedForItem: targetItemForReel,
+            lastUsedDate: finalRecord.date || new Date().toISOString().split('T')[0],
+            lastUsedJobNo: jCardNo || ''
+          });
+          if (addLog) addLog(`Auto-depleted ${totalUsedKg.toFixed(1)}kg from reel #${matched.supplierReelNo || matched.reelNo} (Remaining Bal: ${newBal.toFixed(1)}kg, Utilised for: ${targetItemForReel})`);
         } catch(err) {}
       }
 
@@ -15529,16 +16044,20 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
               }}
             />
 
-            {/* Reel Entries List with Auto-Matched Specifications Badge */}
+            {/* Reel Entries List with Auto-Matched Specifications Badge & Dynamic Balance Sync */}
             <div className="space-y-3">
               {consumedReels.map((reel, idx) => {
                 const cleanNo = (reel.reelNo || '').trim();
                 const matchedStock = cleanNo ? findInventoryReel(inventory, cleanNo) : null;
                 const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
+                const usedKg = parseFloat(reel.weight || 0);
+                const computedBalanceKg = availKg !== null ? Math.max(0, availKg - usedKg) : null;
+                const displayBalance = reel.customBalance !== undefined ? reel.customBalance : (computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '');
 
                 return (
-                  <div key={idx} className="bg-slate-800/90 p-3 rounded-lg border border-slate-700 space-y-2">
-                    <div className="grid grid-cols-[1fr,90px,auto] sm:grid-cols-[1fr,140px,auto] gap-2 sm:gap-3 items-end">
+                  <div key={idx} className="bg-slate-800/90 p-3 rounded-lg border border-slate-700 space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-[1.5fr,100px,120px,120px,auto] gap-2 sm:gap-2.5 items-end">
+                      {/* Reel Identifier */}
                       <div className="min-w-0">
                         <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
                           Reel No {reel.stand && <span className="text-amber-400 font-normal ml-1 font-sans">({reel.stand})</span>}
@@ -15546,7 +16065,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         <input
                           required
                           type="text"
-                          placeholder="Reel/Scan"
+                          placeholder="Enter Reel No / Scan"
                           className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs sm:text-sm uppercase font-mono font-bold outline-none focus:border-amber-400"
                           value={reel.reelNo}
                           onChange={e => {
@@ -15556,53 +16075,172 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                             
                             // Auto prefill weight from matched reel if current weight is empty
                             const match = findInventoryReel(inventory, val);
-                            if (match && !upd[idx].weight) {
+                            if (match) {
                               const bKg = parseFloat(match.balanceQty !== undefined ? match.balanceQty : (match.receivedQty || 0));
-                              if (bKg > 0) upd[idx].weight = String(bKg);
+                              if (bKg > 0 && !upd[idx].weight) {
+                                upd[idx].weight = String(bKg.toFixed(1));
+                                delete upd[idx].customBalance;
+                              }
                             }
                             setConsumedReels(upd);
                           }}
                         />
                       </div>
 
+                      {/* Starting Available Stock */}
                       <div className="min-w-0">
-                        <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">KG Used</label>
+                        <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          Avail Stock
+                        </label>
+                        <div className="w-full p-2 border border-slate-700 bg-slate-900/80 text-slate-300 rounded text-xs sm:text-sm font-mono font-bold text-center">
+                          {availKg !== null ? `${availKg.toFixed(1)} KG` : '—'}
+                        </div>
+                      </div>
+
+                      {/* KG Used (Two-way dynamic sync) */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider mb-1 truncate">
+                          KG Used *
+                        </label>
                         <input
                           required
                           type="number"
                           step="0.1"
+                          min="0"
                           placeholder="0.0"
-                          className="w-full p-2 border border-slate-600 bg-amber-500/10 text-amber-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
+                          className="w-full p-2 border border-amber-500/60 bg-amber-500/10 text-amber-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
                           value={reel.weight}
                           onChange={e => {
+                            const val = e.target.value;
                             const upd = [...consumedReels];
-                            upd[idx].weight = e.target.value;
+                            upd[idx].weight = val;
+                            // Reset custom balance override so it dynamically tracks availKg - weight
+                            delete upd[idx].customBalance;
                             setConsumedReels(upd);
                           }}
                         />
                       </div>
 
-                      {consumedReels.length > 1 ? (
-                        <button type="button" onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))} className="p-2 mb-[1px] bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition">
-                          <Trash2 className="w-4 h-4"/>
-                        </button>
-                      ) : <div style={{ width: 34 }}></div>}
+                      {/* Updated Balance (Editable: updates KG Used if changed!) */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] sm:text-[11px] font-bold text-emerald-300 uppercase tracking-wider mb-1 truncate">
+                          New Balance
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          placeholder={availKg !== null ? '0.0' : '—'}
+                          disabled={availKg === null}
+                          title={availKg === null ? 'Enter an inventory reel number first' : 'Change remaining balance if not fully utilised'}
+                          className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                          value={displayBalance}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const upd = [...consumedReels];
+                            upd[idx].customBalance = val;
+                            if (availKg !== null) {
+                              const numBal = parseFloat(val);
+                              if (!isNaN(numBal)) {
+                                const newUsedKg = Math.max(0, availKg - numBal);
+                                upd[idx].weight = newUsedKg.toFixed(1);
+                              }
+                            }
+                            setConsumedReels(upd);
+                          }}
+                        />
+                      </div>
+
+                      {/* Delete Row Button */}
+                      <div className="flex items-center pb-0.5">
+                        {consumedReels.length > 1 ? (
+                          <button
+                            type="button"
+                            onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))}
+                            className="p-2 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition"
+                            title="Remove this reel row"
+                          >
+                            <Trash2 className="w-4 h-4"/>
+                          </button>
+                        ) : <div style={{ width: 34 }}></div>}
+                      </div>
                     </div>
 
-                    {/* LIVE REEL SPECIFICATION MATCH BADGE */}
+                    {/* Quick Presets if Matched to Stock */}
+                    {matchedStock && availKg !== null && availKg > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">Quick Set:</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const upd = [...consumedReels];
+                            upd[idx].weight = availKg.toFixed(1);
+                            delete upd[idx].customBalance;
+                            setConsumedReels(upd);
+                          }}
+                          className="text-[10.5px] px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300 font-bold transition"
+                        >
+                          ⚡ Full Reel Used (0 KG bal)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const upd = [...consumedReels];
+                            const half = (availKg * 0.5).toFixed(1);
+                            upd[idx].weight = half;
+                            delete upd[idx].customBalance;
+                            setConsumedReels(upd);
+                          }}
+                          className="text-[10.5px] px-2 py-0.5 rounded bg-sky-950/80 hover:bg-sky-900 border border-sky-600/40 text-sky-300 font-bold transition"
+                        >
+                          🌓 Use 50% ({ (availKg * 0.5).toFixed(1) } KG)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const upd = [...consumedReels];
+                            upd[idx].weight = '0.0';
+                            delete upd[idx].customBalance;
+                            setConsumedReels(upd);
+                          }}
+                          className="text-[10.5px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 font-bold transition"
+                        >
+                          ↺ Reset (0 KG used)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* LIVE REEL SPECIFICATION & UPDATED BALANCE BADGE */}
                     {cleanNo && (
                       <div className="pt-1">
                         {matchedStock ? (
-                          <div className="flex items-center gap-2 text-xs bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-3 py-1.5 rounded-md font-medium">
+                          <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-2 rounded-md font-medium">
                             <span className="font-bold text-emerald-400">✓ Reel Identified:</span>
-                            <span>{matchedStock.millName || 'Stock Mill'}</span>
-                            <span>• {matchedStock.gsm} GSM</span>
-                            <span>• {matchedStock.bf} BF</span>
-                            <span>• {matchedStock.size} cm</span>
-                            <span>• {matchedStock.colour || 'Kraft'}</span>
-                            <span className="ml-auto font-bold bg-emerald-800/60 px-2 py-0.5 rounded text-white">
-                              Available Stock: {availKg !== null ? availKg.toFixed(1) : '0'} KG
-                            </span>
+                            <span className="text-white font-semibold">{matchedStock.millName || 'Stock Mill'}</span>
+                            <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
+                            <span className="text-slate-300">• {matchedStock.bf} BF</span>
+                            <span className="text-slate-300">• {matchedStock.size} cm</span>
+                            <span className="text-slate-300">• {matchedStock.colour || 'Kraft'}</span>
+                            
+                            <div className="ml-auto flex items-center gap-2">
+                              <span className="text-[11px] text-slate-400">
+                                Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong>
+                              </span>
+                              <span className="text-slate-600">→</span>
+                              <span className="text-[11px] text-amber-300">
+                                Consuming: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong>
+                              </span>
+                              <span className="text-slate-600">→</span>
+                              {computedBalanceKg !== null && computedBalanceKg <= 0 ? (
+                                <span className="inline-flex items-center gap-1 font-extrabold bg-emerald-900/80 border border-emerald-500/50 text-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                                  ✓ 0.0 KG (Full Reel Consumed)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 font-extrabold bg-amber-900/80 border border-amber-500/50 text-amber-200 px-2 py-0.5 rounded text-[11px]">
+                                  ⚡ {computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '0.0'} KG remaining
+                                </span>
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <div className="text-xs bg-amber-950/60 border border-amber-500/40 text-amber-300 px-3 py-1 rounded-md font-medium">
