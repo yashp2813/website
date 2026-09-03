@@ -4229,6 +4229,169 @@ const getDispatchSchedule = (o) => {
   return [];
 };
 
+export function computeInventoryWithUsage(inventory = [], production = [], orders = []) {
+  const paperInventoryData = (inventory || []).filter(i => !i.category || i.category === 'Paper');
+  const balances = {}; 
+  const usageStats = {}; 
+  const reelNoToIds = {}; 
+
+  const addKey = (key, reelId) => {
+    if (!key) return;
+    const clean = String(key).trim().toLowerCase();
+    if (!clean) return;
+    if (!reelNoToIds[clean]) reelNoToIds[clean] = [];
+    if (!reelNoToIds[clean].includes(reelId)) reelNoToIds[clean].push(reelId);
+    const noHash = clean.replace(/^#/, '');
+    if (noHash && noHash !== clean) {
+      if (!reelNoToIds[noHash]) reelNoToIds[noHash] = [];
+      if (!reelNoToIds[noHash].includes(reelId)) reelNoToIds[noHash].push(reelId);
+    }
+  };
+
+  for (let i = 0; i < paperInventoryData.length; i++) {
+    const reel = paperInventoryData[i];
+    const id = reel.id;
+    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+    balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
+    usageStats[id] = { issued: 0, log: [] };
+    
+    if (initialIssued > 0) {
+      usageStats[id].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
+    }
+
+    addKey(reel.reelNo, id);
+    addKey(reel.supplierReelNo, id);
+    addKey(reel.uniqueReelId, id);
+    addKey(reel.systemReelId, id);
+    addKey(reel.id, id);
+  }
+
+  const resolveItemName = (p) => {
+    return p.usedForItem || p.itemName || (orders && orders.find(o => o.id === p.orderId)?.itemName) || (p.jobNo ? `Job #${p.jobNo}` : '') || p.paperUsedFor || 'Production';
+  };
+
+  if (production && production.length > 0) {
+    const sortedProd = [...production].sort((a,b) => {
+      const dateA = new Date(a.date || 0).getTime();
+      const dateB = new Date(b.date || 0).getTime();
+      return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+    });
+    
+    for (let pIdx = 0; pIdx < sortedProd.length; pIdx++) {
+      const p = sortedProd[pIdx];
+      const consumed = getConsumedReels(p);
+      const itemName = resolveItemName(p);
+      const jobTag = p.jobNo || (orders && orders.find(o => o.id === p.orderId)?.orderNo) || '';
+
+      if (consumed.length > 0) {
+        for (let cIdx = 0; cIdx < consumed.length; cIdx++) {
+          const cr = consumed[cIdx];
+          const rNo = String(cr.reelNo || '').trim().toLowerCase();
+          const cleanRNo = rNo.replace(/^#/, '');
+          let remainingDeduct = parseFloat(cr.weight || 0);
+          const matchedIds = reelNoToIds[rNo] || reelNoToIds[cleanRNo];
+          
+          if (matchedIds && matchedIds.length > 0) {
+            if (remainingDeduct > 0) {
+              for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
+                const id = matchedIds[idIdx];
+                if (remainingDeduct <= 0) break;
+                const available = balances[id] || 0;
+                if (available > 0) {
+                  const deduct = Math.min(available, remainingDeduct);
+                  balances[id] -= deduct;
+                  usageStats[id].issued += deduct;
+                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
+                  remainingDeduct -= deduct;
+                }
+              }
+              if (remainingDeduct > 0) {
+                const lastId = matchedIds[matchedIds.length - 1];
+                balances[lastId] -= remainingDeduct;
+                usageStats[lastId].issued += remainingDeduct;
+                usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: remainingDeduct.toFixed(1) });
+              }
+            } else {
+              for (const id of matchedIds) {
+                if (!usageStats[id].log.some(l => l.usedFor === itemName && l.date === p.date)) {
+                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: '0.0' });
+                }
+              }
+            }
+          }
+        }
+      } else if (p.reelNos && p.useKg) {
+        const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase().replace(/^#/, '')).filter(Boolean);
+        if (pReels.length > 0) {
+          let remainingUse = parseFloat(p.useKg || 0);
+          for (let index = 0; index < pReels.length; index++) {
+            const rNo = pReels[index];
+            const matchedIds = reelNoToIds[rNo];
+            if (remainingUse <= 0 || !matchedIds) continue;
+            const isLast = (index === pReels.length - 1);
+            
+            for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
+              const id = matchedIds[idIdx];
+              if (remainingUse <= 0) break;
+              const available = balances[id] || 0;
+              let deduct = 0;
+              if (isLast) {
+                deduct = remainingUse; 
+              } else {
+                if (available <= 0) continue;
+                deduct = Math.min(available, remainingUse);
+              }
+              if (deduct > 0) {
+                balances[id] -= deduct;
+                usageStats[id].issued += deduct;
+                usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
+                remainingUse -= deduct;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const otherInventoryData = (inventory || []).filter(i => i.category && i.category !== 'Paper');
+
+  const computedPaper = paperInventoryData.map((reel) => {
+    const id = reel.id;
+    const stats = usageStats[id] || { issued: 0, log: [] };
+    const initialIssued = parseFloat(reel.initialIssuedQty || 0);
+    const issuedQty = stats.issued + initialIssued;
+    const received = parseFloat(reel.receivedQty || 0);
+    const balanceQty = (stats.issued > 0 || initialIssued > 0)
+      ? Math.max(0, received - issuedQty)
+      : (reel.balanceQty !== undefined ? parseFloat(reel.balanceQty) : Math.max(0, received - issuedQty));
+    const rate = parseFloat(reel.ratePerKg || 0);
+    const value = balanceQty * rate;
+    const systemReelId = reel.systemReelId || formatSystemReelId(reel, paperInventoryData);
+
+    const itemNamesFromLog = (stats.log || []).map(l => l.usedFor).filter(u => u && u !== 'Initial / CSV Import');
+    if (reel.lastUsedForItem && !itemNamesFromLog.includes(reel.lastUsedForItem)) {
+      itemNamesFromLog.push(reel.lastUsedForItem);
+    }
+    const utilisedForItems = [...new Set(itemNamesFromLog)];
+    const lastUsedForItem = utilisedForItems[utilisedForItems.length - 1] || reel.lastUsedForItem || '';
+
+    return { 
+      ...reel, 
+      systemReelId, 
+      issuedQty, 
+      balanceQty, 
+      value, 
+      ratePerKg: rate, 
+      usageLog: stats.log || [],
+      utilisedForItems,
+      lastUsedForItem
+    };
+  });
+
+  return [...computedPaper, ...otherInventoryData];
+}
+
 export const getSetComponents = (item, allItems = []) => {
   if (!item) return [];
 
@@ -8020,8 +8183,10 @@ export default function App() {
   }, [uid, activeCompany]);
 
   const unitOrders        = useMemo(() => orders.filter(o => matchesUnit(o.companyId)), [orders, matchesUnit]);
-  const unitInventory     = useMemo(() => inventory.filter(i => matchesUnit(i.companyId)), [inventory, matchesUnit]);
   const unitProduction    = useMemo(() => production.filter(p => matchesUnit(p.companyId)), [production, matchesUnit]);
+  const rawUnitInventory  = useMemo(() => inventory.filter(i => matchesUnit(i.companyId)), [inventory, matchesUnit]);
+  const unitInventory     = useMemo(() => computeInventoryWithUsage(rawUnitInventory, unitProduction, unitOrders), [rawUnitInventory, unitProduction, unitOrders]);
+  const allInventoryWithUsage = useMemo(() => computeInventoryWithUsage(inventory, production, orders), [inventory, production, orders]);
   const unitWipStages     = useMemo(() => wipStages.filter(w => matchesUnit(w.companyId)), [wipStages, matchesUnit]);
   const unitWastageLogs   = useMemo(() => wastageLogs.filter(w => matchesUnit(w.companyId)), [wastageLogs, matchesUnit]);
   const unitDispatches    = useMemo(() => dispatches.filter(d => matchesUnit(d.companyId)), [dispatches, matchesUnit]);
@@ -8759,7 +8924,7 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={inventory} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} companies={companies} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} onSelectOrder={(ord) => setVoiceJobCardOrder(ord)} />
+      <BarcodeScannerModal isOpen={isBarcodeModalOpen} onClose={() => setIsBarcodeModalOpen(false)} inventory={allInventoryWithUsage} orders={orders} plannedJobs={plannedJobs} production={production} wipStages={wipStages} companies={companies} advanceWipStage={advanceWipStage} addLog={addLog} onAttachReel={handleAttachReelToJob} onSelectOrder={(ord) => setVoiceJobCardOrder(ord)} />
       <CreateDirectJobModal
         isOpen={createDirectJobModalOpen}
         onClose={() => setCreateDirectJobModalOpen(false)}
@@ -8772,7 +8937,7 @@ export default function App() {
       <AttachReelModal
         isOpen={attachReelModalOpen}
         onClose={() => setAttachReelModalOpen(false)}
-        inventory={inventory}
+        inventory={allInventoryWithUsage}
         orders={orders}
         plannedJobs={plannedJobs}
         onAttachReel={handleAttachReelToJob}
@@ -8783,7 +8948,7 @@ export default function App() {
         isOpen={!!completeJobModalOrder}
         onClose={() => setCompleteJobModalOrder(null)}
         order={completeJobModalOrder}
-        inventory={inventory}
+        inventory={allInventoryWithUsage}
         onFinalizeJob={handleFinalizeJobAndIssueReels}
       />
       <PrintBarcodeLabelModal
@@ -8791,7 +8956,7 @@ export default function App() {
         onClose={() => setPrintTagData(null)}
         type={printTagData?.type}
         data={printTagData?.data}
-        allInventory={inventory}
+        allInventory={allInventoryWithUsage}
         addLog={addLog}
       />
       <UniversalCsvImportModal
@@ -8825,7 +8990,7 @@ export default function App() {
         canAccess={canAccess}
         currentUser={currentErpUser}
         orders={orders}
-        inventory={inventory}
+        inventory={allInventoryWithUsage}
         items={items}
         production={production}
         wipStages={wipStages}
@@ -8848,7 +9013,7 @@ export default function App() {
         isMobileMode={isPhone}
       />
       <main className={`apex-main ${activeTab === 'dashboard' ? 'dash-mode' : ''}`}>
-        {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={inventory} allProduction={production} />}
+        {activeTab === 'dashboard'       && canAccess(currentErpUser.role,'dashboard')       && <DashboardView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} wastageLogs={unitWastageLogs} transactions={transactions} currentUser={currentErpUser} setActiveTab={setActiveTab} activeUnitId={uid} allOrders={orders} allInventory={allInventoryWithUsage} allProduction={production} />}
         {activeTab === 'calculator'      && canAccess(currentErpUser.role,'calculator')      && <CalculatorView companies={companies} items={unitItems} addLog={addLog} currentUser={currentErpUser} activeUnitId={uid} />}
         {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} customers={unitCustomers} getColRef={getColRef} addLog={addLog} costings={costings} currentUser={currentErpUser} />}
         {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} wipStages={unitWipStages} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
@@ -12278,162 +12443,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
   };
 
   const inventoryWithUsage = useMemo(() => {
-    const paperInventoryData = (inventory || []).filter(i => !i.category || i.category === 'Paper');
-    const balances = {}; 
-    const usageStats = {}; 
-    const reelNoToIds = {}; 
-
-    const addKey = (key, reelId) => {
-      if (!key) return;
-      const clean = String(key).trim().toLowerCase();
-      if (!clean) return;
-      if (!reelNoToIds[clean]) reelNoToIds[clean] = [];
-      if (!reelNoToIds[clean].includes(reelId)) reelNoToIds[clean].push(reelId);
-      const noHash = clean.replace(/^#/, '');
-      if (noHash && noHash !== clean) {
-        if (!reelNoToIds[noHash]) reelNoToIds[noHash] = [];
-        if (!reelNoToIds[noHash].includes(reelId)) reelNoToIds[noHash].push(reelId);
-      }
-    };
-
-    for (let i = 0; i < paperInventoryData.length; i++) {
-      const reel = paperInventoryData[i];
-      const id = reel.id;
-      const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-      balances[id] = parseFloat(reel.receivedQty || 0) - initialIssued;
-      usageStats[id] = { issued: 0, log: [] };
-      
-      if (initialIssued > 0) {
-        usageStats[id].log.push({ date: reel.date || 'Unknown', usedFor: 'Initial / CSV Import', kg: initialIssued.toFixed(1) });
-      }
-
-      addKey(reel.reelNo, id);
-      addKey(reel.supplierReelNo, id);
-      addKey(reel.uniqueReelId, id);
-      addKey(reel.systemReelId, id);
-      addKey(reel.id, id);
-    }
-
-    const resolveItemName = (p) => {
-      return p.usedForItem || p.itemName || (orders && orders.find(o => o.id === p.orderId)?.itemName) || (p.jobNo ? `Job #${p.jobNo}` : '') || p.paperUsedFor || 'Production';
-    };
-
-    if (production && production.length > 0) {
-      const sortedProd = [...production].sort((a,b) => {
-        const dateA = new Date(a.date || 0).getTime();
-        const dateB = new Date(b.date || 0).getTime();
-        return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
-      });
-      
-      for (let pIdx = 0; pIdx < sortedProd.length; pIdx++) {
-        const p = sortedProd[pIdx];
-        const consumed = getConsumedReels(p);
-        const itemName = resolveItemName(p);
-        const jobTag = p.jobNo || (orders && orders.find(o => o.id === p.orderId)?.orderNo) || '';
-
-        if (consumed.length > 0) {
-          for (let cIdx = 0; cIdx < consumed.length; cIdx++) {
-            const cr = consumed[cIdx];
-            const rNo = String(cr.reelNo || '').trim().toLowerCase();
-            const cleanRNo = rNo.replace(/^#/, '');
-            let remainingDeduct = parseFloat(cr.weight || 0);
-            const matchedIds = reelNoToIds[rNo] || reelNoToIds[cleanRNo];
-            
-            if (matchedIds && matchedIds.length > 0) {
-              if (remainingDeduct > 0) {
-                for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
-                  const id = matchedIds[idIdx];
-                  if (remainingDeduct <= 0) break;
-                  const available = balances[id] || 0;
-                  if (available > 0) {
-                    const deduct = Math.min(available, remainingDeduct);
-                    balances[id] -= deduct;
-                    usageStats[id].issued += deduct;
-                    usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
-                    remainingDeduct -= deduct;
-                  }
-                }
-                if (remainingDeduct > 0) {
-                  const lastId = matchedIds[matchedIds.length - 1];
-                  balances[lastId] -= remainingDeduct;
-                  usageStats[lastId].issued += remainingDeduct;
-                  usageStats[lastId].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: remainingDeduct.toFixed(1) });
-                }
-              } else {
-                for (const id of matchedIds) {
-                  if (!usageStats[id].log.some(l => l.usedFor === itemName && l.date === p.date)) {
-                    usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: '0.0' });
-                  }
-                }
-              }
-            }
-          }
-        } else if (p.reelNos && p.useKg) {
-          const pReels = String(p.reelNos || '').split(',').map(r => r.trim().toLowerCase().replace(/^#/, '')).filter(Boolean);
-          if (pReels.length > 0) {
-            let remainingUse = parseFloat(p.useKg || 0);
-            for (let index = 0; index < pReels.length; index++) {
-              const rNo = pReels[index];
-              const matchedIds = reelNoToIds[rNo];
-              if (remainingUse <= 0 || !matchedIds) continue;
-              const isLast = (index === pReels.length - 1);
-              
-              for (let idIdx = 0; idIdx < matchedIds.length; idIdx++) {
-                const id = matchedIds[idIdx];
-                if (remainingUse <= 0) break;
-                const available = balances[id] || 0;
-                let deduct = 0;
-                if (isLast) {
-                  deduct = remainingUse; 
-                } else {
-                  if (available <= 0) continue;
-                  deduct = Math.min(available, remainingUse);
-                }
-                if (deduct > 0) {
-                  balances[id] -= deduct;
-                  usageStats[id].issued += deduct;
-                  usageStats[id].log.push({ date: p.date || 'Unknown', usedFor: itemName, jobNo: jobTag, kg: deduct.toFixed(1) });
-                  remainingUse -= deduct;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return paperInventoryData.map((reel) => {
-      const id = reel.id;
-      const stats = usageStats[id] || { issued: 0, log: [] };
-      const initialIssued = parseFloat(reel.initialIssuedQty || 0);
-      const issuedQty = stats.issued + initialIssued;
-      const received = parseFloat(reel.receivedQty || 0);
-      const balanceQty = (stats.issued > 0 || initialIssued > 0)
-        ? Math.max(0, received - issuedQty)
-        : (reel.balanceQty !== undefined ? parseFloat(reel.balanceQty) : Math.max(0, received - issuedQty));
-      const rate = parseFloat(reel.ratePerKg || 0);
-      const value = balanceQty * rate;
-      const systemReelId = reel.systemReelId || formatSystemReelId(reel, paperInventoryData);
-
-      const itemNamesFromLog = (stats.log || []).map(l => l.usedFor).filter(u => u && u !== 'Initial / CSV Import');
-      if (reel.lastUsedForItem && !itemNamesFromLog.includes(reel.lastUsedForItem)) {
-        itemNamesFromLog.push(reel.lastUsedForItem);
-      }
-      const utilisedForItems = [...new Set(itemNamesFromLog)];
-      const lastUsedForItem = utilisedForItems[utilisedForItems.length - 1] || reel.lastUsedForItem || '';
-
-      return { 
-        ...reel, 
-        systemReelId, 
-        issuedQty, 
-        balanceQty, 
-        value, 
-        ratePerKg: rate, 
-        usageLog: stats.log || [],
-        utilisedForItems,
-        lastUsedForItem
-      };
-    });
+    return computeInventoryWithUsage(inventory, production, orders);
   }, [inventory, production, orders]);
 
   // Base inventory strictly scoped to current plant, ownership, and active stock status
@@ -16083,7 +16093,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
                           Avail Stock
                         </label>
-                        <div className="w-full p-2 border border-slate-700 bg-slate-900/80 text-slate-300 rounded text-xs sm:text-sm font-mono font-bold text-center">
+                        <div className={`w-full p-2 border rounded text-xs sm:text-sm font-mono font-bold text-center ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
                           {availKg !== null ? `${availKg.toFixed(1)} KG` : '—'}
                         </div>
                       </div>
@@ -16214,22 +16224,30 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                             <span className="text-slate-300">• {matchedStock.colour || 'Kraft'}</span>
                             
                             <div className="ml-auto flex items-center gap-2">
-                              <span className="text-[11px] text-slate-400">
-                                Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong>
-                              </span>
-                              <span className="text-slate-600">→</span>
-                              <span className="text-[11px] text-amber-300">
-                                Consuming: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong>
-                              </span>
-                              <span className="text-slate-600">→</span>
-                              {computedBalanceKg !== null && computedBalanceKg <= 0 ? (
-                                <span className="inline-flex items-center gap-1 font-extrabold bg-emerald-900/80 border border-emerald-500/50 text-emerald-200 px-2 py-0.5 rounded text-[11px]">
-                                  ✓ 0.0 KG (Full Reel Consumed)
+                              {availKg !== null && availKg <= 0 ? (
+                                <span className="inline-flex items-center gap-1 font-extrabold bg-red-900/80 border border-red-500/60 text-red-200 px-2.5 py-0.5 rounded text-[11px]">
+                                  ⚠️ Depleted in Stock (0.0 KG available)
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 font-extrabold bg-amber-900/80 border border-amber-500/50 text-amber-200 px-2 py-0.5 rounded text-[11px]">
-                                  ⚡ {computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '0.0'} KG remaining
-                                </span>
+                                <>
+                                  <span className="text-[11px] text-slate-400">
+                                    Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong>
+                                  </span>
+                                  <span className="text-slate-600">→</span>
+                                  <span className="text-[11px] text-amber-300">
+                                    Consuming: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong>
+                                  </span>
+                                  <span className="text-slate-600">→</span>
+                                  {computedBalanceKg !== null && computedBalanceKg <= 0 ? (
+                                    <span className="inline-flex items-center gap-1 font-extrabold bg-emerald-900/80 border border-emerald-500/50 text-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                                      ✓ 0.0 KG (Full Reel Consumed)
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 font-extrabold bg-amber-900/80 border border-amber-500/50 text-amber-200 px-2 py-0.5 rounded text-[11px]">
+                                      ⚡ {computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '0.0'} KG remaining
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>
