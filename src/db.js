@@ -240,6 +240,7 @@ export const initDb = async () => {
       usageLog TEXT,
       uniqueId TEXT,
       notes TEXT,
+      remarks TEXT,
       stand TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS production (
@@ -421,6 +422,7 @@ export const initDb = async () => {
     "ALTER TABLE inventory ADD COLUMN lastUsedDate TEXT",
     "ALTER TABLE inventory ADD COLUMN lastUsedJobNo TEXT",
     "ALTER TABLE inventory ADD COLUMN notes TEXT",
+    "ALTER TABLE inventory ADD COLUMN remarks TEXT",
     "ALTER TABLE inventory ADD COLUMN stand TEXT",
     "ALTER TABLE customers ADD COLUMN code TEXT",
     "ALTER TABLE customers ADD COLUMN clientType TEXT",

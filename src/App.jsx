@@ -6751,7 +6751,8 @@ function ExcelPasteModal({ isOpen, onClose, onImportRows }) {
           bf: cols[4] ? cols[4].trim() : '18',
           colour: cols[5] ? cols[5].trim() : 'Kraft',
           receivedQty: cols[6] ? cols[6].trim() : '',
-          ratePerKg: cols[7] ? cols[7].trim() : ''
+          ratePerKg: cols[7] ? cols[7].trim() : '',
+          remarks: cols[8] ? cols[8].trim() : ''
         });
       }
     });
@@ -6764,13 +6765,13 @@ function ExcelPasteModal({ isOpen, onClose, onImportRows }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
-      <div className="apex-card" style={{ maxWidth: 600, width: '100%', padding: 24, background: '#fff', color: '#0f172a' }}>
+      <div className="apex-card" style={{ maxWidth: 640, width: '100%', padding: 24, background: '#fff', color: '#0f172a' }}>
         <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
           📋 Paste Excel Spreadsheet Data
         </h3>
         <p style={{ fontSize: 12, color: '#64748b', marginBottom: 14 }}>
           Copy rows from Microsoft Excel or Google Sheets and paste below. Expected order: <br />
-          <code>Reel No | Mill Name | Size (cm) | GSM | BF | Colour | Received Qty (KG) | Rate (₹)</code>
+          <code>Reel No | Mill Name | Size (cm) | GSM | BF | Colour | Received Qty (KG) | Rate (₹) | Remarks (Optional)</code>
         </p>
 
         <textarea
@@ -7043,7 +7044,8 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
       }
 
       await updateDoc(getDocRef('inventory', id), updatePayload);
-      if (addLog) addLog(`Edited Stock Reel [${reelTag}]: changed ${field === 'utilisedFor' ? 'Utilised for' : field} from "${prevVal}" to "${updatedVal}"`);
+      const logField = field === 'utilisedFor' ? 'Utilised for' : (field === 'remarks' ? 'Remarks / Reason' : field);
+      if (addLog) addLog(`Edited Stock Reel [${reelTag}]: changed ${logField} from "${prevVal}" to "${updatedVal}"`);
       setSavedCell({ id, field });
       if (activeCell && activeCell.id === id && activeCell.field === field) {
         setActiveCell(prev => prev ? { ...prev, val: updatedVal } : null);
@@ -7073,7 +7075,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
 
   const handleBatchApply = async () => {
     if (selectedIds.size === 0 || !batchModal || !batchVal.trim()) return;
-    const targetField = batchModal === 'rate' ? 'ratePerKg' : (batchModal === 'mill' ? 'millName' : 'lastUsedForItem');
+    const targetField = batchModal === 'rate' ? 'ratePerKg' : (batchModal === 'mill' ? 'millName' : (batchModal === 'remarks' ? 'remarks' : 'lastUsedForItem'));
     const val = batchModal === 'rate' ? parseFloat(batchVal) : batchVal.trim();
 
     try {
@@ -7082,7 +7084,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
       await Promise.all(Array.from(selectedIds).map(id => 
         updateDoc(getDocRef('inventory', id), { [targetField]: val, updatedAt: new Date().toISOString() })
       ));
-      if (addLog) addLog(`Batch Updated ${targetField} to "${val}" for ${selectedIds.size} reels (${reelSummaries}${selectedIds.size > 5 ? '...' : ''})`);
+      if (addLog) addLog(`Batch Updated ${targetField === 'remarks' ? 'Remarks' : targetField} to "${val}" for ${selectedIds.size} reels (${reelSummaries}${selectedIds.size > 5 ? '...' : ''})`);
       alert(`Updated ${selectedIds.size} reels successfully!`);
       setSelectedIds(new Set());
       setBatchModal(null);
@@ -7140,7 +7142,8 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
         ratePerKg: parseFloat(r.ratePerKg) || 0,
         gsm: parseFloat(r.gsm) || 0,
         bf: parseFloat(r.bf) || 18,
-        size: parseFloat(r.size) || 0
+        size: parseFloat(r.size) || 0,
+        remarks: r.remarks || ''
       });
       count++;
     }
@@ -7247,6 +7250,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
                   receivedQty: updated.balanceQty,
                   balanceQty: updated.balanceQty,
                   remnantStatus: 'returned_from_floor',
+                  remarks: updated.remarks || `Returned from floor (${updated.balanceQty} kg)`,
                   returnedDate: updated.returnedDate,
                   updatedAt: new Date().toISOString()
                 });
@@ -7321,6 +7325,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
               <button onClick={() => setBatchModal('rate')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Set Rate</button>
               <button onClick={() => setBatchModal('mill')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Set Mill</button>
               <button onClick={() => setBatchModal('utilisedFor')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px', color: '#1e40af', fontWeight: 800 }}>Set Utilised For</button>
+              <button onClick={() => setBatchModal('remarks')} className="apex-btn apex-btn-ghost apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px', color: '#92400e', fontWeight: 800 }}>Set Remarks</button>
               <button onClick={handleBatchDelete} className="apex-btn apex-btn-danger apex-btn-sm" style={{ fontSize: 11, padding: '3px 6px' }}>Delete</button>
             </div>
           )}
@@ -7395,7 +7400,8 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
               <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>O</th>
               <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>P</th>
               <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center', background: '#dbeafe', color: '#1e40af' }}>Q</th>
-              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>R</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center', background: '#fef3c7', color: '#92400e' }}>R</th>
+              <th style={{ border: '1px solid #cbd5e1', padding: '2px 0', textAlign: 'center' }}>S</th>
             </tr>
 
             {/* ROW 2: Excel Column Names Row */}
@@ -7456,6 +7462,9 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
               <th onClick={() => requestSort('utilisedFor')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', minWidth: 170, background: '#eff6ff', color: '#1d4ed8' }}>
                 Utilised for {sortConfig.key === 'utilisedFor' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
               </th>
+              <th onClick={() => requestSort('remarks')} style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'left', cursor: 'pointer', userSelect: 'none', minWidth: 180, background: '#fffbeb', color: '#92400e' }}>
+                📝 Remarks / Reason {sortConfig.key === 'remarks' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+              </th>
               <th style={{ border: '1px solid #cbd5e1', padding: '4px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                 Actions
               </th>
@@ -7464,7 +7473,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
           <tbody>
             {sortedInventory.length === 0 && (
               <tr>
-                <td colSpan="20" style={{ textAlign: 'center', padding: 32, fontStyle: 'italic', color: '#94a3b8', border: '1px solid #cbd5e1' }}>
+                <td colSpan="21" style={{ textAlign: 'center', padding: 32, fontStyle: 'italic', color: '#94a3b8', border: '1px solid #cbd5e1' }}>
                   No inventory reels found in this view. Use "Inward New Reel" or "Paste Cells" to add stock.
                 </td>
               </tr>
@@ -7784,7 +7793,79 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
                     })()}
                   </td>
 
-                  {/* Col R: Actions */}
+                  {/* Col R: REMARKS / REASON (Fully interactive & editable, with quick chips for returned reels, damage, etc.) */}
+                  <td style={{ border: '1px solid #cbd5e1', padding: 0, minWidth: 180, background: (r.remarks || r.notes) ? '#fffdf5' : '#ffffff' }}>
+                    {(() => {
+                      const isEditingThis = editingCell?.id === r.id && editingCell?.field === 'remarks';
+                      const isActiveThis = activeCell?.id === r.id && activeCell?.field === 'remarks';
+                      const isJustSaved = savedCell?.id === r.id && savedCell?.field === 'remarks';
+                      const currentVal = r.remarks || r.notes || '';
+
+                      if (isEditingThis) {
+                        return (
+                          <div style={{ position: 'relative', width: '100%', padding: '1px 2px' }}>
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder="e.g. Returned reel, damaged core..."
+                              value={editValue}
+                              onChange={e => setEditValue(e.target.value)}
+                              onBlur={() => saveCell(r.id, 'remarks')}
+                              onKeyDown={e => handleKeyDown(e, r.id, 'remarks')}
+                              style={{ width: '100%', height: 23, padding: '1px 5px', fontSize: 11.5, border: '2px solid #d97706', outline: 'none', background: '#fefce8', borderRadius: 2, fontWeight: 600 }}
+                            />
+                          </div>
+                        );
+                      }
+
+                      const isReturned = currentVal.toLowerCase().includes('return');
+                      const isDamage = currentVal.toLowerCase().includes('damag') || currentVal.toLowerCase().includes('defect') || currentVal.toLowerCase().includes('reject');
+
+                      return (
+                        <div
+                          onClick={() => selectCell(r, 'remarks', 'R', rowIndex, 'Remarks / Reason', currentVal)}
+                          onDoubleClick={() => startEdit(r.id, 'remarks', currentVal)}
+                          title="Click to select | Double-click to edit remarks / reason"
+                          style={{
+                            cursor: 'cell',
+                            padding: '2px 6px',
+                            minHeight: 22,
+                            display: 'flex',
+                            alignItems: 'center',
+                            background: isJustSaved ? '#bbf7d0' : (isActiveThis ? '#fefce8' : 'transparent'),
+                            outline: isActiveThis ? '2px solid #d97706' : 'none',
+                            outlineOffset: -1,
+                            position: 'relative',
+                            zIndex: isActiveThis ? 5 : 1,
+                            fontSize: 11.5
+                          }}
+                        >
+                          {currentVal ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {isReturned && (
+                                <span style={{ padding: '1px 5px', borderRadius: 3, background: '#fee2e2', color: '#b91c1c', fontWeight: 800, fontSize: 9.5, border: '1px solid #fca5a5', whiteSpace: 'nowrap' }}>
+                                  ↩ RETURNED
+                                </span>
+                              )}
+                              {isDamage && !isReturned && (
+                                <span style={{ padding: '1px 5px', borderRadius: 3, background: '#ffedd5', color: '#c2410c', fontWeight: 800, fontSize: 9.5, border: '1px solid #fed7aa', whiteSpace: 'nowrap' }}>
+                                  ⚠️ DEFECT
+                                </span>
+                              )}
+                              <span style={{ fontWeight: 600, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentVal}</span>
+                            </div>
+                          ) : (
+                            <span style={{ color: '#cbd5e1', fontStyle: 'italic' }}>—</span>
+                          )}
+                          {isActiveThis && (
+                            <div style={{ position: 'absolute', bottom: -1, right: -1, width: 5, height: 5, background: '#d97706', border: '1px solid #ffffff', zIndex: 6, pointerEvents: 'none' }} />
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
+
+                  {/* Col S: Actions */}
                   <td style={{ border: '1px solid #cbd5e1', padding: '2px 4px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <button
                       onClick={() => setRemnantReelItem(r)}
@@ -7904,19 +7985,34 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
       {/* Excel Paste Cells Modal */}
       <ExcelPasteModal isOpen={isPasteOpen} onClose={() => setIsPasteOpen(false)} onImportRows={handleImportPastedRows} />
 
-      {/* Batch Edit Modal (Rate, Mill, Utilised For) */}
+      {/* Batch Edit Modal (Rate, Mill, Utilised For, Remarks) */}
       {batchModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 16 }}>
-          <div className="apex-card" style={{ maxWidth: 380, width: '100%', padding: 22, background: '#fff' }}>
+          <div className="apex-card" style={{ maxWidth: 420, width: '100%', padding: 22, background: '#fff' }}>
             <h4 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>
-              Batch Set {batchModal === 'rate' ? 'Rate/KG (₹)' : (batchModal === 'mill' ? 'Mill Name' : 'Utilised For (Item)')}
+              Batch Set {batchModal === 'rate' ? 'Rate/KG (₹)' : (batchModal === 'mill' ? 'Mill Name' : (batchModal === 'remarks' ? 'Remarks / Reason' : 'Utilised For (Item)'))}
             </h4>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
               Apply this value to all <strong>{selectedIds.size}</strong> selected inventory reels simultaneously.
             </p>
+            {batchModal === 'remarks' && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                {['Returned Reel', 'Cut / Balance Return', 'Damaged Paper', 'Audit Adjustment', 'Reweighed on Floor'].map(chip => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => setBatchVal(chip)}
+                    className="apex-badge"
+                    style={{ cursor: 'pointer', background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', fontSize: 11, padding: '3px 8px' }}
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            )}
             <input
               type={batchModal === 'rate' ? 'number' : 'text'}
-              placeholder={batchModal === 'rate' ? 'e.g. 38.5' : (batchModal === 'mill' ? 'e.g. Century Pulp & Paper' : 'e.g. 3-Ply Printed Box')}
+              placeholder={batchModal === 'rate' ? 'e.g. 38.5' : (batchModal === 'mill' ? 'e.g. Century Pulp & Paper' : (batchModal === 'remarks' ? 'e.g. Returned reel from floor' : 'e.g. 3-Ply Printed Box'))}
               className="apex-input"
               value={batchVal}
               onChange={e => setBatchVal(e.target.value)}
@@ -13032,7 +13128,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
     }
   }, [allowedCompanyId]);
 
-  const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '' };
+  const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '', remarks: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
   const defaultFilters = { 
     company: '', 
@@ -13346,11 +13442,12 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
           initialIssuedQty: initIssued,
           balanceQty: balQty,
           ratePerKg: parseFloat(singleReel.ratePerKg) || 0,
+          remarks: (singleReel.remarks || '').trim(),
           category: 'Paper',
           tallySynced: false,
           updatedAt: new Date().toISOString()
         });
-        if(addLog) addLog(`Updated inventory reel [${reelTag}]: Size ${singleReel.size}cm, ${singleReel.gsm} GSM, ${singleReel.bf} BF, ${recvQty} kg, Mill: ${finalCommon.millName || '-'}`);
+        if(addLog) addLog(`Updated inventory reel [${reelTag}]: Size ${singleReel.size}cm, ${singleReel.gsm} GSM, ${singleReel.bf} BF, ${recvQty} kg, Mill: ${finalCommon.millName || '-'}${singleReel.remarks ? `, Remarks: ${singleReel.remarks}` : ''}`);
         setEditingId(null);
         setReelsInput([{...emptyReel}]);
         alert(`✓ Reel #${reelTag} updated successfully!`);
@@ -13416,6 +13513,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
             initialIssuedQty: initIssued,
             balanceQty: balQty,
             ratePerKg: parseFloat(reel.ratePerKg) || 0,
+            remarks: (reel.remarks || '').trim(),
             category: 'Paper',
             tallySynced: false,
             createdAt: nowIso,
@@ -13461,7 +13559,17 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       invoiceNo: reel.invoiceNo || '', 
       vehicleNo: reel.vehicleNo || '' 
     });
-    setReelsInput([{ reelNo: reel.reelNo || '', size: reel.size || '', gsm: reel.gsm || '', bf: reel.bf || '', colour: reel.colour || 'Kraft', receivedQty: reel.receivedQty || '', initialIssuedQty: reel.initialIssuedQty || '', ratePerKg: reel.ratePerKg || '' }]);
+    setReelsInput([{ 
+      reelNo: reel.reelNo || '', 
+      size: reel.size || '', 
+      gsm: reel.gsm || '', 
+      bf: reel.bf || '', 
+      colour: reel.colour || 'Kraft', 
+      receivedQty: reel.receivedQty || '', 
+      initialIssuedQty: reel.initialIssuedQty || '', 
+      ratePerKg: reel.ratePerKg || '',
+      remarks: reel.remarks || reel.notes || ''
+    }]);
     window.scrollTo({ top: 0, behavior: 'smooth' }); 
   };
   
@@ -14172,6 +14280,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                     <th className="p-2.5 w-28">Recv (KG) *</th>
                     <th className="p-2.5 w-28">Init. Issue (KG)</th>
                     <th className="p-2.5 w-28">Rate (₹/Kg) *</th>
+                    <th className="p-2.5 min-w-[150px]">Remarks / Reason</th>
                     <th className="p-2.5 w-12 text-center">✕</th>
                   </tr>
                 </thead>
@@ -14227,6 +14336,15 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                       </td>
                       <td className="p-1.5">
                         <input required type="number" step="0.01" placeholder="₹" className="w-full p-1.5 border border-stone-300 rounded text-xs font-bold font-mono" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} />
+                      </td>
+                      <td className="p-1.5">
+                        <input
+                          type="text"
+                          placeholder="e.g. Returned reel, damaged core..."
+                          className="w-full p-1.5 border border-amber-300 bg-amber-50/40 rounded text-xs"
+                          value={reel.remarks || ''}
+                          onChange={e => handleReelChange(idx, 'remarks', e.target.value)}
+                        />
                       </td>
                       <td className="p-1.5 text-center">
                         {!editingId && reelsInput.length > 1 && (
@@ -14841,12 +14959,13 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                     <th onClick={() => requestSort('balanceQty')} style={{ cursor: 'pointer', userSelect: 'none' }}>Balance {sortConfig.key === 'balanceQty' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     <th onClick={() => requestSort('ratePerKg')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rate &amp; Value {sortConfig.key === 'ratePerKg' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     <th onClick={() => requestSort('utilisedFor')} style={{ cursor: 'pointer', userSelect: 'none', minWidth: 170 }}>Utilised For &amp; History {sortConfig.key === 'utilisedFor' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                    <th onClick={() => requestSort('remarks')} style={{ cursor: 'pointer', userSelect: 'none', minWidth: 150 }}>Remarks / Reason {sortConfig.key === 'remarks' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                     {role === 'admin' && <th style={{ textAlign: 'right' }}>Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {sortedFilteredInventory.length === 0 && (
-                    <tr><td colSpan="12" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontStyle: 'italic' }}>No inventory records match the current filters.</td></tr>
+                    <tr><td colSpan="13" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontStyle: 'italic' }}>No inventory records match the current filters.</td></tr>
                   )}
                   {pagedFilteredInventory.map(reel => {
                     const isAvailable = (reel.balanceQty || 0) > 0;
@@ -14935,6 +15054,29 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                                     {(reel.usageLog || []).length > 3 && <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>+{(reel.usageLog||[]).length - 3} more</span>}
                                   </div>
                                 )}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td>
+                          {(() => {
+                            const val = reel.remarks || reel.notes || '';
+                            if (!val) return <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 11 }}>—</span>;
+                            const isRet = val.toLowerCase().includes('return');
+                            const isDam = val.toLowerCase().includes('damag') || val.toLowerCase().includes('defect') || val.toLowerCase().includes('reject');
+                            return (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                                {isRet && (
+                                  <span style={{ padding: '1px 5px', borderRadius: 3, background: '#fee2e2', color: '#b91c1c', fontWeight: 800, fontSize: 9.5, border: '1px solid #fca5a5' }}>
+                                    ↩ RETURNED
+                                  </span>
+                                )}
+                                {isDam && !isRet && (
+                                  <span style={{ padding: '1px 5px', borderRadius: 3, background: '#ffedd5', color: '#c2410c', fontWeight: 800, fontSize: 9.5, border: '1px solid #fed7aa' }}>
+                                    ⚠️ DEFECT
+                                  </span>
+                                )}
+                                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{val}</span>
                               </div>
                             );
                           })()}
@@ -31643,6 +31785,7 @@ function ReturnRemnantModal({ isOpen, onClose, reel, onSaveReturn, onPrintBarcod
     if (reel) {
       setReturnWeight(String(reel.balanceQty || reel.receivedQty || ''));
       setReturnLocation(reel.location || 'Bay-01 Remnants');
+      setReturnNotes(reel.remarks || '');
     }
   }, [reel]);
 
@@ -31662,6 +31805,7 @@ function ReturnRemnantModal({ isOpen, onClose, reel, onSaveReturn, onPrintBarcod
       balanceQty: retKg,
       location: returnLocation,
       remnantMeters: linMeters,
+      remarks: returnNotes.trim() ? returnNotes.trim() : `Returned reel (${retKg} kg)`,
       isRemnant: true,
       lastReturnedAt: new Date().toISOString()
     });
@@ -31721,6 +31865,38 @@ function ReturnRemnantModal({ isOpen, onClose, reel, onSaveReturn, onPrintBarcod
                 onChange={e => setReturnLocation(e.target.value)}
                 placeholder="Bay-01 Remnants"
               />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label className="apex-label" style={{ fontSize: 11, fontWeight: 800 }}>Remarks / Reason for Return</label>
+            <input
+              type="text"
+              className="apex-input"
+              value={returnNotes}
+              onChange={e => setReturnNotes(e.target.value)}
+              placeholder="e.g. Returned reel, Job complete, Cut balance return, Damaged core"
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+              {['Returned reel', 'Returned from floor', 'Cut / Remnant Return', 'Job complete balance', 'Damaged paper / core'].map(preset => (
+                <button
+                  type="button"
+                  key={preset}
+                  onClick={() => setReturnNotes(preset)}
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '3px 8px',
+                    borderRadius: 4,
+                    border: '1px solid #cbd5e1',
+                    background: returnNotes === preset ? '#eff6ff' : '#f8fafc',
+                    color: returnNotes === preset ? '#1d4ed8' : '#475569',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {preset}
+                </button>
+              ))}
             </div>
           </div>
 
