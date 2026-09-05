@@ -6405,12 +6405,14 @@ function BarcodeScannerModal({ isOpen, onClose, inventory = [], orders = [], pla
       });
     });
     (orders || []).filter(o => !['completed','delivered','cancelled'].includes((o.status || '').toLowerCase()) && !seen.has(o.id)).forEach(o => {
-      list.push({
-        id: o.id,
-        jobNo: o.jobNo || (o.orderNo ? (o.orderNo.startsWith('JC-') ? o.orderNo : `JC-${o.orderNo.replace(/^ORD-?/i, '')}`) : `JC-${(o.id || '').slice(-6).toUpperCase()}`),
-        itemName: o.itemName || o.Item_Name || 'General Production',
-        orderQty: o.orderQty || 0
-      });
+        const oNo = o.orderNo !== undefined && o.orderNo !== null ? String(o.orderNo) : '';
+        const jNo = o.jobNo ? String(o.jobNo) : (oNo ? (oNo.startsWith('JC-') ? oNo : `JC-${oNo.replace(/^ORD-?/i, '')}`) : `JC-${String(o.id || '').slice(-6).toUpperCase()}`);
+        list.push({
+          id: o.id,
+          jobNo: jNo,
+          itemName: o.itemName || o.Item_Name || 'General Production',
+          orderQty: o.orderQty || 0
+        });
     });
     return list;
   }, [plannedJobs, orders]);
@@ -9474,7 +9476,11 @@ export default function App() {
         {activeTab === 'costing'         && canAccess(currentErpUser.role,'costing')         && <CostingView items={unitItems} companies={companies} customers={unitCustomers} getColRef={getColRef} addLog={addLog} costings={costings} currentUser={currentErpUser} />}
         {activeTab === 'planning'        && canAccess(currentErpUser.role,'planning')        && <PlanningView orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} production={unitProduction} wipStages={unitWipStages} currentUser={currentErpUser} activeUnitId={uid} getDocRef={getDocRef} getColRef={getColRef} addLog={addLog} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} onOpenCreateJobModal={() => setCreateDirectJobModalOpen(true)} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} planningQueues={planningQueues} onSavePlanningQueues={savePlanningQueues} />}
         {activeTab === 'orders'          && canAccess(currentErpUser.role,'orders')          && <OrdersView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} onStartProduction={(order) => { setProductionPrefill(order); setActiveTab('production'); }} wipStages={unitWipStages} plannedJobs={plannedJobs} onSavePlannedJobs={savePlannedJobs} />}
-        {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && <ProductionView inventory={unitInventory} production={unitProduction} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />}
+        {activeTab === 'production'      && canAccess(currentErpUser.role,'production')      && (
+          <ViewErrorBoundary viewName="Production Log">
+            <ProductionView inventory={unitInventory} production={unitProduction} allProduction={production} orders={unitOrders} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} productionPrefill={productionPrefill} onClearPrefill={() => setProductionPrefill(null)} activeUnitId={uid} setActiveUnitId={setActiveUnitId} autoSetUnit={autoSetUnit} onAttachReel={handleAttachReelToJob} wipStages={unitWipStages} plannedJobs={plannedJobs} />
+          </ViewErrorBoundary>
+        )}
         {activeTab === 'wip_tracker'     && canAccess(currentErpUser.role,'wip_tracker')     && <WIPTrackerView wipStages={unitWipStages} orders={unitOrders} production={unitProduction} inventory={unitInventory} companies={companies} customers={unitCustomers} items={unitItems} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} onAdvance={advanceWipStage} onMoveBack={moveWipStageBack} />}
         {activeTab === 'finished_goods'  && canAccess(currentErpUser.role,'finished_goods')  && <FinishedGoodsView orders={unitOrders} production={unitProduction} items={unitItems} companies={companies} customers={unitCustomers} addLog={addLog} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} />}
         {(activeTab === 'wastage' || activeTab === 'fuel_gum') && canAccess(currentErpUser.role,'wastage') && <FuelGumView wastageLogs={unitWastageLogs} orders={unitOrders} companies={companies} production={unitProduction} addLog={addLog} role={currentErpUser.role} getColRef={getColRef} getDocRef={getDocRef} currentUser={currentErpUser} activeUnitId={uid} autoSetUnit={autoSetUnit} />}
@@ -9539,6 +9545,57 @@ export default function App() {
       </nav>
     </div>
   );
+}
+
+class ViewErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("View Error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ maxWidth: 800, margin: '40px auto', padding: 28, background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
+          <h3 style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>Unable to display {this.props.viewName || 'this section'}</h3>
+          <p style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>An unexpected error occurred while rendering. You can reload the application or reset stored drafts.</p>
+          <div style={{ background: '#f8fafc', padding: 12, borderRadius: 8, fontSize: 12, fontFamily: 'monospace', color: '#ef4444', marginBottom: 20, textAlign: 'left', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+            {this.state.error?.message || String(this.state.error)}
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="apex-btn apex-btn-primary"
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.reload();
+              }}
+            >
+              ↻ Reload Application
+            </button>
+            <button
+              className="apex-btn apex-btn-secondary"
+              onClick={() => {
+                try {
+                  const keys = Object.keys(localStorage).filter(k => k.startsWith('apex_prod_') || k.startsWith('apex_quickEntry'));
+                  keys.forEach(k => localStorage.removeItem(k));
+                } catch(e) {}
+                this.setState({ hasError: false, error: null });
+              }}
+            >
+              Clear Production Draft &amp; Try Again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function NavButton({ icon, label, isActive, onClick }) {
@@ -16418,7 +16475,7 @@ export const calculateTheoreticalReelKg = ({
 };
 
 // --- PRODUCTION VIEW ---
-function ProductionView({ inventory = [], production = [], orders = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, productionPrefill, onClearPrefill, activeUnitId, autoSetUnit, onAttachReel, wipStages = [], plannedJobs = [] }) {
+function ProductionView({ inventory = [], production = [], allProduction = [], orders = [], items = [], companies = [], customers = [], addLog, role, getColRef, getDocRef, currentUser, productionPrefill, onClearPrefill, activeUnitId, setActiveUnitId, autoSetUnit, onAttachReel, wipStages = [], plannedJobs = [] }) {
   const [substitutionOverride, setSubstitutionOverride] = useState(false);
   const [substitutionReason, setSubstitutionReason] = useState('');
   const [gateModalQuery, setGateModalQuery] = useState(null);
@@ -16635,9 +16692,9 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             const type = itm.itemType || itm.Item_Type || 'Box';
             const upsL = parseFloat(j?.upsLength || 1);
             const upsW = parseFloat(j?.upsWidth || 1);
-            const { deckle } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, upsL, upsW);
-            if (deckle > 0) {
-              setDeckleRunReels(reels => reels.map(r => (!r.size ? { ...r, size: String(deckle) } : r)));
+            const { deckleWidthMm } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, upsL, upsW);
+            if (deckleWidthMm > 0) {
+              setDeckleRunReels(reels => reels.map(r => (!r.size ? { ...r, size: String(deckleWidthMm) } : r)));
             }
           }
         }
@@ -16651,11 +16708,12 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
 
   const getJobCardNo = (job) => {
     if (!job) return '';
-    if (job.jobNo) return job.jobNo;
-    if (job.orderNo) {
-      return job.orderNo.startsWith('JC-') ? job.orderNo : `JC-${job.orderNo.replace(/^ORD-?/i, '')}`;
+    if (job.jobNo) return String(job.jobNo);
+    if (job.orderNo !== undefined && job.orderNo !== null && job.orderNo !== '') {
+      const oNo = String(job.orderNo);
+      return oNo.startsWith('JC-') ? oNo : `JC-${oNo.replace(/^ORD-?/i, '')}`;
     }
-    return `JC-${(job.id || '').slice(-6).toUpperCase()}`;
+    return `JC-${String(job.id || '').slice(-6).toUpperCase()}`;
   };
 
   // Build unified Active Production Job Cards list (STRICTLY actual jobs created by production)
@@ -16669,11 +16727,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const linkedOrder = orders.find(o => o.id === j.orderId);
       const comp = companies.find(c => c.id === (j.companyId || linkedOrder?.companyId))?.name || 'Unit';
       const custName = j.customerName || linkedOrder?.customerName || 'Direct / Internal';
-      const jcNo = j.jobNo || `JC-${(j.id || '').slice(-6).toUpperCase()}`;
+      const jcNo = j.jobNo ? String(j.jobNo) : `JC-${String(j.id || '').slice(-6).toUpperCase()}`;
 
       seenJobIds.add(j.id);
       if (j.orderId) seenJobIds.add(j.orderId);
-      if (jcNo) seenJobNos.add(jcNo.toUpperCase());
+      if (jcNo) seenJobNos.add(String(jcNo).toUpperCase());
 
       list.push({
         id: j.id,
@@ -16706,7 +16764,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const comp = companies.find(c => c.id === o.companyId)?.name || 'Unit';
       const jcNo = getJobCardNo(o);
       seenJobIds.add(o.id);
-      seenJobNos.add(jcNo.toUpperCase());
+      if (jcNo) seenJobNos.add(String(jcNo).toUpperCase());
 
       list.push({
         id: o.id,
@@ -16769,8 +16827,8 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     return currentMonthProdRecords.reduce((sum, p) => {
       const consumed = getConsumedReels(p);
       const cutSum = consumed
-        .filter(r => r.isCutReel || String(r.reelNo || '').toUpperCase().startsWith('CUT-') || String(r.reelNo || '').toUpperCase().startsWith('BAL-'))
-        .reduce((cSum, r) => cSum + (parseFloat(r.weight || r.consumedKg || 0)), 0);
+        .filter(r => r && typeof r === 'object' && (r.isCutReel || String(r.reelNo || '').toUpperCase().startsWith('CUT-') || String(r.reelNo || '').toUpperCase().startsWith('BAL-')))
+        .reduce((cSum, r) => cSum + (parseFloat(r.weight || r.consumedKg || 0) || 0), 0);
       return sum + cutSum;
     }, 0);
   }, [currentMonthProdRecords]);
@@ -16851,7 +16909,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     if (!Array.isArray(attachedList) || attachedList.length === 0) {
       return createDefaultReels();
     }
-    return attachedList.map((att, idx) => {
+    const safeList = attachedList.filter(att => att && typeof att === 'object');
+    if (safeList.length === 0) {
+      return createDefaultReels();
+    }
+    return safeList.map((att, idx) => {
       const invMatch = inventory.find(i => 
         i.id === att.reelId || 
         (att.supplierReelNo && (String(i.reelNo || '').trim().toLowerCase() === String(att.supplierReelNo).trim().toLowerCase() || String(i.supplierReelNo || '').trim().toLowerCase() === String(att.supplierReelNo).trim().toLowerCase())) ||
@@ -16859,14 +16921,14 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       );
       const rNo = att.supplierReelNo || invMatch?.supplierReelNo || invMatch?.reelNo || att.systemReelId || '';
       const rWeight = (invMatch && invMatch.balanceQty !== undefined ? invMatch.balanceQty : (invMatch?.receivedQty || att.initialLoadedKg)) || '';
-      let defaultStand = att.stand;
+      let defaultStand = att.stand ? String(att.stand) : '';
       if (!defaultStand) {
         defaultStand = idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : (idx === 2 ? 'Backing' : 'Center'));
       }
       return {
         id: 'reel_' + idx + '_' + Date.now(),
         isCutReel: false,
-        reelNo: rNo,
+        reelNo: String(rNo),
         weight: rWeight ? String(rWeight) : '',
         stand: defaultStand,
         size: invMatch?.size ? String(invMatch.size) : '',
@@ -16904,8 +16966,8 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       if (itm) {
         const dims = getItemDimensions(itm);
         const type = itm.itemType || itm.Item_Type || 'Box';
-        const { deckle } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, selectedJob.ups || 1, 1);
-        if (deckle > 0) calcDeckle = String(deckle);
+        const { deckleWidthMm } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, selectedJob.ups || 1, 1);
+        if (deckleWidthMm > 0) calcDeckle = String(deckleWidthMm);
       }
       setConsumedReels([
         { id: 'reel_top', stand: 'Top', isCutReel: false, reelNo: '', size: calcDeckle, gsm: '', bf: '', quality: '', weight: '', customBalance: '', availKg: null, notes: '' },
@@ -16954,7 +17016,20 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         if (parsed && parsed.newRecord && parsed.newRecord.orderId && draftAge < DRAFT_MAX_AGE_MS) {
           setNewRecord(parsed.newRecord);
           if (Array.isArray(parsed.consumedReels) && parsed.consumedReels.length > 0) {
-            setConsumedReels(parsed.consumedReels);
+            setConsumedReels(parsed.consumedReels.map((r, idx) => ({
+              id: r?.id || 'reel_' + idx + '_' + Date.now(),
+              stand: r?.stand || (idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : (idx === 2 ? 'Backing' : 'Center'))),
+              isCutReel: Boolean(r?.isCutReel),
+              reelNo: String(r?.reelNo || ''),
+              weight: r?.weight !== undefined && r?.weight !== null ? String(r.weight) : '',
+              size: r?.size !== undefined && r?.size !== null ? String(r.size) : '',
+              gsm: r?.gsm !== undefined && r?.gsm !== null ? String(r.gsm) : '',
+              bf: r?.bf !== undefined && r?.bf !== null ? String(r.bf) : '',
+              quality: r?.quality || '',
+              notes: r?.notes || '',
+              availKg: r?.availKg !== undefined ? r.availKg : null,
+              customBalance: r?.customBalance || ''
+            })));
           }
         } else if (draftAge >= DRAFT_MAX_AGE_MS) {
           // Draft is stale — clear it so the form starts fresh
@@ -16966,7 +17041,8 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
 
   // 2. Draft Persistence: Save in-progress state to localStorage so switching tabs NEVER loses data
   useEffect(() => {
-    if (newRecord.orderId || consumedReels.some(r => r.reelNo || r.weight) || newRecord.linerQty) {
+    const hasReels = Array.isArray(consumedReels) && consumedReels.some(r => r && (r.reelNo || r.weight));
+    if (newRecord.orderId || hasReels || newRecord.linerQty) {
       try {
         localStorage.setItem(PROD_DRAFT_KEY, JSON.stringify({
           newRecord,
@@ -17741,9 +17817,59 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   };
 
   const handleEdit = (record) => {
-    setEditingId(record.id); setNewRecord(record);
-    if (getConsumedReels(record).length > 0) setConsumedReels(record.consumedReels);
-    else if (record.reelNos) setConsumedReels([{ stand: 'Top', reelNo: record.reelNos, weight: record.useKg, size: '', gsm: '', bf: '' }]);
+    if (!record) return;
+    setEditingId(record.id);
+    setNewRecord({
+      date: record.date || new Date().toISOString().split('T')[0],
+      orderId: record.orderId || '',
+      companyId: record.companyId || (allowedCompanyId !== 'all' ? allowedCompanyId : ''),
+      paperUsedFor: record.paperUsedFor || 'Paper',
+      usedForItem: record.usedForItem || '',
+      linerQty: record.linerQty !== undefined && record.linerQty !== null ? String(record.linerQty) : '',
+      wasteSheetsKg: record.wasteSheetsKg !== undefined && record.wasteSheetsKg !== null ? String(record.wasteSheetsKg) : '',
+      numberOfUps: String(record.numberOfUps || '1'),
+      commonUps: record.commonUps || '',
+      smallUps: record.smallUps || '',
+      millName: record.millName || '',
+      shift: record.shift || '',
+      operatorName: record.operatorName || '',
+      notes: record.notes || ''
+    });
+
+    const parsedReels = getConsumedReels(record);
+    if (parsedReels.length > 0) {
+      setConsumedReels(parsedReels.map((r, idx) => ({
+        id: r?.id || 'reel_' + idx + '_' + Date.now(),
+        stand: r?.stand || (idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : (idx === 2 ? 'Backing' : 'Center'))),
+        isCutReel: Boolean(r?.isCutReel),
+        reelNo: String(r?.reelNo || ''),
+        weight: r?.weight !== undefined && r?.weight !== null ? String(r.weight) : (r?.consumedKg !== undefined && r?.consumedKg !== null ? String(r.consumedKg) : ''),
+        size: r?.size !== undefined && r?.size !== null ? String(r.size) : '',
+        gsm: r?.gsm !== undefined && r?.gsm !== null ? String(r.gsm) : '',
+        bf: r?.bf !== undefined && r?.bf !== null ? String(r.bf) : '',
+        quality: r?.quality || '',
+        notes: r?.notes || '',
+        availKg: r?.availKg !== undefined ? r.availKg : null,
+        customBalance: r?.customBalance || ''
+      })));
+    } else if (record.reelNos) {
+      setConsumedReels([{
+        id: 'reel_top',
+        stand: 'Top',
+        isCutReel: false,
+        reelNo: String(record.reelNos),
+        weight: String(record.useKg || ''),
+        size: '',
+        gsm: '',
+        bf: '',
+        quality: '',
+        notes: '',
+        availKg: null,
+        customBalance: ''
+      }]);
+    } else {
+      setConsumedReels(createDefaultReels());
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -19344,7 +19470,23 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
 
       {sortedCompanyIds.length === 0 && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-stone-200 text-center text-stone-500">
-          No production records found.
+          <p className="font-semibold text-stone-700 mb-1">
+            No production records found for {companies.find(c => c.id === activeUnitId)?.name || 'the selected unit'}.
+          </p>
+          {allProduction && allProduction.length > 0 && setActiveUnitId && (
+            <div className="mt-4">
+              <p className="text-xs text-stone-400 mb-3">
+                There are {allProduction.length} production record{allProduction.length > 1 ? 's' : ''} recorded across other manufacturing units.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveUnitId(null)}
+                className="apex-btn apex-btn-secondary inline-flex items-center gap-2 text-xs"
+              >
+                🏢 View All Units (Consolidated Log)
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -19385,23 +19527,25 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         {record.orderId && (() => { const lj = orders.find(o => o.id === record.orderId); const jcNo = lj ? getJobCardNo(lj) : null; return jcNo ? <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold font-mono">Job: {jcNo}</span> : null; })()}
                       </td>
                       <td className="p-4">
-                        <p className="font-medium text-stone-800">{record.millName}</p>
-                        {record.consumedReels && record.consumedReels.length > 0 ? (
+                        <p className="font-medium text-stone-800">{record.millName || ''}</p>
+                        {getConsumedReels(record).length > 0 ? (
                            <ul className="text-xs text-stone-600 mt-1 space-y-1">
                              {getConsumedReels(record).map((r, i) => {
+                               if (!r || typeof r !== 'object') return null;
                                const isCut = r.isCutReel || String(r.reelNo || '').toUpperCase().startsWith('CUT-') || String(r.reelNo || '').toUpperCase().startsWith('BAL-');
-                               const stand = r.stand || (i === 0 ? 'Top' : (i === 1 ? 'Fluting' : (i === 2 ? 'Backing' : '')));
+                               const rawStand = r.stand ? String(r.stand).trim() : (i === 0 ? 'Top' : (i === 1 ? 'Fluting' : (i === 2 ? 'Backing' : '')));
+                               const standUpper = rawStand.toUpperCase();
                                const standBadgeStyle = 
-                                 stand === 'Top' ? 'bg-blue-100 text-blue-800 border-blue-300' :
-                                 stand === 'Fluting' ? 'bg-amber-100 text-amber-900 border-amber-400 font-black' :
-                                 stand === 'Backing' || stand === 'Bottom' ? 'bg-indigo-100 text-indigo-800 border-indigo-300' :
+                                 standUpper === 'TOP' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                                 standUpper === 'FLUTING' ? 'bg-amber-100 text-amber-900 border-amber-400 font-black' :
+                                 (standUpper === 'BACKING' || standUpper === 'BOTTOM') ? 'bg-indigo-100 text-indigo-800 border-indigo-300' :
                                  'bg-teal-100 text-teal-800 border-teal-300';
 
                                return (
                                  <li key={i} className="flex items-center gap-1.5 flex-wrap py-0.5">
-                                   {stand && (
+                                   {rawStand && (
                                      <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-black uppercase border tracking-wider font-sans ${standBadgeStyle}`}>
-                                       {stand === 'Bottom' ? 'BACKING' : stand.toUpperCase()}
+                                       {standUpper === 'BOTTOM' ? 'BACKING' : standUpper}
                                      </span>
                                    )}
                                    {isCut ? (
@@ -19409,7 +19553,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                                        ✂️ {r.reelNo || 'Cut Roll'}
                                      </span>
                                    ) : (
-                                     <span className="font-bold text-stone-900 font-mono text-xs">{r.reelNo}</span>
+                                     <span className="font-bold text-stone-900 font-mono text-xs">{r.reelNo || '-'}</span>
                                    )}
                                    {(r.gsm || r.bf) && (
                                      <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded font-mono">
@@ -19425,7 +19569,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                              })}
                            </ul>
                         ) : (
-                           <p className="text-xs text-stone-500 font-mono">Reels: {record.reelNos || record.reelNo}</p>
+                           <p className="text-xs text-stone-500 font-mono">Reels: {record.reelNos || record.reelNo || '-'}</p>
                         )}
                       </td>
                       <td className="p-4 font-bold text-blue-700">{record.paperUsedFor}</td>
@@ -19478,7 +19622,8 @@ function JobCardViewModal({ order, job, item, company, customer, onClose, onDown
   const itemName = targetItem.name || targetItem.Item_Name || targetOrder.itemName || 'Box Item';
   const poNo = targetOrder.poNumber || targetOrder.poNo || job?.poNumber || 'N/A';
   const orderDate = targetOrder.orderDate || new Date().toISOString().split('T')[0];
-  const jcNo = job?.jobNo || (targetOrder.orderNo ? (targetOrder.orderNo.startsWith('JC-') ? targetOrder.orderNo : `JC-${String(targetOrder.orderNo).replace(/^ORD-?/i, '')}`) : `JC-${(targetOrder.id || '').substring(0, 8).toUpperCase()}`);
+  const targetOrderNo = targetOrder.orderNo !== undefined && targetOrder.orderNo !== null ? String(targetOrder.orderNo) : '';
+  const jcNo = job?.jobNo ? String(job.jobNo) : (targetOrderNo ? (targetOrderNo.startsWith('JC-') ? targetOrderNo : `JC-${targetOrderNo.replace(/^ORD-?/i, '')}`) : `JC-${String(targetOrder.id || '').substring(0, 8).toUpperCase()}`);
 
   const type = targetItem.itemType || targetItem.Item_Type || 'Box';
   const isPpc = type === 'PPC' || type === 'Partition';
