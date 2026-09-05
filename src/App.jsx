@@ -22018,6 +22018,9 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   const [editingRecordId, setEditingRecordId] = useState(null);
   const [editRecordForm, setEditRecordForm] = useState({ itemName: '', openingFgQty: '', rate: '', plannedUps: '', orderQty: '' });
   const [showDeletedPanel, setShowDeletedPanel] = useState(false);
+  const [showAddFgModal, setShowAddFgModal] = useState(false);
+  const [addFgForm, setAddFgForm] = useState({ companyId: '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' });
+  const [addFgSaving, setAddFgSaving] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [unitFilter, setUnitFilter] = useState('all');
@@ -22346,6 +22349,41 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     } catch (err) {
       console.error(err);
       alert('Failed to restore record: ' + err.message);
+    }
+  };
+
+  const handleAddFgRecord = async (e) => {
+    e.preventDefault();
+    if (!addFgForm.companyId) return alert('Please select a unit/company.');
+    if (!addFgForm.itemName.trim()) return alert('Please enter an item name.');
+    const qty = parseInt(addFgForm.openingFgQty) || 0;
+    if (qty <= 0) return alert('Please enter a valid quantity.');
+    setAddFgSaving(true);
+    try {
+      const newOrder = {
+        companyId: addFgForm.companyId,
+        itemName: addFgForm.itemName.trim(),
+        openingFgQty: qty,
+        rate: parseFloat(addFgForm.rate) || 0,
+        plannedUps: addFgForm.plannedUps || '1',
+        orderQty: parseInt(addFgForm.orderQty) || qty,
+        status: 'Completed',
+        producedQty: 0,
+        dispatchedQty: 0,
+        dispatchHistory: [],
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.displayName || currentUser?.name || 'Admin',
+        manualEntry: true,
+      };
+      await addDoc(getColRef('orders'), newOrder);
+      addLog(`Manually added FG record: ${addFgForm.itemName.trim()} (${qty} pcs)`);
+      setAddFgForm({ companyId: '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' });
+      setShowAddFgModal(false);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to add record: ' + err.message);
+    } finally {
+      setAddFgSaving(false);
     }
   };
 
@@ -22768,12 +22806,82 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
 
   return (
     <div className="max-w-6xl mx-auto pb-12">
+
+      {/* ── ADD FG RECORD MODAL ── */}
+      {showAddFgModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl border border-stone-200 w-full max-w-lg mx-4 overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-stone-100 bg-stone-50">
+              <h3 className="text-base font-bold text-stone-800">➕ Add Finished Goods Record</h3>
+              <button onClick={() => setShowAddFgModal(false)} className="text-stone-400 hover:text-stone-700 text-xl font-bold leading-none">×</button>
+            </div>
+            <form onSubmit={handleAddFgRecord} className="p-6 space-y-4">
+              <p className="text-xs text-stone-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Use this to manually add a stock entry when production sync fails or for opening balance adjustments.
+              </p>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">Unit / Company *</label>
+                <select required className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.companyId} onChange={e => setAddFgForm({...addFgForm, companyId: e.target.value})}>
+                  <option value="">— Select Unit —</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">Item / Product Name *</label>
+                <input type="text" required placeholder="e.g. 5 Ply Sheet-45*75" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.itemName} onChange={e => setAddFgForm({...addFgForm, itemName: e.target.value})} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Stock Quantity (pcs) *</label>
+                  <input type="number" required min="1" placeholder="e.g. 1015" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.openingFgQty} onChange={e => setAddFgForm({...addFgForm, openingFgQty: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Rate (₹ per box)</label>
+                  <input type="number" step="0.01" min="0" placeholder="0.00" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.rate} onChange={e => setAddFgForm({...addFgForm, rate: e.target.value})} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Planned Ups</label>
+                  <input type="number" min="1" placeholder="1" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.plannedUps} onChange={e => setAddFgForm({...addFgForm, plannedUps: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Order Qty (pcs)</label>
+                  <input type="number" min="0" placeholder="Same as stock qty" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.orderQty} onChange={e => setAddFgForm({...addFgForm, orderQty: e.target.value})} />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button type="submit" disabled={addFgSaving} className="flex-1 bg-stone-900 hover:bg-stone-800 disabled:opacity-60 text-white py-2.5 rounded-lg font-bold text-sm transition">
+                  {addFgSaving ? 'Saving…' : '✓ Add to Finished Goods'}
+                </button>
+                <button type="button" onClick={() => setShowAddFgModal(false)} className="px-6 bg-stone-100 hover:bg-stone-200 text-stone-700 py-2.5 rounded-lg font-medium text-sm transition">
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
         <div className="flex gap-2">
           {currentUser?.role === 'admin' && selectedOrderIds.length > 0 && (
             <button onClick={handleBulkDelete} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm mr-2 cursor-pointer">
               <Trash2 className="w-4 h-4" /> Bulk Delete ({selectedOrderIds.length})
+            </button>
+          )}
+          {currentUser?.role === 'admin' && (
+            <button
+              onClick={() => { setAddFgForm({ companyId: visibleCompanies[0]?.id || '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' }); setShowAddFgModal(true); }}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm cursor-pointer"
+            >
+              <span className="text-base leading-none">+</span> Add FG Record
             </button>
           )}
           <label className="flex items-center gap-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg hover:bg-blue-200 font-medium text-sm transition cursor-pointer shadow-sm">
