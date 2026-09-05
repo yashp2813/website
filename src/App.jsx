@@ -9626,9 +9626,13 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
   // Filter inventory, production, orders strictly by activeUnitId if set
   const filteredInventory = activeUnitId ? inventory.filter(i => !i.companyId || i.companyId === 'all' || i.companyId === activeUnitId) : inventory;
   const filteredProduction = activeUnitId ? production.filter(p => !p.companyId || p.companyId === 'all' || p.companyId === activeUnitId) : production;
-  const filteredOrders = activeUnitId ? orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === activeUnitId) : orders;
   
-  // Strict WIP stages matching WIPTrackerView
+  // Safe helper to identify deleted orders
+  const isOrderDeleted = (o) => o?.deleted === true || o?.deleted === 1 || o?.deleted === '1' || o?.deleted === 'true';
+
+  // Active non-deleted orders matching the selected unit
+  const filteredOrders = (activeUnitId ? orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === activeUnitId) : orders).filter(o => !isOrderDeleted(o));
+  
   // Strict WIP stages matching WIPTrackerView
   const activeWipList = activeUnitId ? wipStages.filter(w => !w.companyId || w.companyId === 'all' || w.companyId === activeUnitId) : wipStages;
 
@@ -9637,19 +9641,24 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
   const totalStockKg = filteredInventory.reduce((s, r) => s + Math.max(0, parseFloat(r.receivedQty || 0) - parseFloat(r.initialIssuedQty || 0)), 0);
   const totalStockVal = filteredInventory.reduce((s, r) => s + (Math.max(0, parseFloat(r.receivedQty || 0) - parseFloat(r.initialIssuedQty || 0)) * parseFloat(r.ratePerKg || 0)), 0);
 
-  // 2. Finished Goods Stock (Value & KG)
+  // 2. Finished Goods Stock (Value & KG) — Strictly unified with FinishedGoodsView logic
   let totalFgPcs = 0;
   let totalFgWeightKg = 0;
   let totalFgVal = 0;
   let activeFgCount = 0;
 
   filteredOrders.forEach(order => {
-    const pLogs = filteredProduction.filter(p => p.orderId === order.id);
-    const item = items.find(i => i.id === order.itemId || i.name === order.itemName || i.Item_Name === order.itemName);
+    const pLogs = production.filter(p => p.orderId === order.id);
+    const item = items.find(i => i.id === order.itemId || (order.itemName && (i.name === order.itemName || i.Item_Name === order.itemName)));
     const isPpcOrder = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+    const isSheet = isCorrugatedSheetItem(item, order);
     
     let producedQty = 0;
-    if (isPpcOrder) {
+    if (isSheet) {
+      const sumSheets = pLogs.reduce((acc, p) => acc + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || order.plannedUps || 1)), 0);
+      const fgStockQty = parseInt(order.openingFgQty || 0);
+      producedQty = Math.max(fgStockQty, Math.round(sumSheets));
+    } else if (isPpcOrder) {
       const cPiecesPerSet = Math.max(1, parseInt(order.smallPerSet || 2) - 1);
       const sPiecesPerSet = Math.max(1, parseInt(order.commonPerSet || 2) - 1);
       let totalCommonPieces = 0, totalSmallPieces = 0;
@@ -9679,11 +9688,12 @@ function DashboardView({ inventory = [], production = [], orders = [], items = [
       const fgStockQty = parseInt(order.openingFgQty || 0);
       producedQty = Math.max(fgStockQty, prodLogsQty);
     }
+
     const totalKgUsed = pLogs.reduce((acc, p) => acc + Math.max(0, parseFloat(p.useKg || 0) - parseFloat(p.wasteSheetsKg || 0)), 0);
     const avgWeightKg = producedQty > 0 && totalKgUsed > 0 ? (totalKgUsed / producedQty) : (parseFloat(item?.weight || item?.Weight_g || order?.weight || order?.Weight_g || 0) / 1000);
     
     const dispatchedQty = parseInt(order.dispatchedQty || 0);
-    const rate = parseFloat(order.rate || 0);
+    const rate = parseFloat(order.rate || item?.rate || 0);
     const inStock = Math.max(0, producedQty - dispatchedQty);
     const stockWeight = inStock * avgWeightKg;
     const stockValue = inStock * rate;
