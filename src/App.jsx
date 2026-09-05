@@ -22021,6 +22021,7 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   const [showAddFgModal, setShowAddFgModal] = useState(false);
   const [addFgForm, setAddFgForm] = useState({ companyId: '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' });
   const [addFgSaving, setAddFgSaving] = useState(false);
+  const [addFgSearch, setAddFgSearch] = useState('');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [unitFilter, setUnitFilter] = useState('all');
@@ -22355,29 +22356,37 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   const handleAddFgRecord = async (e) => {
     e.preventDefault();
     if (!addFgForm.companyId) return alert('Please select a unit/company.');
-    if (!addFgForm.itemName.trim()) return alert('Please enter an item name.');
+    const selectedItem = items.find(i => i.id === addFgForm.itemId || (i.name || i.Item_Name) === addFgForm.itemName);
+    if (!selectedItem) return alert('Item must be selected from the Box database. New items must first be registered in the Box Database.');
     const qty = parseInt(addFgForm.openingFgQty) || 0;
-    if (qty <= 0) return alert('Please enter a valid quantity.');
+    if (qty <= 0) return alert('Please enter a valid stock quantity.');
     setAddFgSaving(true);
     try {
+      const itemName = selectedItem.name || selectedItem.Item_Name;
+      const orderNo = `FG-${Date.now().toString().slice(-6)}`;
       const newOrder = {
+        orderNo,
         companyId: addFgForm.companyId,
-        itemName: addFgForm.itemName.trim(),
-        openingFgQty: qty,
-        rate: parseFloat(addFgForm.rate) || 0,
-        plannedUps: addFgForm.plannedUps || '1',
-        orderQty: parseInt(addFgForm.orderQty) || qty,
+        itemId: selectedItem.id,
+        itemName: itemName,
+        customerId: selectedItem.customerId || '',
+        customerName: customers?.find(c => c.id === selectedItem.customerId)?.name || '',
+        openingFgQty: String(qty),
+        rate: String(parseFloat(addFgForm.rate || selectedItem.rate || 0)),
+        plannedUps: parseInt(addFgForm.plannedUps || selectedItem.plannedUps || selectedItem.ups || 1),
+        orderQty: String(parseInt(addFgForm.orderQty) || qty),
         status: 'Completed',
-        producedQty: 0,
         dispatchedQty: 0,
-        dispatchHistory: [],
+        dispatchHistory: '[]',
         createdAt: new Date().toISOString(),
-        createdBy: currentUser?.displayName || currentUser?.name || 'Admin',
-        manualEntry: true,
+        orderDate: new Date().toISOString().split('T')[0],
+        notes: 'Manual Finished Goods Entry',
+        deleted: 0,
       };
       await addDoc(getColRef('orders'), newOrder);
-      addLog(`Manually added FG record: ${addFgForm.itemName.trim()} (${qty} pcs)`);
-      setAddFgForm({ companyId: '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' });
+      addLog(`Manually added FG record: ${itemName} (${qty} pcs)`);
+      setAddFgForm({ companyId: '', itemId: '', itemName: '', openingFgQty: '', rate: '', plannedUps: '1', orderQty: '' });
+      setAddFgSearch('');
       setShowAddFgModal(false);
     } catch (err) {
       console.error(err);
@@ -22808,29 +22817,87 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     <div className="max-w-6xl mx-auto pb-12">
 
       {/* ── ADD FG RECORD MODAL ── */}
-      {showAddFgModal && (
+      {showAddFgModal && (() => {
+        const availableItems = items.filter(i => {
+          const matchCompany = !addFgForm.companyId || !i.companyId || i.companyId === addFgForm.companyId;
+          const n = (i.name || i.Item_Name || '').toLowerCase();
+          const matchSearch = !addFgSearch || n.includes(addFgSearch.toLowerCase());
+          return matchCompany && matchSearch;
+        });
+
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl border border-stone-200 w-full max-w-lg mx-4 overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-stone-100 bg-stone-50">
-              <h3 className="text-base font-bold text-stone-800">➕ Add Finished Goods Record</h3>
-              <button onClick={() => setShowAddFgModal(false)} className="text-stone-400 hover:text-stone-700 text-xl font-bold leading-none">×</button>
+              <h3 className="text-base font-bold text-stone-800">➕ Add Finished Goods (Turso SQL)</h3>
+              <button onClick={() => { setShowAddFgModal(false); setAddFgSearch(''); }} className="text-stone-400 hover:text-stone-700 text-xl font-bold leading-none">×</button>
             </div>
             <form onSubmit={handleAddFgRecord} className="p-6 space-y-4">
-              <p className="text-xs text-stone-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                Use this to manually add a stock entry when production sync fails or for opening balance adjustments.
+              <p className="text-xs text-stone-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <strong>Box Database Policy:</strong> Finished Goods items must be registered in your Box Database. If an item is missing, add it to the Box Database first.
               </p>
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">Unit / Company *</label>
-                <select required className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.companyId} onChange={e => setAddFgForm({...addFgForm, companyId: e.target.value})}>
+                <select
+                  required
+                  className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800"
+                  value={addFgForm.companyId}
+                  onChange={e => setAddFgForm({ ...addFgForm, companyId: e.target.value, itemId: '', itemName: '' })}
+                >
                   <option value="">— Select Unit —</option>
                   {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">Item / Product Name *</label>
-                <input type="text" required placeholder="e.g. 5 Ply Sheet-45*75" className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800" value={addFgForm.itemName} onChange={e => setAddFgForm({...addFgForm, itemName: e.target.value})} />
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold text-stone-700">Select Item from Box Database *</label>
+                  <span className="text-[10px] text-stone-500">{availableItems.length} items available</span>
+                </div>
+                <input
+                  type="text"
+                  placeholder="Type to filter box database items..."
+                  className="w-full p-2 border border-stone-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-stone-800 mb-1.5"
+                  value={addFgSearch}
+                  onChange={e => setAddFgSearch(e.target.value)}
+                />
+                <select
+                  required
+                  className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-800 font-medium"
+                  value={addFgForm.itemId || ''}
+                  onChange={e => {
+                    const selId = e.target.value;
+                    const itm = items.find(i => i.id === selId);
+                    if (itm) {
+                      setAddFgForm(f => ({
+                        ...f,
+                        itemId: itm.id,
+                        itemName: itm.name || itm.Item_Name,
+                        rate: String(itm.rate || itm.Rate || ''),
+                        plannedUps: String(itm.plannedUps || itm.ups || '1'),
+                      }));
+                    } else {
+                      setAddFgForm(f => ({ ...f, itemId: '', itemName: '', rate: '', plannedUps: '1' }));
+                    }
+                  }}
+                >
+                  <option value="">— Choose Item from Box Database —</option>
+                  {availableItems.map(i => {
+                    const name = i.name || i.Item_Name;
+                    const size = i.size || i.Size_mm;
+                    return (
+                      <option key={i.id} value={i.id}>
+                        {name} {size ? `(${size})` : ''} {i.ply ? `[${i.ply} Ply]` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                {addFgForm.itemName ? (
+                  <p className="text-[11px] text-green-700 font-semibold mt-1">✓ Box Item Selected: {addFgForm.itemName}</p>
+                ) : (
+                  <p className="text-[11px] text-red-500 mt-1">Please select an item from the Box Database dropdown above.</p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -22856,17 +22923,18 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button type="submit" disabled={addFgSaving} className="flex-1 bg-stone-900 hover:bg-stone-800 disabled:opacity-60 text-white py-2.5 rounded-lg font-bold text-sm transition">
-                  {addFgSaving ? 'Saving…' : '✓ Add to Finished Goods'}
+                <button type="submit" disabled={addFgSaving || !addFgForm.itemId} className="flex-1 bg-stone-900 hover:bg-stone-800 disabled:opacity-60 text-white py-2.5 rounded-lg font-bold text-sm transition">
+                  {addFgSaving ? 'Saving to Turso SQL…' : '✓ Add to Finished Goods'}
                 </button>
-                <button type="button" onClick={() => setShowAddFgModal(false)} className="px-6 bg-stone-100 hover:bg-stone-200 text-stone-700 py-2.5 rounded-lg font-medium text-sm transition">
+                <button type="button" onClick={() => { setShowAddFgModal(false); setAddFgSearch(''); }} className="px-6 bg-stone-100 hover:bg-stone-200 text-stone-700 py-2.5 rounded-lg font-medium text-sm transition">
                   Cancel
                 </button>
               </div>
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-2xl font-bold">Finished Goods & Dispatch Dashboard</h2>
