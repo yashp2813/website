@@ -16435,46 +16435,119 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [viewingJobCardModal, setViewingJobCardModal] = useState(null);
   
-  const [consumedReels, setConsumedReels] = useState([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
+  const createDefaultReels = () => [
+    { id: 'reel_top', stand: 'Top', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', weight: '', customBalance: '', availKg: null, notes: '' },
+    { id: 'reel_fluting', stand: 'Fluting', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', weight: '', customBalance: '', notes: '' },
+    { id: 'reel_backing', stand: 'Backing', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', weight: '', customBalance: '', notes: '' }
+  ];
+
+  const [consumedReels, setConsumedReels] = useState(createDefaultReels);
   const [isBarcodeScanOpen, setIsBarcodeScanOpen] = useState(false);
   const [quickScanCode, setQuickScanCode] = useState('');
   const [autoCalcNotice, setAutoCalcNotice] = useState(null);
 
-  // Production Mode Switcher: 'single' (standard single job card) | 'combined_deckle' (multi-job same deckle run)
+  const handleAddConsumedReel = (isCut = false, defaultSize = '') => {
+    setConsumedReels(prev => [
+      ...prev,
+      {
+        id: 'reel_' + Date.now(),
+        stand: prev.length === 0 ? 'Top' : (prev.length === 1 ? 'Fluting' : (prev.length === 2 ? 'Backing' : 'Center')),
+        isCutReel: isCut,
+        reelNo: '',
+        size: defaultSize || recommendedDeckleCm || (prev[0]?.size || ''),
+        gsm: '',
+        bf: '',
+        quality: '',
+        weight: '',
+        customBalance: '',
+        availKg: null,
+        notes: ''
+      }
+    ]);
+  };
+
+  const handleRemoveConsumedReel = (idx) => {
+    if (consumedReels.length <= 1) return;
+    setConsumedReels(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateConsumedReel = (idx, updates) => {
+    setConsumedReels(prev => {
+      const copy = [...prev];
+      const cur = { ...copy[idx], ...updates };
+
+      if (updates.reelNo !== undefined && !cur.isCutReel) {
+        const clean = (updates.reelNo || '').trim();
+        const matched = clean ? findInventoryReel(inventory, clean) : null;
+        if (matched) {
+          if (!cur.gsm || updates.reelNo) cur.gsm = String(matched.gsm || cur.gsm || '');
+          if (!cur.bf || updates.reelNo) cur.bf = String(matched.bf || cur.bf || '');
+          if (!cur.size || updates.reelNo) cur.size = String(matched.size || cur.size || '');
+          if (!cur.quality || updates.reelNo) cur.quality = String(matched.colour || cur.quality || '');
+          const avail = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
+          cur.availKg = avail;
+          if (cur.weight && !isNaN(parseFloat(cur.weight))) {
+            cur.customBalance = Math.max(0, avail - parseFloat(cur.weight)).toFixed(1);
+          }
+        } else {
+          cur.availKg = null;
+        }
+      }
+
+      if (updates.weight !== undefined) {
+        const used = parseFloat(updates.weight || 0);
+        if (cur.availKg !== null && cur.availKg !== undefined && !isNaN(used)) {
+          cur.customBalance = Math.max(0, cur.availKg - used).toFixed(1);
+        }
+      }
+
+      if (updates.customBalance !== undefined) {
+        const bal = parseFloat(updates.customBalance || 0);
+        if (cur.availKg !== null && cur.availKg !== undefined && !isNaN(bal)) {
+          cur.weight = Math.max(0, cur.availKg - bal).toFixed(1);
+        }
+      }
+
+      copy[idx] = cur;
+      return copy;
+    });
+  };
+
+  // Production Mode Switcher: 'single' (standard single job card) | 'combined_deckle' (multi-job sequential batch)
   const [productionMode, setProductionMode] = useState('single');
 
-  // Combined Deckle Run State
+  // Multi-Job Sequential Batch State
   const [deckleRunDate, setDeckleRunDate] = useState(new Date().toISOString().split('T')[0]);
   const [deckleRunCompanyId, setDeckleRunCompanyId] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : '');
-  const [deckleRunDeckleCm, setDeckleRunDeckleCm] = useState('');
-  const [deckleRunFlute, setDeckleRunFlute] = useState('B');
-  const [deckleRunWasteKg, setDeckleRunWasteKg] = useState('');
-  const [deckleRunConsumptionMode, setDeckleRunConsumptionMode] = useState('formula'); // 'formula' | 'actual_weigh'
 
-  const [deckleRunReels, setDeckleRunReels] = useState([
-    { id: 'stand_1', stand: 'Top', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null },
-    { id: 'stand_2', stand: 'Fluting', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null },
-    { id: 'stand_3', stand: 'Bottom', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null }
-  ]);
+  const createDefaultDeckleReels = () => [
+    { id: 'deckle_reel_top', stand: 'Top', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', availKg: null, weight: '', customBalance: '', notes: '' },
+    { id: 'deckle_reel_fluting', stand: 'Fluting', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', availKg: null, weight: '', customBalance: '', notes: '' },
+    { id: 'deckle_reel_backing', stand: 'Backing', isCutReel: false, reelNo: '', size: '', gsm: '', bf: '', quality: '', availKg: null, weight: '', customBalance: '', notes: '' }
+  ];
+
+  const [deckleRunReels, setDeckleRunReels] = useState(createDefaultDeckleReels);
 
   const [deckleRunJobs, setDeckleRunJobs] = useState([
-    { id: 'job_1', orderId: '', producedSheets: '', notes: '' }
+    { id: 'seq_job_1', orderId: '', producedSheets: '', wasteKg: '', notes: '' }
   ]);
 
-  const handleAddDeckleReel = () => {
+  const handleAddDeckleReel = (isCut = false) => {
     setDeckleRunReels(prev => [
       ...prev,
       {
-        id: 'stand_' + Date.now(),
-        stand: prev.length === 3 ? 'Center' : `Layer ${prev.length + 1}`,
+        id: 'deckle_stand_' + Date.now(),
+        stand: prev.length === 0 ? 'Top' : (prev.length === 1 ? 'Fluting' : (prev.length === 2 ? 'Backing' : 'Center')),
         reelNo: '',
-        size: deckleRunDeckleCm || '',
+        size: prev[0]?.size || '',
         gsm: '',
-        isCutReel: false,
+        bf: '',
+        quality: '',
+        isCutReel: isCut,
         availKg: null,
-        actualUsedKg: '',
-        finalBalKg: '',
-        matchedReel: null
+        weight: '',
+        customBalance: '',
+        notes: ''
       }
     ]);
   };
@@ -16493,13 +16566,35 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         const matched = clean ? findInventoryReel(inventory, clean) : null;
         if (matched) {
           cur.matchedReel = matched;
-          if (!cur.gsm || cur.gsm === '') cur.gsm = String(matched.gsm || '');
-          if (!cur.size || cur.size === '') cur.size = String(matched.size || deckleRunDeckleCm || '');
-          cur.availKg = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
+          if (!cur.gsm || updates.reelNo) cur.gsm = String(matched.gsm || cur.gsm || '');
+          if (!cur.bf || updates.reelNo) cur.bf = String(matched.bf || cur.bf || '');
+          if (!cur.size || updates.reelNo) cur.size = String(matched.size || cur.size || '');
+          if (!cur.quality || updates.reelNo) cur.quality = String(matched.colour || cur.quality || '');
+          const avail = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
+          cur.availKg = avail;
+          if (cur.weight && !isNaN(parseFloat(cur.weight))) {
+            cur.customBalance = Math.max(0, avail - parseFloat(cur.weight)).toFixed(1);
+          }
         } else {
           cur.matchedReel = null;
+          cur.availKg = null;
         }
       }
+
+      if (updates.weight !== undefined) {
+        const used = parseFloat(updates.weight || 0);
+        if (cur.availKg !== null && cur.availKg !== undefined && !isNaN(used)) {
+          cur.customBalance = Math.max(0, cur.availKg - used).toFixed(1);
+        }
+      }
+
+      if (updates.customBalance !== undefined) {
+        const bal = parseFloat(updates.customBalance || 0);
+        if (cur.availKg !== null && cur.availKg !== undefined && !isNaN(bal)) {
+          cur.weight = Math.max(0, cur.availKg - bal).toFixed(1);
+        }
+      }
+
       copy[idx] = cur;
       return copy;
     });
@@ -16508,7 +16603,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   const handleAddDeckleJob = () => {
     setDeckleRunJobs(prev => [
       ...prev,
-      { id: 'job_' + Date.now(), orderId: '', producedSheets: '', notes: '' }
+      { id: 'seq_job_' + Date.now(), orderId: '', producedSheets: '', wasteKg: '', notes: '' }
     ]);
   };
 
@@ -16533,17 +16628,16 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             const calcSheets = Math.ceil(targetQty / ups);
             if (calcSheets > 0) cur.producedSheets = String(calcSheets);
           }
-          if (!deckleRunDeckleCm) {
-            const linkedOrd = orders.find(o => o.id === j.orderId || o.id === j.id);
-            const itm = items.find(i => i.id === (j.itemId || linkedOrd?.itemId) || i.name === j.itemName || i.Item_Name === j.itemName);
-            const it = itm || {};
-            const dims = getItemDimensions(it);
-            const type = it.itemType || it.Item_Type || 'Box';
+          const linkedOrd = orders.find(o => o.id === j.orderId || o.id === j.id);
+          const itm = items.find(i => i.id === (j.itemId || linkedOrd?.itemId) || i.name === j.itemName || i.Item_Name === j.itemName);
+          if (itm) {
+            const dims = getItemDimensions(itm);
+            const type = itm.itemType || itm.Item_Type || 'Box';
             const upsL = parseFloat(j?.upsLength || 1);
             const upsW = parseFloat(j?.upsWidth || 1);
             const { deckle } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, upsL, upsW);
             if (deckle > 0) {
-              setDeckleRunDeckleCm(String(deckle));
+              setDeckleRunReels(reels => reels.map(r => (!r.size ? { ...r, size: String(deckle) } : r)));
             }
           }
         }
@@ -16695,8 +16789,33 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const idMap = buildInventoryIdMap(inventory);
       const printedId = idMap.get(matchedReel.id) || matchedReel.systemReelId || matchedReel.supplierReelNo || matchedReel.reelNo || code.trim().toUpperCase();
       setConsumedReels(prev => {
-        const filtered = prev.filter(r => (r.reelNo && r.reelNo.trim() !== '') || r.isCutReel);
-        return [...filtered, { isCutReel: false, reelNo: printedId, weight: '', size: matchedReel.size || '', gsm: matchedReel.gsm || '', quality: matchedReel.colour || '', stand: '' }];
+        const emptyIdx = prev.findIndex(r => !r.reelNo && !r.weight);
+        if (emptyIdx !== -1) {
+          const copy = [...prev];
+          copy[emptyIdx] = {
+            ...copy[emptyIdx],
+            isCutReel: false,
+            reelNo: printedId,
+            size: String(matchedReel.size || copy[emptyIdx].size || ''),
+            gsm: String(matchedReel.gsm || ''),
+            bf: String(matchedReel.bf || ''),
+            quality: String(matchedReel.colour || ''),
+            availKg: availKg
+          };
+          return copy;
+        }
+        return [...prev, {
+          id: 'reel_' + Date.now(),
+          stand: prev.length === 0 ? 'Top' : (prev.length === 1 ? 'Fluting' : (prev.length === 2 ? 'Backing' : 'Center')),
+          isCutReel: false,
+          reelNo: printedId,
+          weight: '',
+          size: String(matchedReel.size || ''),
+          gsm: String(matchedReel.gsm || ''),
+          bf: String(matchedReel.bf || ''),
+          quality: String(matchedReel.colour || ''),
+          availKg: availKg
+        }];
       });
       if (matchedReel.millName && !newRecord.millName) {
         setNewRecord(r => ({ ...r, millName: matchedReel.millName }));
@@ -16704,8 +16823,22 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       if (addLog) addLog(`Scanned reel #${printedId} (${availKg}kg available)`);
     } else {
       setConsumedReels(prev => {
-        const filtered = prev.filter(r => (r.reelNo && r.reelNo.trim() !== '') || r.isCutReel);
-        return [...filtered, { isCutReel: false, reelNo: code.trim().toUpperCase(), weight: '' }];
+        const emptyIdx = prev.findIndex(r => !r.reelNo && !r.weight);
+        if (emptyIdx !== -1) {
+          const copy = [...prev];
+          copy[emptyIdx] = { ...copy[emptyIdx], isCutReel: false, reelNo: code.trim().toUpperCase() };
+          return copy;
+        }
+        return [...prev, {
+          id: 'reel_' + Date.now(),
+          stand: 'Top',
+          isCutReel: false,
+          reelNo: code.trim().toUpperCase(),
+          weight: '',
+          size: '',
+          gsm: '',
+          bf: ''
+        }];
       });
     }
     setQuickScanCode('');
@@ -16716,9 +16849,9 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   // Helper to map attached reels from job to consumedReels
   const mapAttachedReelsToConsumed = (attachedList) => {
     if (!Array.isArray(attachedList) || attachedList.length === 0) {
-      return [{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }];
+      return createDefaultReels();
     }
-    return attachedList.map(att => {
+    return attachedList.map((att, idx) => {
       const invMatch = inventory.find(i => 
         i.id === att.reelId || 
         (att.supplierReelNo && (String(i.reelNo || '').trim().toLowerCase() === String(att.supplierReelNo).trim().toLowerCase() || String(i.supplierReelNo || '').trim().toLowerCase() === String(att.supplierReelNo).trim().toLowerCase())) ||
@@ -16726,14 +16859,21 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       );
       const rNo = att.supplierReelNo || invMatch?.supplierReelNo || invMatch?.reelNo || att.systemReelId || '';
       const rWeight = (invMatch && invMatch.balanceQty !== undefined ? invMatch.balanceQty : (invMatch?.receivedQty || att.initialLoadedKg)) || '';
+      let defaultStand = att.stand;
+      if (!defaultStand) {
+        defaultStand = idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : (idx === 2 ? 'Backing' : 'Center'));
+      }
       return {
+        id: 'reel_' + idx + '_' + Date.now(),
         isCutReel: false,
         reelNo: rNo,
         weight: rWeight ? String(rWeight) : '',
-        stand: att.stand || '',
-        size: invMatch?.size || '',
-        gsm: invMatch?.gsm || '',
+        stand: defaultStand,
+        size: invMatch?.size ? String(invMatch.size) : '',
+        gsm: invMatch?.gsm ? String(invMatch.gsm) : '',
+        bf: invMatch?.bf ? String(invMatch.bf) : '',
         quality: invMatch?.colour || '',
+        availKg: invMatch ? parseFloat(invMatch.balanceQty !== undefined ? invMatch.balanceQty : (invMatch.receivedQty || 0)) : null,
         notes: ''
       };
     });
@@ -16743,7 +16883,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   const handleJobSelect = (jobId) => {
     if (!jobId) { 
       setNewRecord(prev => ({ ...prev, orderId: '', usedForItem: '', numberOfUps: '1' })); 
-      setConsumedReels([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
+      setConsumedReels(createDefaultReels());
       return; 
     }
     const selectedJob = activeProductionJobs.find(j => j.id === jobId) || 
@@ -16759,7 +16899,19 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     if (attached.length > 0) {
       setConsumedReels(mapAttachedReelsToConsumed(attached));
     } else {
-      setConsumedReels([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
+      const itm = items.find(i => i.id === (selectedJob.itemId || linkedOrd?.itemId) || i.name === selectedJob.itemName || i.Item_Name === selectedJob.itemName);
+      let calcDeckle = '';
+      if (itm) {
+        const dims = getItemDimensions(itm);
+        const type = itm.itemType || itm.Item_Type || 'Box';
+        const { deckle } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, selectedJob.ups || 1, 1);
+        if (deckle > 0) calcDeckle = String(deckle);
+      }
+      setConsumedReels([
+        { id: 'reel_top', stand: 'Top', isCutReel: false, reelNo: '', size: calcDeckle, gsm: '', bf: '', quality: '', weight: '', customBalance: '', availKg: null, notes: '' },
+        { id: 'reel_fluting', stand: 'Fluting', isCutReel: false, reelNo: '', size: calcDeckle, gsm: '', bf: '', quality: '', weight: '', customBalance: '', availKg: null, notes: '' },
+        { id: 'reel_backing', stand: 'Backing', isCutReel: false, reelNo: '', size: calcDeckle, gsm: '', bf: '', quality: '', weight: '', customBalance: '', notes: '' }
+      ]);
     }
 
     setNewRecord(prev => ({ 
@@ -16924,7 +17076,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       linerQty: '',
       wasteSheetsKg: '',
     }));
-    setConsumedReels([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
+    setConsumedReels(createDefaultReels());
   };
 
   // ── WIP & FINISHED GOODS ADVANCEMENT HELPER ──
@@ -17109,21 +17261,20 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     // First pass: calculate net theoretical paper for each reel
     const netReelWeights = consumedReels.map((reel, idx) => {
       let gsm = parseFloat(reel.gsm || 0);
+      let bf = parseFloat(reel.bf || 0);
       let size = parseFloat(reel.size || 0);
-      let stand = reel.stand;
+      let stand = reel.stand || (idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : (idx === 2 ? 'Backing' : 'Center')));
 
       if (!reel.isCutReel && reel.reelNo) {
         const matched = findInventoryReel(inventory, reel.reelNo);
         if (matched) {
           if (!gsm) gsm = parseFloat(matched.gsm || 0);
+          if (!bf) bf = parseFloat(matched.bf || 0);
           if (!size) size = parseFloat(matched.size || 0);
         }
       }
       if (!size) size = parseFloat(recommendedDeckleCm || 120);
       if (!gsm) gsm = 120;
-      if (!stand) {
-        stand = idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : 'Bottom');
-      }
 
       const netKg = calculateTheoreticalReelKg({
         cutLengthMm,
@@ -17135,25 +17286,26 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         wastagePct: 0
       });
 
-      return { gsm, size, stand, netKg };
+      return { gsm, bf, size, stand, netKg };
     });
 
     const sumNetKg = netReelWeights.reduce((sum, r) => sum + r.netKg, 0);
 
     // Second pass: distribute wasteSheetsKg proportionally across reels
     const updated = consumedReels.map((reel, idx) => {
-      const { gsm, size, stand, netKg } = netReelWeights[idx];
+      const { gsm, bf, size, stand, netKg } = netReelWeights[idx];
       const wasteShare = sumNetKg > 0 ? (totalWasteKg * (netKg / sumNetKg)) : 0;
       const finalKg = (netKg + wasteShare).toFixed(1);
 
       const matched = !reel.isCutReel && reel.reelNo ? findInventoryReel(inventory, reel.reelNo) : null;
-      const availKg = matched ? parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0)) : null;
+      const availKg = matched ? parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0)) : (reel.availKg !== undefined && reel.availKg !== null ? parseFloat(reel.availKg) : null);
       const newBal = availKg !== null ? Math.max(0, availKg - parseFloat(finalKg)).toFixed(1) : undefined;
 
       return {
         ...reel,
-        gsm: reel.gsm || String(gsm),
-        size: reel.size || String(size),
+        gsm: reel.gsm || (gsm ? String(gsm) : ''),
+        bf: reel.bf || (bf ? String(bf) : ''),
+        size: reel.size || (size ? String(size) : ''),
         stand: reel.stand || stand,
         weight: finalKg,
         customBalance: newBal
@@ -17168,9 +17320,9 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     if (addLog) addLog(msg);
   };
 
-  // ── COMBINED DECKLE RUN REAL-TIME CALCULATIONS & PROPORTIONAL ALLOCATION ──
+  // ── MULTI-JOB BATCH: REAL-TIME CALCULATIONS & PROPORTIONAL ALLOCATION ACROSS SEQUENTIAL JOBS ──
   const deckleRunCalculations = useMemo(() => {
-    // 1. Gather all jobs with sheets > 0
+    // 1. Gather all valid sequential jobs with producedSheets > 0
     const validJobs = deckleRunJobs.map(entry => {
       if (!entry.orderId) return null;
       const job = activeProductionJobs.find(j => j.id === entry.orderId) || orders.find(o => o.id === entry.orderId);
@@ -17178,9 +17330,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const linkedOrd = orders.find(o => o.id === job.orderId || o.id === job.id);
       const item = items.find(i => i.id === (job.itemId || linkedOrd?.itemId) || i.name === job.itemName || i.Item_Name === job.itemName);
       const cutLengthMm = getJobCutLengthMm(job, item);
+      const fluteType = item?.fluteType || item?.Flute_Type || job?.flute || 'B';
       const sheets = parseFloat(entry.producedSheets || 0);
       const runningMeters = sheets > 0 && cutLengthMm > 0 ? (sheets * cutLengthMm) / 1000 : 0;
       const ups = parseFloat(job.ups || job.plannedUps || 1);
+      const wasteKg = Math.max(0, parseFloat(entry.wasteKg || 0));
 
       return {
         entry,
@@ -17188,37 +17342,47 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         item,
         linkedOrd,
         cutLengthMm,
+        fluteType,
         sheets,
         runningMeters,
-        ups
+        ups,
+        wasteKg
       };
     }).filter(Boolean);
 
-    // 2. Compute theoretical paper per job per reel
-    const totalRunWasteKg = Math.max(0, parseFloat(deckleRunWasteKg) || 0);
+    const totalJobsWasteKg = validJobs.reduce((sum, j) => sum + j.wasteKg, 0);
 
+    // 2. Compute theoretical paper per job per mounted reel
     const jobsWithPaper = validJobs.map(vj => {
       let jobNetPaperKg = 0;
-      const reelBreakdown = deckleRunReels.map(r => {
+      const reelBreakdown = deckleRunReels.map((r, rIdx) => {
         let gsm = parseFloat(r.gsm || 0);
         let size = parseFloat(r.size || 0);
-        if (!gsm && r.matchedReel) gsm = parseFloat(r.matchedReel.gsm || 0);
-        if (!size && r.matchedReel) size = parseFloat(r.matchedReel.size || 0);
-        if (!size) size = parseFloat(deckleRunDeckleCm || 120);
+        let bf = parseFloat(r.bf || 0);
+        if (!gsm && r.reelNo) {
+          const m = findInventoryReel(inventory, r.reelNo);
+          if (m) {
+            gsm = parseFloat(m.gsm || 0);
+            if (!bf) bf = parseFloat(m.bf || 0);
+            if (!size) size = parseFloat(m.size || 0);
+          }
+        }
+        if (!size) size = 120;
         if (!gsm) gsm = 120;
+        const stand = r.stand || (rIdx === 0 ? 'Top' : (rIdx === 1 ? 'Fluting' : 'Backing'));
 
         const netKg = calculateTheoreticalReelKg({
           cutLengthMm: vj.cutLengthMm,
           sheetsProduced: vj.sheets,
           reelDeckleCm: size,
           reelGsm: gsm,
-          stand: r.stand,
-          fluteType: deckleRunFlute || 'B',
+          stand,
+          fluteType: vj.fluteType || 'B',
           wastagePct: 0
         });
 
         jobNetPaperKg += netKg;
-        return { reelId: r.id, reelNo: r.reelNo, stand: r.stand, netKg };
+        return { reelId: r.id, reelNo: r.reelNo, stand, gsm, bf, size, netKg };
       });
 
       return {
@@ -17233,7 +17397,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     // 3. Proportional waste and paper allocation per job
     const jobsAllocated = jobsWithPaper.map(j => {
       const share = totalNetPaperKg > 0 ? (j.jobNetPaperKg / totalNetPaperKg) : (validJobs.length > 0 ? 1 / validJobs.length : 0);
-      const allocatedWasteKg = totalRunWasteKg * share;
+      const allocatedWasteKg = j.wasteKg;
       const allocatedTotalKg = j.jobNetPaperKg + allocatedWasteKg;
 
       return {
@@ -17244,42 +17408,51 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       };
     });
 
-    // 4. Compute each reel's consumed weight and updated balance
-    const reelsSummary = deckleRunReels.map(r => {
+    // 4. Compute each reel's consumed weight and updated balance across all sequential jobs
+    const reelsSummary = deckleRunReels.map((r, rIdx) => {
       let gsm = parseFloat(r.gsm || 0);
       let size = parseFloat(r.size || 0);
-      if (!gsm && r.matchedReel) gsm = parseFloat(r.matchedReel.gsm || 0);
-      if (!size && r.matchedReel) size = parseFloat(r.matchedReel.size || 0);
-
+      let bf = parseFloat(r.bf || 0);
       const matchedStock = !r.isCutReel && r.reelNo ? findInventoryReel(inventory, r.reelNo) : null;
-      const avail = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : (r.availKg !== null && r.availKg !== undefined ? parseFloat(r.availKg) : 0);
+      if (matchedStock) {
+        if (!gsm) gsm = parseFloat(matchedStock.gsm || 0);
+        if (!bf) bf = parseFloat(matchedStock.bf || 0);
+        if (!size) size = parseFloat(matchedStock.size || 0);
+      }
+      const avail = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : (r.availKg !== null && r.availKg !== undefined ? parseFloat(r.availKg) : null);
 
-      let usedKg = 0;
-      if (deckleRunConsumptionMode === 'actual_weigh') {
-        if (r.actualUsedKg !== '' && !isNaN(parseFloat(r.actualUsedKg))) {
-          usedKg = parseFloat(r.actualUsedKg) || 0;
-        } else if (r.finalBalKg !== '' && !isNaN(parseFloat(r.finalBalKg))) {
-          usedKg = Math.max(0, avail - (parseFloat(r.finalBalKg) || 0));
-        }
-      } else {
-        // Mode A: Theoretical paper + proportional waste
-        const netReelAcrossJobs = jobsAllocated.reduce((sum, j) => {
-          const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
-          return sum + (matchedBreakdown?.netKg || 0);
-        }, 0);
-        const wasteShareForReel = totalNetPaperKg > 0 ? (totalRunWasteKg * (netReelAcrossJobs / totalNetPaperKg)) : 0;
-        usedKg = netReelAcrossJobs + wasteShareForReel;
+      // Theoretical net for this reel across all jobs
+      const netReelAcrossJobs = jobsAllocated.reduce((sum, j) => {
+        const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
+        return sum + (matchedBreakdown?.netKg || 0);
+      }, 0);
+
+      // Proportional scrap/waste share for this reel across jobs
+      const wasteShareForReel = totalNetPaperKg > 0 ? (totalJobsWasteKg * (netReelAcrossJobs / totalNetPaperKg)) : 0;
+      const theoreticalTotalUsedKg = netReelAcrossJobs + wasteShareForReel;
+
+      // Effective consumption: use user-entered weight or customBalance if provided, else theoreticalTotalUsedKg
+      let effectiveUsedKg = theoreticalTotalUsedKg;
+      if (r.weight !== '' && !isNaN(parseFloat(r.weight))) {
+        effectiveUsedKg = parseFloat(r.weight);
+      } else if (r.customBalance !== '' && !isNaN(parseFloat(r.customBalance)) && avail !== null && avail > 0) {
+        effectiveUsedKg = Math.max(0, avail - parseFloat(r.customBalance));
       }
 
-      const newBal = Math.max(0, avail - usedKg);
+      const computedNewBalKg = avail !== null ? Math.max(0, avail - effectiveUsedKg) : null;
+      const stand = r.stand || (rIdx === 0 ? 'Top' : (rIdx === 1 ? 'Fluting' : 'Backing'));
+
       return {
         ...r,
-        gsm,
-        size,
+        stand,
+        gsm: r.gsm || (gsm ? String(gsm) : ''),
+        bf: r.bf || (bf ? String(bf) : ''),
+        size: r.size || (size ? String(size) : ''),
         availKg: avail,
-        matchedReel: matchedStock || r.matchedReel,
-        computedUsedKg: usedKg,
-        computedNewBalKg: newBal
+        matchedReel: matchedStock,
+        theoreticalUsedKg,
+        computedUsedKg: effectiveUsedKg,
+        computedNewBalKg
       };
     });
 
@@ -17289,28 +17462,57 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       validJobs: jobsAllocated,
       reelsSummary,
       totalNetPaperKg,
-      totalRunWasteKg,
+      totalRunWasteKg: totalJobsWasteKg,
       totalReelsConsumedKg,
       totalSheetsProduced: jobsAllocated.reduce((sum, j) => sum + j.sheets, 0)
     };
-  }, [deckleRunJobs, deckleRunReels, deckleRunWasteKg, deckleRunConsumptionMode, deckleRunDeckleCm, deckleRunFlute, activeProductionJobs, orders, items, inventory]);
+  }, [deckleRunJobs, deckleRunReels, activeProductionJobs, orders, items, inventory]);
 
-  // ── SAVE COMBINED DECKLE RUN (MULTI-JOB BATCH) ──
+  const handleAutoCalcMultiJobReels = () => {
+    const { validJobs, reelsSummary, totalReelsConsumedKg } = deckleRunCalculations;
+    if (validJobs.length === 0) {
+      alert("⚠️ Please add at least one sequential job card with Good Sheets produced (> 0).");
+      return;
+    }
+
+    setDeckleRunReels(prev => prev.map(r => {
+      const summary = reelsSummary.find(s => s.id === r.id);
+      const usedKg = summary ? summary.theoreticalUsedKg.toFixed(1) : '0.0';
+      const avail = summary?.availKg;
+      const newBal = (avail !== null && avail !== undefined) ? Math.max(0, avail - parseFloat(usedKg)).toFixed(1) : '';
+
+      return {
+        ...r,
+        gsm: r.gsm || (summary?.gsm ? String(summary.gsm) : ''),
+        bf: r.bf || (summary?.bf ? String(summary.bf) : ''),
+        size: r.size || (summary?.size ? String(summary.size) : ''),
+        weight: usedKg,
+        customBalance: newBal
+      };
+    }));
+
+    const msg = `⚡ Auto-calculated paper consumption: ${totalReelsConsumedKg.toFixed(1)} KG across ${validJobs.length} sequential job(s).`;
+    setAutoCalcNotice(msg);
+    setTimeout(() => setAutoCalcNotice(null), 7000);
+    if (addLog) addLog(msg);
+  };
+
+  // ── SAVE MULTI-JOB SEQUENTIAL BATCH RUN ──
   const handleSaveCombinedDeckleRun = async (e) => {
     if (e) e.preventDefault();
     const { validJobs, reelsSummary, totalNetPaperKg, totalRunWasteKg, totalReelsConsumedKg, totalSheetsProduced } = deckleRunCalculations;
 
     if (validJobs.length === 0) {
-      alert("⚠️ Please add at least one job with sheets produced (> 0) to log the combined run.");
+      alert("⚠️ Please add at least one sequential job card with Good Sheets produced (> 0).");
       return;
     }
-    const hasReels = reelsSummary.some(r => r.reelNo && r.reelNo.trim() !== '');
+    const hasReels = reelsSummary.some(r => (r.reelNo && r.reelNo.trim() !== '') || (r.isCutReel && r.computedUsedKg > 0));
     if (!hasReels) {
       alert("⚠️ Please select or enter at least one mounted reel on the machine stands.");
       return;
     }
     if (totalReelsConsumedKg <= 0) {
-      alert("⚠️ Total calculated or weighed reel consumption must be greater than 0 KG.");
+      alert("⚠️ Total calculated or weighed reel consumption must be greater than 0 KG. Click '⚡ Auto-Calculate Reel KG from Sequential Jobs' or enter weights.");
       return;
     }
 
@@ -17320,7 +17522,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       const runSummaryJobCards = validJobs.map(vj => vj.job.jobNo || getJobCardNo(vj.job)).join(', ');
       const runBatchId = `DR-${Date.now().toString().slice(-6)}`;
 
-      // 1. Log each job's production record
+      // 1. Log each sequential job's production record
       const createdRecords = [];
       for (const vj of validJobs) {
         const jCardNo = vj.job.jobNo || getJobCardNo(vj.job);
@@ -17328,19 +17530,12 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
 
         // Build consumedReels for this specific job, with its exact allocated KG per mounted reel
         const jobConsumedReels = reelsSummary.map((r, rIdx) => {
-          let allocatedReelKg = 0;
-          if (deckleRunConsumptionMode === 'actual_weigh') {
-            const totalReelTheoretical = validJobs.reduce((sum, j) => {
-              const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
-              return sum + (matchedBreakdown?.netKg || 0);
-            }, 0);
-            const myReelTheoretical = vj.reelBreakdown.find(rb => rb.reelId === r.id)?.netKg || 0;
-            allocatedReelKg = totalReelTheoretical > 0 ? (r.computedUsedKg * (myReelTheoretical / totalReelTheoretical)) : 0;
-          } else {
-            const myReelTheoretical = vj.reelBreakdown.find(rb => rb.reelId === r.id)?.netKg || 0;
-            const wasteShareForReel = totalNetPaperKg > 0 ? (totalRunWasteKg * (myReelTheoretical / totalNetPaperKg)) : 0;
-            allocatedReelKg = myReelTheoretical + wasteShareForReel;
-          }
+          const totalReelTheoretical = validJobs.reduce((sum, j) => {
+            const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
+            return sum + (matchedBreakdown?.netKg || 0);
+          }, 0);
+          const myReelTheoretical = vj.reelBreakdown.find(rb => rb.reelId === r.id)?.netKg || 0;
+          const allocatedReelKg = totalReelTheoretical > 0 ? (r.computedUsedKg * (myReelTheoretical / totalReelTheoretical)) : 0;
 
           const cleanReelNo = (r.reelNo || '').trim().toUpperCase();
           return {
@@ -17349,9 +17544,10 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             weight: allocatedReelKg.toFixed(1),
             size: String(r.size || ''),
             gsm: String(r.gsm || ''),
+            bf: String(r.bf || ''),
             quality: r.quality || '',
-            stand: r.stand || '',
-            notes: `Deckle Run [${deckleRunDeckleCm || ''}cm] - ${allocatedReelKg.toFixed(1)}kg share`
+            stand: r.stand || (rIdx === 0 ? 'Top' : (rIdx === 1 ? 'Fluting' : 'Backing')),
+            notes: `Sequential Batch [${runBatchId}] - ${allocatedReelKg.toFixed(1)}kg share`
           };
         }).filter(r => parseFloat(r.weight) > 0);
 
@@ -17362,11 +17558,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           date: runDate,
           orderId: vj.job.id,
           companyId: vj.job.companyId || runCompId,
-          millName: reelsSummary[0]?.matchedReel?.millName || 'Deckle Run Mill',
+          millName: reelsSummary[0]?.matchedReel?.millName || 'Factory Mill',
           paperUsedFor: 'Board',
           usedForItem: jItemName,
           linerQty: String(vj.sheets),
-          wasteSheetsKg: vj.allocatedWasteKg.toFixed(1),
+          wasteSheetsKg: vj.wasteKg.toFixed(1),
           numberOfUps: String(vj.ups || 1),
           commonUps: vj.job.commonUps || '',
           smallUps: vj.job.smallUps || '',
@@ -17400,12 +17596,12 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           try {
             await updateDoc(getDocRef('inventory', matchedStock.id), {
               balanceQty: newBal,
-              lastUsedForItem: `Combined Run: ${runSummaryJobCards}`,
+              lastUsedForItem: `Sequential Run: ${runSummaryJobCards}`,
               lastUsedDate: runDate,
-              lastUsedJobNo: `DECKLE-RUN-${runDate}`
+              lastUsedJobNo: `SEQ-RUN-${runDate}`
             });
             if (addLog) {
-              addLog(`Auto-depleted ${totalUsedFromReel.toFixed(1)}kg from reel #${matchedStock.supplierReelNo || matchedStock.reelNo} for Combined Deckle Run (${validJobs.length} jobs, Remaining Bal: ${newBal.toFixed(1)}kg)`);
+              addLog(`Auto-depleted ${totalUsedFromReel.toFixed(1)}kg from reel #${matchedStock.supplierReelNo || matchedStock.reelNo} for Sequential Batch (${validJobs.length} jobs, Remaining Bal: ${newBal.toFixed(1)}kg)`);
             }
           } catch(err) {}
         }
@@ -17416,18 +17612,17 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       reconcileDatabaseInventory(inventory, updatedProduction, orders).catch(() => {});
 
       if (addLog) {
-        addLog(`🔗 Logged Combined Deckle Run [${runBatchId}]: ${validJobs.length} Jobs (${totalSheetsProduced} sheets, ${totalReelsConsumedKg.toFixed(1)}kg total paper consumed, ${totalRunWasteKg.toFixed(1)}kg waste divided proportionally across Job Cards: ${runSummaryJobCards})`);
+        addLog(`🔗 Logged Sequential Jobs Batch [${runBatchId}]: ${validJobs.length} Jobs (${totalSheetsProduced} sheets, ${totalReelsConsumedKg.toFixed(1)}kg total paper consumed across Job Cards: ${runSummaryJobCards})`);
       }
 
-      alert(`🎉 Combined Deckle Run Logged Successfully!\n\n• Batch ID: ${runBatchId}\n• Jobs Logged: ${validJobs.length} (${runSummaryJobCards})\n• Total Good Sheets: ${totalSheetsProduced}\n• Total Paper Consumed: ${totalReelsConsumedKg.toFixed(1)} KG\n• Total Run Waste: ${totalRunWasteKg.toFixed(1)} KG (divided proportionally)\n\nAll Job Cards, WIP stages, and Reel Balances have been updated.`);
+      alert(`🎉 Sequential Jobs Batch Logged Successfully!\n\n• Batch ID: ${runBatchId}\n• Jobs Logged: ${validJobs.length} (${runSummaryJobCards})\n• Total Good Sheets: ${totalSheetsProduced}\n• Total Paper Consumed: ${totalReelsConsumedKg.toFixed(1)} KG\n\nAll Job Cards, WIP stages, and Reel Balances have been updated.`);
 
-      // Reset form
-      setDeckleRunWasteKg('');
-      setDeckleRunJobs([{ id: 'j_' + Date.now(), orderId: '', producedSheets: '', notes: '' }]);
-      setDeckleRunReels(prev => prev.map(r => ({ ...r, actualUsedKg: '', finalBalKg: '' })));
+      // Reset form to default
+      setDeckleRunJobs([{ id: 'seq_job_' + Date.now(), orderId: '', producedSheets: '', wasteKg: '', notes: '' }]);
+      setDeckleRunReels(createDefaultDeckleReels());
     } catch(err) {
-      console.error('Error logging combined deckle run:', err);
-      alert('Error saving combined deckle run: ' + (err.message || 'Unknown error'));
+      console.error('Error logging sequential jobs batch:', err);
+      alert('Error saving sequential jobs batch: ' + (err.message || 'Unknown error'));
     }
   };
 
@@ -17463,15 +17658,16 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         isCutReel: isCut,
         size: r.size ? String(r.size).trim() : '',
         gsm: r.gsm ? String(r.gsm).trim() : '',
+        bf: r.bf ? String(r.bf).trim() : '',
         quality: r.quality ? String(r.quality).trim() : '',
-        stand: r.stand ? String(r.stand).trim() : '',
+        stand: r.stand ? String(r.stand).trim() : (idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : 'Backing')),
         notes: r.notes ? String(r.notes).trim() : ''
       };
     });
 
     const reelNosStr = normalizedConsumed.map(r => {
       if (r.isCutReel) {
-        const spec = [r.size ? `${r.size}cm` : '', r.gsm ? `${r.gsm}g` : '', r.quality || ''].filter(Boolean).join(' ');
+        const spec = [r.size ? `${r.size}cm` : '', r.gsm ? `${r.gsm}g` : '', r.bf ? `${r.bf}BF` : '', r.quality || ''].filter(Boolean).join(' ');
         return `✂️ ${r.reelNo}${spec ? ` (${spec})` : ''}`;
       }
       return (r.reelNo || '').toUpperCase();
@@ -17540,14 +17736,14 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     try { localStorage.removeItem(PROD_DRAFT_KEY); } catch (err) {}
 
     setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
-    setConsumedReels([{ reelNo: '', weight: '' }]);
+    setConsumedReels(createDefaultReels());
     setSuggestedSheets(null);
   };
 
   const handleEdit = (record) => {
     setEditingId(record.id); setNewRecord(record);
     if (getConsumedReels(record).length > 0) setConsumedReels(record.consumedReels);
-    else if (record.reelNos) setConsumedReels([{ reelNo: record.reelNos, weight: record.useKg }]);
+    else if (record.reelNos) setConsumedReels([{ stand: 'Top', reelNo: record.reelNos, weight: record.useKg, size: '', gsm: '', bf: '' }]);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -17555,7 +17751,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     setEditingId(null);
     try { localStorage.removeItem(PROD_DRAFT_KEY); } catch (err) {}
     setNewRecord({ date: new Date().toISOString().split('T')[0], orderId: '', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', paperUsedFor: 'Paper', usedForItem: '', linerQty: '', wasteSheetsKg: '', numberOfUps: '1', commonUps: '', smallUps: '' });
-    setConsumedReels([{ reelNo: '', weight: '' }]);
+    setConsumedReels(createDefaultReels());
   };
 
   const deleteProductionWithWipCleanup = async (id, nameOrReels) => {
@@ -18040,70 +18236,53 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
               }}
             />
 
-            {/* Reel Entries List with Auto-Matched Specifications Badge, Cut Reel Support & Dynamic Balance Sync */}
+            {/* Reel Entries List with Unified Inputs: Where Used (Top/Fluting/Backing), Reel No, GSM, BF, Deckle, Avail Stock, KG Used, New Balance */}
             <div className="space-y-3">
               {consumedReels.map((reel, idx) => {
                 const isCut = !!reel.isCutReel;
                 const cleanNo = (reel.reelNo || '').trim();
                 const matchedStock = (!isCut && cleanNo) ? findInventoryReel(inventory, cleanNo) : null;
-                const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
+                const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : (reel.availKg !== undefined && reel.availKg !== null ? parseFloat(reel.availKg) : null);
                 const usedKg = parseFloat(reel.weight || 0);
                 const computedBalanceKg = availKg !== null ? Math.max(0, availKg - usedKg) : null;
                 const displayBalance = reel.customBalance !== undefined ? reel.customBalance : (computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '');
 
                 return (
-                  <div key={idx} className={`p-3 rounded-lg border space-y-2.5 transition-all ${isCut ? 'bg-amber-950/30 border-amber-500/50 shadow-xs' : 'bg-slate-800/90 border-slate-700'}`}>
-                    {/* Top Row: Reel Type Switcher & Stand Role */}
-                    <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-700/60 flex-wrap">
-                      <div className="flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-700">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const upd = [...consumedReels];
-                            upd[idx] = { ...upd[idx], isCutReel: false };
-                            setConsumedReels(upd);
-                          }}
-                          className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1.5 ${!isCut ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          <span>📦</span> Stock Reel (In Inventory)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const upd = [...consumedReels];
-                            const newSize = upd[idx].size || recommendedDeckleCm || '';
-                            upd[idx] = { ...upd[idx], isCutReel: true, size: newSize };
-                            setConsumedReels(upd);
-                          }}
-                          className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1.5 ${isCut ? 'bg-amber-500 text-slate-950 shadow-xs' : 'text-slate-400 hover:text-amber-300'}`}
-                        >
-                          <span>✂️</span> Cut / Balance Reel (Unrecorded)
-                        </button>
+                  <div key={reel.id || idx} className={`p-3.5 rounded-xl border space-y-3 transition-all ${isCut ? 'bg-amber-950/25 border-amber-500/40' : 'bg-slate-800/90 border-slate-700 shadow-sm'}`}>
+                    {/* Header: Stand Badge, Stock vs Cut Switcher, Delete Row */}
+                    <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-700/60 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded tracking-wider shadow-xs ${
+                          reel.stand === 'Top' ? 'bg-blue-600 text-white' :
+                          reel.stand === 'Fluting' ? 'bg-amber-500 text-slate-950 font-black' :
+                          reel.stand === 'Backing' || reel.stand === 'Bottom' ? 'bg-indigo-600 text-white' :
+                          'bg-teal-600 text-white'
+                        }`}>
+                          Stand {idx + 1}: {reel.stand === 'Bottom' ? 'Backing' : (reel.stand || 'Layer')}
+                        </span>
+                        <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-700">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateConsumedReel(idx, { isCutReel: false })}
+                            className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1 ${!isCut ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <span>📦</span> Stock Reel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateConsumedReel(idx, { isCutReel: true, size: reel.size || recommendedDeckleCm || '' })}
+                            className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1 ${isCut ? 'bg-amber-500 text-slate-950 shadow-xs' : 'text-slate-400 hover:text-amber-300'}`}
+                          >
+                            <span>✂️</span> Cut / Floor Roll
+                          </button>
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {/* Stand / Layer Selector */}
-                        <select
-                          value={reel.stand || ''}
-                          onChange={e => {
-                            const upd = [...consumedReels];
-                            upd[idx].stand = e.target.value;
-                            setConsumedReels(upd);
-                          }}
-                          className="bg-slate-900 border border-slate-700 text-slate-300 rounded px-2 py-1 text-xs font-semibold outline-none focus:border-amber-400"
-                        >
-                          <option value="">Stand / Layer...</option>
-                          <option value="Top">Top Liner</option>
-                          <option value="Fluting">Fluting Medium</option>
-                          <option value="Bottom">Bottom Liner</option>
-                          <option value="Center">Center Liner</option>
-                        </select>
-
-                        {/* Delete Row Button */}
                         {consumedReels.length > 1 && (
                           <button
                             type="button"
-                            onClick={() => setConsumedReels(consumedReels.filter((_, i) => i !== idx))}
+                            onClick={() => handleRemoveConsumedReel(idx)}
                             className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition"
                             title="Remove this reel row"
                           >
@@ -18113,349 +18292,225 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                       </div>
                     </div>
 
-                    {!isCut ? (
-                      /* ── 1. STOCK REEL ROW ── */
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-1 sm:grid-cols-[1.5fr,100px,120px,120px] gap-2 sm:gap-2.5 items-end">
-                          {/* Reel Identifier */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
-                              Reel No {reel.stand && <span className="text-amber-400 font-normal ml-1 font-sans">({reel.stand})</span>}
-                            </label>
-                            <input
-                              required
-                              type="text"
-                              placeholder="Enter Reel No / Scan"
-                              className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs sm:text-sm uppercase font-mono font-bold outline-none focus:border-amber-400"
-                              value={reel.reelNo}
-                              onChange={e => {
-                                const val = e.target.value;
-                                const upd = [...consumedReels];
-                                upd[idx].reelNo = val;
-                                delete upd[idx].customBalance;
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
+                    {/* Unified 8-Column Grid: Where Used, Reel No, GSM, BF, Deckle, Avail, KG Used, New Bal */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-[130px,1.4fr,85px,75px,95px,100px,110px,110px] gap-2.5 items-end">
+                      {/* 1. WHERE USED */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-black text-amber-300 uppercase tracking-wider mb-1 truncate">
+                          Where Used *
+                        </label>
+                        <select
+                          value={reel.stand || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { stand: e.target.value })}
+                          className="w-full p-2 border border-amber-500/60 bg-slate-900 text-amber-300 font-extrabold rounded text-xs outline-none focus:border-amber-400"
+                        >
+                          <option value="Top">Top Liner</option>
+                          <option value="Fluting">Fluting Medium</option>
+                          <option value="Backing">Backing Liner</option>
+                          <option value="Center">Center Liner</option>
+                        </select>
+                      </div>
 
-                          {/* Starting Available Stock */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
-                              Avail Stock
-                            </label>
-                            <div className={`w-full p-2 border rounded text-xs sm:text-sm font-mono font-bold text-center ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
-                              {availKg !== null ? `${availKg.toFixed(1)} KG` : '—'}
+                      {/* 2. REEL NO / BARCODE */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          {isCut ? 'Reel Label / Note' : 'Reel No / Scan *'}
+                        </label>
+                        <input
+                          required={!isCut}
+                          type="text"
+                          list={`single-reels-list-${idx}`}
+                          placeholder={isCut ? 'e.g. Floor Cut Roll' : 'Enter / Scan Reel No'}
+                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs uppercase font-mono font-bold outline-none focus:border-amber-400"
+                          value={reel.reelNo || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { reelNo: e.target.value })}
+                        />
+                        {!isCut && (
+                          <datalist id={`single-reels-list-${idx}`}>
+                            {inventory
+                              .filter(i => (!newRecord.companyId || i.companyId === newRecord.companyId) && parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0)) > 0)
+                              .slice(0, 30)
+                              .map(i => {
+                                const printed = i.supplierReelNo || i.reelNo || i.id;
+                                const bal = parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0));
+                                return (
+                                  <option key={i.id} value={printed}>
+                                    {printed} - {i.millName || ''} {i.gsm}G {i.bf ? `${i.bf}BF ` : ''}{i.size}cm ({bal.toFixed(1)}kg)
+                                  </option>
+                                );
+                              })}
+                          </datalist>
+                        )}
+                      </div>
+
+                      {/* 3. GSM */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          GSM *
+                        </label>
+                        <input
+                          required
+                          type="number"
+                          placeholder="120"
+                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                          value={reel.gsm || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { gsm: e.target.value })}
+                        />
+                      </div>
+
+                      {/* 4. BF */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          BF
+                        </label>
+                        <input
+                          type="number"
+                          placeholder="18"
+                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                          value={reel.bf || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { bf: e.target.value })}
+                        />
+                      </div>
+
+                      {/* 5. DECKLE (CM) */}
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider truncate">
+                            Deckle (cm)
+                          </label>
+                          {recommendedDeckleCm && !reel.size && (
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateConsumedReel(idx, { size: recommendedDeckleCm })}
+                              className="text-[9px] text-sky-300 hover:underline font-bold"
+                              title="Use calculated job deckle"
+                            >
+                              {recommendedDeckleCm}cm
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          step="0.1"
+                          placeholder={recommendedDeckleCm || '120'}
+                          className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                          value={reel.size || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { size: e.target.value })}
+                        />
+                      </div>
+
+                      {/* 6. AVAIL STOCK */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                          Avail Stock
+                        </label>
+                        <div className={`w-full p-2 border rounded text-xs font-mono font-bold text-center truncate ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
+                          {availKg !== null ? `${availKg.toFixed(1)} KG` : (isCut ? 'Floor Stock' : '—')}
+                        </div>
+                      </div>
+
+                      {/* 7. KG USED * */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-amber-300 uppercase tracking-wider mb-1 truncate">
+                          KG Used *
+                        </label>
+                        <input
+                          required
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          placeholder="0.0"
+                          className="w-full p-2 border border-amber-500/60 bg-amber-500/10 text-amber-300 rounded text-xs font-mono font-black outline-none focus:border-amber-400"
+                          value={reel.weight || ''}
+                          onChange={e => handleUpdateConsumedReel(idx, { weight: e.target.value })}
+                        />
+                      </div>
+
+                      {/* 8. NEW BALANCE */}
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-emerald-300 uppercase tracking-wider mb-1 truncate">
+                          New Balance
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          placeholder={availKg !== null ? '0.0' : '—'}
+                          disabled={availKg === null}
+                          title={availKg === null ? 'Enter an inventory reel number first' : 'Change remaining balance if not fully utilised'}
+                          className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs font-mono font-black outline-none focus:border-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                          value={displayBalance}
+                          onChange={e => handleUpdateConsumedReel(idx, { customBalance: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Presets for Stock Reels */}
+                    {matchedStock && availKg !== null && availKg > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">Quick Set:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateConsumedReel(idx, { weight: availKg.toFixed(1) })}
+                          className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300 font-bold transition"
+                        >
+                          ⚡ Full Reel (0 KG bal)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateConsumedReel(idx, { weight: (availKg * 0.5).toFixed(1) })}
+                          className="text-[10px] px-2 py-0.5 rounded bg-sky-950/80 hover:bg-sky-900 border border-sky-600/40 text-sky-300 font-bold transition"
+                        >
+                          🌓 Use 50% ({ (availKg * 0.5).toFixed(1) } KG)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateConsumedReel(idx, { weight: '0.0' })}
+                          className="text-[10px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 font-bold transition"
+                        >
+                          ↺ Reset (0 KG used)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Live Matched Reel Specs & Transition Badge */}
+                    {cleanNo && !isCut && (
+                      <div className="pt-0.5">
+                        {matchedStock ? (
+                          <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded-md font-medium">
+                            <span className="font-bold text-emerald-400">✓ In Stock:</span>
+                            <span className="text-white font-semibold">{matchedStock.millName || 'Stock Mill'}</span>
+                            <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
+                            <span className="text-slate-300">• {matchedStock.bf ? `${matchedStock.bf} BF` : '18 BF'}</span>
+                            <span className="text-slate-300">• {matchedStock.size} cm</span>
+                            <span className="text-slate-300">• {matchedStock.colour || 'Kraft'}</span>
+                            <div className="ml-auto flex items-center gap-2">
+                              <span className="text-[11px] text-slate-400">Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong></span>
+                              <span className="text-slate-600">→</span>
+                              <span className="text-[11px] text-amber-300">Using: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong></span>
+                              <span className="text-slate-600">→</span>
+                              <strong className={computedBalanceKg !== null && computedBalanceKg <= 0 ? 'text-emerald-400' : 'text-amber-400'}>
+                                {computedBalanceKg !== null ? `${computedBalanceKg.toFixed(1)} KG bal` : '—'}
+                              </strong>
                             </div>
                           </div>
-
-                          {/* KG Used (Two-way dynamic sync) */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider mb-1 truncate">
-                              KG Used *
-                            </label>
-                            <input
-                              required
-                              type="number"
-                              step="0.1"
-                              min="0"
-                              placeholder="0.0"
-                              className="w-full p-2 border border-amber-500/60 bg-amber-500/10 text-amber-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
-                              value={reel.weight}
-                              onChange={e => {
-                                const val = e.target.value;
-                                const upd = [...consumedReels];
-                                upd[idx].weight = val;
-                                delete upd[idx].customBalance;
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
-
-                          {/* Updated Balance (Editable: updates KG Used if changed!) */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-emerald-300 uppercase tracking-wider mb-1 truncate">
-                              New Balance
-                            </label>
-                            <input
-                              type="number"
-                              step="0.1"
-                              min="0"
-                              placeholder={availKg !== null ? '0.0' : '—'}
-                              disabled={availKg === null}
-                              title={availKg === null ? 'Enter an inventory reel number first' : 'Change remaining balance if not fully utilised'}
-                              className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
-                              value={displayBalance}
-                              onChange={e => {
-                                const val = e.target.value;
-                                const upd = [...consumedReels];
-                                upd[idx].customBalance = val;
-                                if (availKg !== null) {
-                                  const numBal = parseFloat(val);
-                                  if (!isNaN(numBal)) {
-                                    const newUsedKg = Math.max(0, availKg - numBal);
-                                    upd[idx].weight = newUsedKg.toFixed(1);
-                                  }
-                                }
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Quick Presets if Matched to Stock */}
-                        {matchedStock && availKg !== null && availKg > 0 && (
-                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">Quick Set:</span>
+                        ) : (
+                          <div className="text-xs bg-amber-950/60 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-md font-medium flex items-center justify-between flex-wrap gap-2">
+                            <span>ℹ Reel "{cleanNo}" not in warehouse stock database.</span>
                             <button
                               type="button"
-                              onClick={() => {
-                                const upd = [...consumedReels];
-                                upd[idx].weight = availKg.toFixed(1);
-                                delete upd[idx].customBalance;
-                                setConsumedReels(upd);
-                              }}
-                              className="text-[10.5px] px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300 font-bold transition"
+                              onClick={() => handleUpdateConsumedReel(idx, { isCutReel: true, size: reel.size || recommendedDeckleCm || '' })}
+                              className="bg-amber-500 text-slate-950 font-extrabold px-2 py-0.5 rounded text-[11px] hover:bg-amber-400 transition"
                             >
-                              ⚡ Full Reel Used (0 KG bal)
+                              ✂️ Switch to Floor Cut Roll
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const upd = [...consumedReels];
-                                const half = (availKg * 0.5).toFixed(1);
-                                upd[idx].weight = half;
-                                delete upd[idx].customBalance;
-                                setConsumedReels(upd);
-                              }}
-                              className="text-[10.5px] px-2 py-0.5 rounded bg-sky-950/80 hover:bg-sky-900 border border-sky-600/40 text-sky-300 font-bold transition"
-                            >
-                              🌓 Use 50% ({ (availKg * 0.5).toFixed(1) } KG)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const upd = [...consumedReels];
-                                upd[idx].weight = '0.0';
-                                delete upd[idx].customBalance;
-                                setConsumedReels(upd);
-                              }}
-                              className="text-[10.5px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 font-bold transition"
-                            >
-                              ↺ Reset (0 KG used)
-                            </button>
-                          </div>
-                        )}
-
-                        {/* LIVE REEL SPECIFICATION & UPDATED BALANCE BADGE */}
-                        {cleanNo && (
-                          <div className="pt-1">
-                            {matchedStock ? (
-                              <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-2 rounded-md font-medium">
-                                <span className="font-bold text-emerald-400">✓ Reel Identified:</span>
-                                <span className="text-white font-semibold">{matchedStock.millName || 'Stock Mill'}</span>
-                                <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
-                                <span className="text-slate-300">• {matchedStock.bf} BF</span>
-                                <span className="text-slate-300">• {matchedStock.size} cm</span>
-                                <span className="text-slate-300">• {matchedStock.colour || 'Kraft'}</span>
-                                
-                                <div className="ml-auto flex items-center gap-2">
-                                  {availKg !== null && availKg <= 0 ? (
-                                    <span className="inline-flex items-center gap-1 font-extrabold bg-red-900/80 border border-red-500/60 text-red-200 px-2.5 py-0.5 rounded text-[11px]">
-                                      ⚠️ Depleted in Stock (0.0 KG available)
-                                    </span>
-                                  ) : (
-                                    <>
-                                      <span className="text-[11px] text-slate-400">
-                                        Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong>
-                                      </span>
-                                      <span className="text-slate-600">→</span>
-                                      <span className="text-[11px] text-amber-300">
-                                        Consuming: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong>
-                                      </span>
-                                      <span className="text-slate-600">→</span>
-                                      {computedBalanceKg !== null && computedBalanceKg <= 0 ? (
-                                        <span className="inline-flex items-center gap-1 font-extrabold bg-emerald-900/80 border border-emerald-500/50 text-emerald-200 px-2 py-0.5 rounded text-[11px]">
-                                          ✓ 0.0 KG (Full Reel Consumed)
-                                        </span>
-                                      ) : (
-                                        <span className="inline-flex items-center gap-1 font-extrabold bg-amber-900/80 border border-amber-500/50 text-amber-200 px-2 py-0.5 rounded text-[11px]">
-                                          ⚡ {computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '0.0'} KG remaining
-                                        </span>
-                                      )}
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-xs bg-amber-950/60 border border-amber-500/40 text-amber-300 px-3 py-2 rounded-md font-medium flex items-center justify-between flex-wrap gap-2">
-                                <div className="flex items-center gap-1.5">
-                                  <span>ℹ</span>
-                                  <span>Reel number <strong>"{cleanNo}"</strong> not found in stock inventory.</span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const upd = [...consumedReels];
-                                    const guessedSize = (!isNaN(parseFloat(cleanNo)) && parseFloat(cleanNo) > 30 && parseFloat(cleanNo) < 300) ? cleanNo : (recommendedDeckleCm || '');
-                                    upd[idx] = {
-                                      ...upd[idx],
-                                      isCutReel: true,
-                                      size: guessedSize,
-                                      notes: cleanNo
-                                    };
-                                    setConsumedReels(upd);
-                                  }}
-                                  className="bg-amber-500 text-slate-950 font-extrabold px-2.5 py-1 rounded text-[11px] hover:bg-amber-400 transition"
-                                >
-                                  ✂️ Switch to Cut / Balance Reel &amp; Set Size
-                                </button>
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
-                    ) : (
-                      /* ── 2. CUT / BALANCE REEL ROW (Unrecorded Floor Stock) ── */
-                      <div className="space-y-2.5 pt-0.5">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[130px,110px,150px,120px,1fr] gap-2.5 items-end">
-                          {/* 1. Size / Deckle (cm) */}
-                          <div className="min-w-0">
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider">
-                                Size (Deckle) *
-                              </label>
-                              {recommendedDeckleCm && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const upd = [...consumedReels];
-                                    upd[idx].size = recommendedDeckleCm;
-                                    setConsumedReels(upd);
-                                  }}
-                                  className="text-[9.5px] font-bold text-sky-300 hover:text-sky-200 underline"
-                                  title="Use calculated deckle for this job"
-                                >
-                                  Job: {recommendedDeckleCm}cm
-                                </button>
-                              )}
-                            </div>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                step="0.1"
-                                placeholder="e.g. 112"
-                                className="w-full p-2 pr-7 border border-amber-500/60 bg-slate-900 text-white rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
-                                value={reel.size || ''}
-                                onChange={e => {
-                                  const upd = [...consumedReels];
-                                  upd[idx].size = e.target.value;
-                                  setConsumedReels(upd);
-                                }}
-                              />
-                              <span className="absolute right-2 top-2.5 text-[10px] text-slate-400 font-bold uppercase pointer-events-none">cm</span>
-                            </div>
-                          </div>
-
-                          {/* 2. GSM */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider mb-1">
-                              GSM
-                            </label>
-                            <input
-                              type="number"
-                              placeholder="e.g. 120"
-                              className="w-full p-2 border border-slate-700 bg-slate-900 text-white rounded text-xs sm:text-sm font-mono font-bold outline-none focus:border-amber-400"
-                              value={reel.gsm || ''}
-                              onChange={e => {
-                                const upd = [...consumedReels];
-                                upd[idx].gsm = e.target.value;
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
-
-                          {/* 3. Paper Quality / Type */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider mb-1">
-                              Quality / Type
-                            </label>
-                            <select
-                              className="w-full p-2 border border-slate-700 bg-slate-900 text-white rounded text-xs sm:text-sm font-semibold outline-none focus:border-amber-400"
-                              value={reel.quality || ''}
-                              onChange={e => {
-                                const upd = [...consumedReels];
-                                upd[idx].quality = e.target.value;
-                                setConsumedReels(upd);
-                              }}
-                            >
-                              <option value="">Select Quality...</option>
-                              <option value="Fluting Medium">Fluting Medium</option>
-                              <option value="Kraft Liner">Kraft Liner</option>
-                              <option value="Semi Kraft">Semi Kraft</option>
-                              <option value="Golden Top">Golden Top</option>
-                              <option value="Duplex / White Top">Duplex / White Top</option>
-                              <option value="Testliner">Testliner</option>
-                            </select>
-                          </div>
-
-                          {/* 4. KG Consumed */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider mb-1">
-                              KG Used *
-                            </label>
-                            <input
-                              required
-                              type="number"
-                              step="0.1"
-                              min="0.1"
-                              placeholder="0.0"
-                              className="w-full p-2 border border-amber-500/80 bg-amber-500/10 text-amber-300 rounded text-xs sm:text-sm font-mono font-extrabold outline-none focus:border-amber-400"
-                              value={reel.weight || ''}
-                              onChange={e => {
-                                const upd = [...consumedReels];
-                                upd[idx].weight = e.target.value;
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
-
-                          {/* 5. Custom Label or Floor Notes */}
-                          <div className="min-w-0">
-                            <label className="block text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
-                              Reel Label / Note
-                            </label>
-                            <input
-                              type="text"
-                              placeholder={reel.size ? `CUT-${reel.size}CM${reel.gsm ? `-${reel.gsm}G` : ''}` : "e.g. Cut Roll / Balance Piece"}
-                              className="w-full p-2 border border-slate-700 bg-slate-900 text-white rounded text-xs sm:text-sm font-sans outline-none focus:border-amber-400"
-                              value={reel.notes || ''}
-                              onChange={e => {
-                                const upd = [...consumedReels];
-                                upd[idx].notes = e.target.value;
-                                upd[idx].reelNo = e.target.value;
-                                setConsumedReels(upd);
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Info badge */}
-                        <div className="flex items-center justify-between gap-2 text-xs bg-amber-950/60 border border-amber-500/30 px-3 py-1.5 rounded-lg text-amber-300 font-medium flex-wrap">
-                          <div className="flex items-center gap-1.5">
-                            <span>✂️</span>
-                            <span>
-                              <strong>Floor Cut / Balance Reel:</strong> {reel.size ? `${reel.size} cm deckle` : 'Size not specified'}{reel.gsm ? ` · ${reel.gsm} GSM` : ''}{reel.quality ? ` · ${reel.quality}` : ''}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-amber-400/90 font-mono">
-                              Tag: <strong>{(reel.notes || (reel.size ? `CUT-${reel.size}CM${reel.gsm ? `-${reel.gsm}G` : ''}` : `CUT-REEL-${idx+1}`)).toUpperCase()}</strong>
-                            </span>
-                            <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded">
-                              ✓ Tracked in Monthly Production
-                            </span>
-                          </div>
-                        </div>
+                    )}
+                    {isCut && (
+                      <div className="flex items-center justify-between gap-2 text-xs bg-amber-950/50 border border-amber-500/30 px-3 py-1.5 rounded-lg text-amber-300 font-medium flex-wrap">
+                        <span>✂️ <strong>Floor Cut / Balance Roll:</strong> {reel.size ? `${reel.size}cm deckle` : ''}{reel.gsm ? ` · ${reel.gsm} GSM` : ''}{reel.bf ? ` · ${reel.bf} BF` : ''} · Tracked in Production Logs</span>
                       </div>
                     )}
                   </div>
@@ -18467,14 +18522,40 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setConsumedReels([...consumedReels, { isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }])}
+                  onClick={() => setConsumedReels([...consumedReels, {
+                    id: 'reel_' + Date.now(),
+                    stand: consumedReels.length === 0 ? 'Top' : (consumedReels.length === 1 ? 'Fluting' : (consumedReels.length === 2 ? 'Backing' : 'Center')),
+                    isCutReel: false,
+                    reelNo: '',
+                    size: recommendedDeckleCm || '',
+                    gsm: '',
+                    bf: '',
+                    quality: '',
+                    weight: '',
+                    customBalance: '',
+                    availKg: null,
+                    notes: ''
+                  }])}
                   className="text-xs font-extrabold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3.5 py-2 rounded-lg transition flex items-center gap-1.5"
                 >
                   <span>+ 📦</span> Add Stock Reel
                 </button>
                 <button
                   type="button"
-                  onClick={() => setConsumedReels([...consumedReels, { isCutReel: true, reelNo: '', size: recommendedDeckleCm || '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }])}
+                  onClick={() => setConsumedReels([...consumedReels, {
+                    id: 'reel_' + Date.now(),
+                    stand: consumedReels.length === 0 ? 'Top' : (consumedReels.length === 1 ? 'Fluting' : (consumedReels.length === 2 ? 'Backing' : 'Center')),
+                    isCutReel: true,
+                    reelNo: '',
+                    size: recommendedDeckleCm || '',
+                    gsm: '',
+                    bf: '',
+                    quality: '',
+                    weight: '',
+                    customBalance: '',
+                    availKg: null,
+                    notes: ''
+                  }])}
                   className="text-xs font-extrabold text-amber-300 bg-amber-950/70 hover:bg-amber-900/80 border border-amber-500/50 px-3.5 py-2 rounded-lg transition flex items-center gap-1.5"
                 >
                   <span>+ ✂️</span> Add Cut / Balance Reel
@@ -18592,15 +18673,11 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           </div>
         </div>
 
-        {/* SECTION 1: RUN SPECIFICATIONS & PARAMETERS */}
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
-          <div className="text-xs font-black uppercase tracking-wider text-stone-500 mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-            Step 1: Deckle Run Setup &amp; Common Parameters
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
+        {/* BATCH SETUP: DATE & UNIT */}
+        <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Run Date *</label>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Batch Run Date *</label>
               <input
                 required
                 type="date"
@@ -18611,7 +18688,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Company / Unit *</label>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Manufacturing Unit *</label>
               <select
                 required
                 className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none"
@@ -18624,284 +18701,19 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                 ))}
               </select>
             </div>
-
-            <div>
-              <label className="block text-xs font-bold text-stone-700 uppercase mb-1 flex items-center justify-between">
-                <span>Machine Deckle (cm) *</span>
-              </label>
-              <input
-                required
-                type="number"
-                step="0.1"
-                placeholder="e.g. 112 or 120"
-                className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-mono font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-                value={deckleRunDeckleCm}
-                onChange={e => {
-                  const val = e.target.value;
-                  setDeckleRunDeckleCm(val);
-                  if (val) {
-                    setDeckleRunReels(prev => prev.map(r => (!r.size || r.size === deckleRunDeckleCm) ? { ...r, size: val } : r));
-                  }
-                }}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Flute Profile</label>
-              <select
-                className="w-full p-2.5 border border-stone-300 bg-white rounded-lg text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
-                value={deckleRunFlute}
-                onChange={e => setDeckleRunFlute(e.target.value)}
-              >
-                <option value="B">B Flute (1.35x Take-up)</option>
-                <option value="C">C Flute (1.42x Take-up)</option>
-                <option value="E">E Flute (1.25x Take-up)</option>
-                <option value="A">A Flute (1.54x Take-up)</option>
-                <option value="F">F Flute (1.15x Take-up)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-amber-700 uppercase mb-1 flex items-center justify-between">
-                <span>Total Run Scrap (KG)</span>
-                <span className="text-[10px] text-amber-600 font-normal">Proportional</span>
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                placeholder="e.g. 15.0"
-                className="w-full p-2.5 border border-amber-300 bg-amber-50/50 rounded-lg text-sm font-mono font-bold text-amber-900 focus:ring-2 focus:ring-amber-500 outline-none"
-                value={deckleRunWasteKg}
-                onChange={e => setDeckleRunWasteKg(e.target.value)}
-                title="Total scrap generated across the whole deckle run (trim + tail + rejects). Will be divided proportionally according to each job's production volume."
-              />
-            </div>
-          </div>
-          {parseFloat(deckleRunWasteKg || 0) > 0 && (
-            <div className="mt-2.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-center gap-2">
-              <span>⚖️</span>
-              <span>
-                <strong>{parseFloat(deckleRunWasteKg).toFixed(1)} KG total scrap</strong> will be automatically divided across all jobs proportionally based on each job's paper consumption.
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* SECTION 2: MOUNTED REELS ON CORRUGATOR STANDS */}
-        <div className="bg-slate-900 text-white p-5 rounded-xl border border-slate-700 shadow-md">
-          <div className="flex justify-between items-center mb-4 flex-wrap gap-2 border-b border-slate-700/80 pb-3">
-            <div>
-              <h4 className="text-sm font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                🧲 Step 2: Mounted Paper Reels on Machine Stands
-              </h4>
-              <p className="text-xs text-slate-300 mt-0.5">Mount these reels once on the corrugator stands; they feed all sequential jobs in this run</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleAddDeckleReel}
-                className="text-xs font-extrabold bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm"
-              >
-                <span>+</span> Add Stand / Layer
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {deckleRunReels.map((reel, idx) => {
-              const matchedStock = !reel.isCutReel && reel.reelNo ? findInventoryReel(inventory, reel.reelNo) : null;
-              const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
-              const reelSummary = deckleRunCalculations.reelsSummary.find(r => r.id === reel.id) || {};
-              const computedUsed = reelSummary.computedUsedKg || 0;
-              const computedBal = reelSummary.computedNewBalKg !== undefined ? reelSummary.computedNewBalKg : (availKg !== null ? Math.max(0, availKg - computedUsed) : null);
-
-              return (
-                <div key={reel.id || idx} className={`p-3.5 rounded-lg border space-y-2.5 transition-all ${reel.isCutReel ? 'bg-amber-950/30 border-amber-500/50' : 'bg-slate-800/90 border-slate-700'}`}>
-                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-700/60 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black uppercase text-amber-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-700">
-                        Stand {idx + 1}: {reel.stand || 'Layer'}
-                      </span>
-                      <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-700">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: false })}
-                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold transition-all ${!reel.isCutReel ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          📦 Stock Reel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: true, size: reel.size || deckleRunDeckleCm || '' })}
-                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold transition-all ${reel.isCutReel ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-amber-300'}`}
-                        >
-                          ✂️ Cut / Floor Roll
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={reel.stand || ''}
-                        onChange={e => handleUpdateDeckleReel(idx, { stand: e.target.value })}
-                        className="bg-slate-900 border border-slate-700 text-slate-300 rounded px-2 py-1 text-xs font-semibold outline-none focus:border-amber-400"
-                      >
-                        <option value="Top">Top Liner</option>
-                        <option value="Fluting">Fluting Medium</option>
-                        <option value="Bottom">Bottom Liner</option>
-                        <option value="Center">Center Liner</option>
-                      </select>
-
-                      {deckleRunReels.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveDeckleReel(reel.id)}
-                          className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition"
-                          title="Remove Stand"
-                        >
-                          <Trash2 className="w-3.5 h-3.5"/>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Reel Inputs Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end">
-                    {/* 1. Identifier */}
-                    <div className="min-w-0">
-                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1 truncate">
-                        {reel.isCutReel ? 'Reel Label / Tag' : 'Reel No / Barcode *'}
-                      </label>
-                      <input
-                        required={!reel.isCutReel}
-                        type="text"
-                        list={`deckle-reels-list-${idx}`}
-                        placeholder={reel.isCutReel ? 'e.g. CUT-ROLL-1' : 'Enter / Scan Reel No'}
-                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs uppercase font-mono font-bold outline-none focus:border-amber-400"
-                        value={reel.reelNo}
-                        onChange={e => handleUpdateDeckleReel(idx, { reelNo: e.target.value })}
-                      />
-                      {!reel.isCutReel && (
-                        <datalist id={`deckle-reels-list-${idx}`}>
-                          {inventory
-                            .filter(i => (!deckleRunCompanyId || i.companyId === deckleRunCompanyId) && parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0)) > 0)
-                            .slice(0, 30)
-                            .map(i => {
-                              const printed = i.supplierReelNo || i.reelNo || i.id;
-                              const bal = parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0));
-                              return (
-                                <option key={i.id} value={printed}>
-                                  {printed} - {i.millName || ''} {i.gsm}G {i.size}cm ({bal.toFixed(1)}kg)
-                                </option>
-                              );
-                            })}
-                        </datalist>
-                      )}
-                    </div>
-
-                    {/* 2. Deckle Size (cm) */}
-                    <div className="min-w-0">
-                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
-                        Reel Deckle (cm) *
-                      </label>
-                      <input
-                        required
-                        type="number"
-                        step="0.1"
-                        placeholder={deckleRunDeckleCm || '120'}
-                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
-                        value={reel.size || deckleRunDeckleCm || ''}
-                        onChange={e => handleUpdateDeckleReel(idx, { size: e.target.value })}
-                      />
-                    </div>
-
-                    {/* 3. GSM */}
-                    <div className="min-w-0">
-                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
-                        GSM *
-                      </label>
-                      <input
-                        required
-                        type="number"
-                        placeholder="120"
-                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
-                        value={reel.gsm || ''}
-                        onChange={e => handleUpdateDeckleReel(idx, { gsm: e.target.value })}
-                      />
-                    </div>
-
-                    {/* 4. Avail Stock */}
-                    <div className="min-w-0">
-                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
-                        Avail Stock (KG)
-                      </label>
-                      <div className={`w-full p-2 border rounded text-xs font-mono font-bold text-center ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
-                        {availKg !== null ? `${availKg.toFixed(1)} KG` : (reel.isCutReel ? 'Floor Stock' : '—')}
-                      </div>
-                    </div>
-
-                    {/* 5. Mode 2 Input or Mode 1 Computed Display */}
-                    <div className="min-w-0">
-                      {deckleRunConsumptionMode === 'actual_weigh' ? (
-                        <>
-                          <label className="block text-[10px] font-bold text-amber-300 uppercase mb-1 truncate">
-                            Single End Weigh (KG) *
-                          </label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            placeholder="Actual used KG"
-                            className="w-full p-2 border border-amber-500/80 bg-amber-500/10 text-amber-300 rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
-                            value={reel.actualUsedKg || ''}
-                            onChange={e => handleUpdateDeckleReel(idx, { actualUsedKg: e.target.value })}
-                          />
-                        </>
-                      ) : (
-                        <>
-                          <label className="block text-[10px] font-bold text-emerald-300 uppercase mb-1 truncate">
-                            ⚡ Auto-Computed KG
-                          </label>
-                          <div className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs font-mono font-black text-center">
-                            {computedUsed.toFixed(1)} KG
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Matched Reel Live Spec Badge */}
-                  {matchedStock && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded font-medium">
-                      <span className="font-bold text-emerald-400">✓ In Stock:</span>
-                      <span className="text-white">{matchedStock.millName || 'Stock Mill'}</span>
-                      <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
-                      <span className="text-slate-300">• {matchedStock.size} cm</span>
-                      <span className="text-slate-300">• {matchedStock.bf || 18} BF</span>
-                      <div className="ml-auto text-xs font-mono">
-                        <span className="text-slate-400">Bal after run: </span>
-                        <strong className={computedBal !== null && computedBal <= 0 ? 'text-red-400' : 'text-emerald-400'}>
-                          {computedBal !== null ? `${computedBal.toFixed(1)} KG` : '—'}
-                        </strong>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </div>
 
-        {/* SECTION 3: SEQUENTIAL JOBS RUN ON THIS DECKLE */}
+        {/* STEP 1: SEQUENTIAL JOB CARDS */}
         <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
             <div>
               <div className="text-xs font-black uppercase tracking-wider text-stone-500 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                Step 3: Sequential Jobs Run on this Deckle Setup
+                Step 1: Sequential Job Cards Run in this Batch
               </div>
               <p className="text-xs text-stone-600 mt-0.5">
-                Add all jobs produced sequentially on this same deckle width without unmounting the paper reels
+                Add each job card produced sequentially on the corrugator without dismounting paper reels
               </p>
             </div>
             <button
@@ -18923,6 +18735,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
               const targetQty = matchedJob ? parseInt(matchedJob.plannedQty || matchedJob.orderQty || 0) : 0;
               const ups = matchedJob ? parseInt(matchedJob.ups || matchedJob.plannedUps || 1) : 1;
               const targetSheets = Math.ceil(targetQty / ups);
+              const fluteType = matchedItem?.fluteType || matchedItem?.Flute_Type || matchedJob?.flute || 'B';
 
               const calcJob = deckleRunCalculations.validJobs.find(vj => vj.entry.id === jobEntry.id);
               const runningMeters = calcJob?.runningMeters || 0;
@@ -18939,7 +18752,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         {jIdx + 1}
                       </span>
                       <span className="text-xs font-bold text-stone-700 uppercase tracking-wider">
-                        Sequential Job Card #{jIdx + 1}
+                        Sequential Job #{jIdx + 1}
                       </span>
                       {jCardNo && (
                         <span className="bg-blue-100 text-blue-900 text-xs font-mono font-black px-2 py-0.5 rounded">
@@ -18959,7 +18772,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr] gap-3 items-start">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 items-start">
                     <div>
                       <label className="block text-xs font-bold text-stone-700 uppercase mb-1">
                         Select Active Job Card *
@@ -19011,6 +18824,22 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         onChange={e => handleUpdateDeckleJob(jIdx, { producedSheets: e.target.value })}
                       />
                     </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-amber-700 uppercase mb-1 flex items-center justify-between">
+                        <span>Job Scrap / Waste (KG)</span>
+                        <span className="text-[10px] text-amber-600 font-normal">Optional</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        placeholder="0.0"
+                        className="w-full p-2.5 border border-amber-300 bg-amber-50/50 rounded-lg text-sm font-mono font-bold text-amber-900 focus:ring-2 focus:ring-amber-500 outline-none"
+                        value={jobEntry.wasteKg || ''}
+                        onChange={e => handleUpdateDeckleJob(jIdx, { wasteKg: e.target.value })}
+                      />
+                    </div>
                   </div>
 
                   {/* Live Calculation Pill for this Job */}
@@ -19020,7 +18849,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         <div>
                           <span className="text-[10px] text-stone-500 uppercase font-bold block">Item / Specs</span>
                           <span className="font-bold text-stone-900">{matchedJob.itemName}</span>
-                          <span className="text-stone-500 ml-1">({cutLengthMm} mm cut length · {ups} Ups)</span>
+                          <span className="text-stone-500 ml-1">({cutLengthMm} mm cut length · {fluteType} Flute · {ups} Ups)</span>
                         </div>
                       </div>
 
@@ -19050,7 +18879,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                         )}
                         <div className="h-6 w-px bg-stone-200"></div>
                         <div>
-                          <span className="text-[10px] text-emerald-700 uppercase font-bold block">Total Paper Charged</span>
+                          <span className="text-[10px] text-emerald-700 uppercase font-bold block">Total Charged</span>
                           <span className="font-mono font-extrabold text-emerald-800">{allocatedTotalKg.toFixed(1)} kg</span>
                         </div>
                       </div>
@@ -19062,87 +18891,334 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
           </div>
         </div>
 
-        {/* SECTION 4: CONSUMPTION & WEIGHING MODE SELECTION */}
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
-          <div className="text-xs font-black uppercase tracking-wider text-stone-500 mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-            Step 4: Choose Consumption Calculation Mode
+        {/* STEP 2: MOUNTED PAPER REELS ON MACHINE STANDS (EXACT REEL CONSUMPTION UI AS SINGLE JOB) */}
+        <div className="bg-slate-900 text-white p-5 rounded-xl border border-slate-700 shadow-md">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-2 border-b border-slate-700/80 pb-3">
+            <div>
+              <h4 className="text-sm font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                🧲 Step 2: Mounted Paper Reels on Machine Stands
+              </h4>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Mount paper reels once on corrugator stands (Top, Fluting, Backing); they feed all sequential jobs above
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleAutoCalcMultiJobReels}
+                className="text-xs font-black bg-amber-500 hover:bg-amber-400 text-slate-950 px-3.5 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-md"
+                title="Calculate theoretical reel consumption across all sequential jobs based on paper specs and flute factors"
+              >
+                ⚡ Auto-Calculate Reel KG from Sequential Jobs
+              </button>
+            </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label
-              onClick={() => setDeckleRunConsumptionMode('formula')}
-              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
-                deckleRunConsumptionMode === 'formula'
-                  ? 'border-blue-600 bg-blue-50/60 shadow-sm'
-                  : 'border-stone-200 hover:border-stone-300 bg-white'
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <input
-                  type="radio"
-                  name="deckleRunMode"
-                  checked={deckleRunConsumptionMode === 'formula'}
-                  onChange={() => setDeckleRunConsumptionMode('formula')}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="font-extrabold text-sm text-stone-900 flex items-center gap-2">
-                    <span>⚡ Mode 1: Mathematical Formula (Zero Weighing)</span>
-                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2 py-0.5 rounded">Recommended</span>
-                  </div>
-                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
-                    Reel consumption is mathematically calculated directly from blank cut length, produced sheets, GSM, and flute take-up factors.
-                    <strong> Operators never need to unmount or weigh the reels.</strong> Run wastage is added proportionally.
-                  </p>
-                </div>
-              </div>
-              <div className="mt-3 text-[11px] font-bold text-blue-700 bg-blue-100/60 px-2.5 py-1 rounded">
-                ✓ Maximum machine efficiency · Zero crane/labor downtime
-              </div>
-            </label>
 
-            <label
-              onClick={() => setDeckleRunConsumptionMode('actual_weigh')}
-              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
-                deckleRunConsumptionMode === 'actual_weigh'
-                  ? 'border-amber-600 bg-amber-50/60 shadow-sm'
-                  : 'border-stone-200 hover:border-stone-300 bg-white'
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <input
-                  type="radio"
-                  name="deckleRunMode"
-                  checked={deckleRunConsumptionMode === 'actual_weigh'}
-                  onChange={() => setDeckleRunConsumptionMode('actual_weigh')}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="font-extrabold text-sm text-stone-900 flex items-center gap-2">
-                    <span>⚖️ Mode 2: Single End-of-Run Weighing</span>
+          <div className="space-y-3">
+            {deckleRunReels.map((reel, idx) => {
+              const isCut = !!reel.isCutReel;
+              const cleanNo = (reel.reelNo || '').trim();
+              const matchedStock = (!isCut && cleanNo) ? findInventoryReel(inventory, cleanNo) : null;
+              const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : (reel.availKg !== undefined && reel.availKg !== null ? parseFloat(reel.availKg) : null);
+              const usedKg = parseFloat(reel.weight || 0);
+              const computedBalanceKg = availKg !== null ? Math.max(0, availKg - usedKg) : null;
+              const displayBalance = reel.customBalance !== undefined ? reel.customBalance : (computedBalanceKg !== null ? computedBalanceKg.toFixed(1) : '');
+
+              return (
+                <div key={reel.id || idx} className={`p-3.5 rounded-xl border space-y-3 transition-all ${isCut ? 'bg-amber-950/25 border-amber-500/40' : 'bg-slate-800/90 border-slate-700 shadow-sm'}`}>
+                  {/* Header: Stand Badge, Stock vs Cut Switcher, Delete Row */}
+                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-700/60 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded tracking-wider shadow-xs ${
+                        reel.stand === 'Top' ? 'bg-blue-600 text-white' :
+                        reel.stand === 'Fluting' ? 'bg-amber-500 text-slate-950 font-black' :
+                        reel.stand === 'Backing' || reel.stand === 'Bottom' ? 'bg-indigo-600 text-white' :
+                        'bg-teal-600 text-white'
+                      }`}>
+                        Stand {idx + 1}: {reel.stand === 'Bottom' ? 'Backing' : (reel.stand || 'Layer')}
+                      </span>
+                      <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-700">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: false })}
+                          className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1 ${!isCut ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          <span>📦</span> Stock Reel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: true, size: reel.size || '' })}
+                          className={`px-2.5 py-1 rounded text-[11px] font-extrabold transition-all flex items-center gap-1 ${isCut ? 'bg-amber-500 text-slate-950 shadow-xs' : 'text-slate-400 hover:text-amber-300'}`}
+                        >
+                          <span>✂️</span> Cut / Floor Roll
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {deckleRunReels.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDeckleReel(reel.id)}
+                          className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition"
+                          title="Remove Stand"
+                        >
+                          <Trash2 className="w-3.5 h-3.5"/>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
-                    Run all jobs first. At the end of the entire batch, weigh each mounted reel once on the scale (or enter remaining balance).
-                    The ERP <strong>divides the actual weighed consumption across all jobs in proportion</strong> to their paper share.
-                  </p>
+
+                  {/* Unified 8-Column Grid: Where Used, Reel No, GSM, BF, Deckle, Avail, KG Used, New Bal */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-[130px,1.4fr,85px,75px,95px,100px,110px,110px] gap-2.5 items-end">
+                    {/* 1. WHERE USED */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-black text-amber-300 uppercase tracking-wider mb-1 truncate">
+                        Where Used *
+                      </label>
+                      <select
+                        value={reel.stand || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { stand: e.target.value })}
+                        className="w-full p-2 border border-amber-500/60 bg-slate-900 text-amber-300 font-extrabold rounded text-xs outline-none focus:border-amber-400"
+                      >
+                        <option value="Top">Top Liner</option>
+                        <option value="Fluting">Fluting Medium</option>
+                        <option value="Backing">Backing Liner</option>
+                        <option value="Center">Center Liner</option>
+                      </select>
+                    </div>
+
+                    {/* 2. REEL NO / BARCODE */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                        {isCut ? 'Reel Label / Note' : 'Reel No / Scan *'}
+                      </label>
+                      <input
+                        required={!isCut}
+                        type="text"
+                        list={`deckle-reels-list-${idx}`}
+                        placeholder={isCut ? 'e.g. Floor Cut Roll' : 'Enter / Scan Reel No'}
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs uppercase font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.reelNo || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { reelNo: e.target.value })}
+                      />
+                      {!isCut && (
+                        <datalist id={`deckle-reels-list-${idx}`}>
+                          {inventory
+                            .filter(i => (!deckleRunCompanyId || i.companyId === deckleRunCompanyId) && parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0)) > 0)
+                            .slice(0, 30)
+                            .map(i => {
+                              const printed = i.supplierReelNo || i.reelNo || i.id;
+                              const bal = parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0));
+                              return (
+                                <option key={i.id} value={printed}>
+                                  {printed} - {i.millName || ''} {i.gsm}G {i.bf ? `${i.bf}BF ` : ''}{i.size}cm ({bal.toFixed(1)}kg)
+                                </option>
+                              );
+                            })}
+                        </datalist>
+                      )}
+                    </div>
+
+                    {/* 3. GSM */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                        GSM *
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        placeholder="120"
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.gsm || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { gsm: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 4. BF */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                        BF
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="18"
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.bf || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { bf: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 5. DECKLE (CM) */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                        Deckle (cm) *
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        step="0.1"
+                        placeholder="120"
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.size || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { size: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 6. AVAIL STOCK */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1 truncate">
+                        Avail Stock
+                      </label>
+                      <div className={`w-full p-2 border rounded text-xs font-mono font-bold text-center truncate ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
+                        {availKg !== null ? `${availKg.toFixed(1)} KG` : (isCut ? 'Floor Stock' : '—')}
+                      </div>
+                    </div>
+
+                    {/* 7. KG USED * */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-amber-300 uppercase tracking-wider mb-1 truncate">
+                        KG Used *
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        placeholder="0.0"
+                        className="w-full p-2 border border-amber-500/60 bg-amber-500/10 text-amber-300 rounded text-xs font-mono font-black outline-none focus:border-amber-400"
+                        value={reel.weight || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { weight: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 8. NEW BALANCE */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-emerald-300 uppercase tracking-wider mb-1 truncate">
+                        New Balance
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        placeholder={availKg !== null ? '0.0' : '—'}
+                        disabled={availKg === null}
+                        title={availKg === null ? 'Enter an inventory reel number first' : 'Change remaining balance if not fully utilised'}
+                        className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs font-mono font-black outline-none focus:border-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                        value={displayBalance}
+                        onChange={e => handleUpdateDeckleReel(idx, { customBalance: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Presets for Stock Reels */}
+                  {matchedStock && availKg !== null && availKg > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">Quick Set:</span>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateDeckleReel(idx, { weight: availKg.toFixed(1) })}
+                        className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300 font-bold transition"
+                      >
+                        ⚡ Full Reel (0 KG bal)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateDeckleReel(idx, { weight: (availKg * 0.5).toFixed(1) })}
+                        className="text-[10px] px-2 py-0.5 rounded bg-sky-950/80 hover:bg-sky-900 border border-sky-600/40 text-sky-300 font-bold transition"
+                      >
+                        🌓 Use 50% ({ (availKg * 0.5).toFixed(1) } KG)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateDeckleReel(idx, { weight: '0.0' })}
+                        className="text-[10px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 font-bold transition"
+                      >
+                        ↺ Reset (0 KG used)
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Live Matched Reel Specs & Transition Badge */}
+                  {cleanNo && !isCut && (
+                    <div className="pt-0.5">
+                      {matchedStock ? (
+                        <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded-md font-medium">
+                          <span className="font-bold text-emerald-400">✓ In Stock:</span>
+                          <span className="text-white font-semibold">{matchedStock.millName || 'Stock Mill'}</span>
+                          <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
+                          <span className="text-slate-300">• {matchedStock.bf ? `${matchedStock.bf} BF` : '18 BF'}</span>
+                          <span className="text-slate-300">• {matchedStock.size} cm</span>
+                          <span className="text-slate-300">• {matchedStock.colour || 'Kraft'}</span>
+                          <div className="ml-auto flex items-center gap-2">
+                            <span className="text-[11px] text-slate-400">Stock: <strong className="text-white">{availKg !== null ? availKg.toFixed(1) : '0'} KG</strong></span>
+                            <span className="text-slate-600">→</span>
+                            <span className="text-[11px] text-amber-300">Using: <strong className="text-amber-400">{usedKg.toFixed(1)} KG</strong></span>
+                            <span className="text-slate-600">→</span>
+                            <strong className={computedBalanceKg !== null && computedBalanceKg <= 0 ? 'text-emerald-400' : 'text-amber-400'}>
+                              {computedBalanceKg !== null ? `${computedBalanceKg.toFixed(1)} KG bal` : '—'}
+                            </strong>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs bg-amber-950/60 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-md font-medium flex items-center justify-between flex-wrap gap-2">
+                          <span>ℹ Reel "{cleanNo}" not in warehouse stock database.</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateDeckleReel(idx, { isCutReel: true, size: reel.size || '' })}
+                            className="bg-amber-500 text-slate-950 font-extrabold px-2 py-0.5 rounded text-[11px] hover:bg-amber-400 transition"
+                          >
+                            ✂️ Switch to Floor Cut Roll
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {isCut && (
+                    <div className="flex items-center justify-between gap-2 text-xs bg-amber-950/50 border border-amber-500/30 px-3 py-1.5 rounded-lg text-amber-300 font-medium flex-wrap">
+                      <span>✂️ <strong>Floor Cut / Balance Roll:</strong> {reel.size ? `${reel.size}cm deckle` : ''}{reel.gsm ? ` · ${reel.gsm} GSM` : ''}{reel.bf ? ` · ${reel.bf} BF` : ''} · Tracked in Production Logs</span>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="mt-3 text-[11px] font-bold text-amber-800 bg-amber-100/60 px-2.5 py-1 rounded">
-                ✓ 100% scale weight accuracy with only one final weighing
-              </div>
-            </label>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-700 flex justify-between items-center flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleAddDeckleReel(false)}
+                className="text-xs font-extrabold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3.5 py-2 rounded-lg transition flex items-center gap-1.5"
+              >
+                <span>+ 📦</span> Add Stock Reel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAddDeckleReel(true)}
+                className="text-xs font-extrabold text-amber-300 bg-amber-950/70 hover:bg-amber-900/80 border border-amber-500/50 px-3.5 py-2 rounded-lg transition flex items-center gap-1.5"
+              >
+                <span>+ ✂️</span> Add Cut / Balance Reel
+              </button>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Paper Consumed:</span>
+              <span className="text-xl font-extrabold text-amber-400 font-mono">
+                {deckleRunCalculations.totalReelsConsumedKg.toFixed(1)} KG
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* SECTION 5: LIVE BATCH SUMMARY & ONE-CLICK LOGGING */}
+        {/* STEP 3: LIVE BATCH SUMMARY & ONE-CLICK LOGGING */}
         <div className="bg-gradient-to-br from-stone-900 via-slate-900 to-stone-950 text-white p-5 rounded-2xl border border-stone-800 shadow-lg">
           <div className="flex items-center justify-between pb-3 mb-4 border-b border-stone-800 flex-wrap gap-2">
             <div>
               <h4 className="text-base font-extrabold text-white flex items-center gap-2">
-                <span>📊</span> Deckle Run Batch Summary
+                <span>📊</span> Sequential Jobs Batch Summary
               </h4>
               <p className="text-xs text-slate-400 mt-0.5">
-                Review live allocation before logging entries into Production, WIP, and Inventory
+                Review allocations across sequential jobs before recording into Production, WIP, and Inventory
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -19164,9 +19240,8 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             </div>
 
             <div className="bg-slate-800/80 p-3.5 rounded-xl border border-amber-500/40">
-              <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block mb-1">Total Run Scrap</span>
+              <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block mb-1">Total Scrap / Waste</span>
               <span className="text-2xl font-black text-amber-400 font-mono">{deckleRunCalculations.totalRunWasteKg.toFixed(1)} <span className="text-xs">KG</span></span>
-              <span className="text-[10px] text-amber-300/80 block mt-0.5">Divided proportionally</span>
             </div>
 
             <div className="bg-slate-800/80 p-3.5 rounded-xl border border-emerald-500/40">
@@ -19181,7 +19256,7 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             type="submit"
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 font-extrabold text-base shadow-lg transition-all"
           >
-            <span>🚀</span> Save &amp; Log Combined Deckle Run ({deckleRunCalculations.validJobs.length} Jobs)
+            <span>🚀</span> Save &amp; Log Sequential Jobs Batch ({deckleRunCalculations.validJobs.length} Jobs)
           </button>
         </div>
       </form>
@@ -19315,17 +19390,36 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                            <ul className="text-xs text-stone-600 mt-1 space-y-1">
                              {getConsumedReels(record).map((r, i) => {
                                const isCut = r.isCutReel || String(r.reelNo || '').toUpperCase().startsWith('CUT-') || String(r.reelNo || '').toUpperCase().startsWith('BAL-');
+                               const stand = r.stand || (i === 0 ? 'Top' : (i === 1 ? 'Fluting' : (i === 2 ? 'Backing' : '')));
+                               const standBadgeStyle = 
+                                 stand === 'Top' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                                 stand === 'Fluting' ? 'bg-amber-100 text-amber-900 border-amber-400 font-black' :
+                                 stand === 'Backing' || stand === 'Bottom' ? 'bg-indigo-100 text-indigo-800 border-indigo-300' :
+                                 'bg-teal-100 text-teal-800 border-teal-300';
+
                                return (
-                                 <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                                 <li key={i} className="flex items-center gap-1.5 flex-wrap py-0.5">
+                                   {stand && (
+                                     <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-black uppercase border tracking-wider font-sans ${standBadgeStyle}`}>
+                                       {stand === 'Bottom' ? 'BACKING' : stand.toUpperCase()}
+                                     </span>
+                                   )}
                                    {isCut ? (
-                                     <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded text-[10.5px] font-bold font-mono">
-                                       ✂️ Cut: {r.size ? `${r.size}cm ` : ''}{r.gsm ? `${r.gsm}G ` : ''}{r.quality ? `${r.quality} ` : ''}{r.reelNo}
+                                     <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded text-[10.5px] font-bold font-mono">
+                                       ✂️ {r.reelNo || 'Cut Roll'}
                                      </span>
                                    ) : (
-                                     <span className="font-bold text-stone-800 font-mono">{r.reelNo}</span>
+                                     <span className="font-bold text-stone-900 font-mono text-xs">{r.reelNo}</span>
                                    )}
-                                   <span className="font-bold text-amber-700 font-mono">: {parseFloat(r.weight || r.consumedKg || 0).toFixed(1)} kg</span>
-                                   {r.stand && <span className="text-[10px] text-stone-500 font-sans">({r.stand})</span>}
+                                   {(r.gsm || r.bf) && (
+                                     <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded font-mono">
+                                       {r.gsm ? `${r.gsm}G` : ''}{r.bf ? `/${r.bf}BF` : ''}
+                                     </span>
+                                   )}
+                                   {r.size && (
+                                     <span className="text-[10px] text-slate-500 font-mono">({r.size}cm)</span>
+                                   )}
+                                   <span className="font-black text-amber-700 font-mono">: {parseFloat(r.weight || r.consumedKg || 0).toFixed(1)} kg</span>
                                  </li>
                                );
                              })}
