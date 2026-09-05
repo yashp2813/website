@@ -16732,8 +16732,16 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
     const seenJobIds = new Set();
     const seenJobNos = new Set();
 
-    // 1. Include ALL planned jobs created by the production planning team
-    (plannedJobs || []).filter(j => j.status !== 'Completed').forEach(j => {
+    // 1. Include ALL planned jobs created by the production planning team (exclude ready/completed)
+    (plannedJobs || []).filter(j => {
+      if (['completed', 'ready for dispatch', 'ready'].includes((j.status || '').toLowerCase())) return false;
+      const linked = orders.find(o => o.id === j.orderId);
+      if (linked) {
+        const st = (linked.status || '').toLowerCase();
+        if (linked.deleted || ['completed', 'ready for dispatch', 'ready', 'delivered'].includes(st)) return false;
+      }
+      return true;
+    }).forEach(j => {
       const linkedOrder = orders.find(o => o.id === j.orderId);
       const comp = companies.find(c => c.id === (j.companyId || linkedOrder?.companyId))?.name || 'Unit';
       const custName = j.customerName || linkedOrder?.customerName || 'Direct / Internal';
@@ -16767,7 +16775,8 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
 
     // 2. Include all active pending orders so operators on mobile can always see and execute all factory job cards
     (visibleOrders || []).filter(o => 
-      !['completed','delivered','cancelled'].includes((o.status || '').toLowerCase()) && 
+      !['completed','delivered','cancelled','ready for dispatch','ready'].includes((o.status || '').toLowerCase()) && 
+      !o.deleted &&
       !seenJobIds.has(o.id) &&
       !seenJobNos.has(String(o.orderNo || '').toUpperCase())
     ).forEach(o => {
@@ -17317,6 +17326,8 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
       if (getDocRef) {
         await updateDoc(getDocRef('orders', linkedOrder.id), { status: targetStatus, updatedAt: new Date().toISOString() });
         await executeQuery(`UPDATE orders SET status = ?, updatedAt = ? WHERE id = ?`, [targetStatus, new Date().toISOString(), linkedOrder.id]).catch(() => {});
+        // Auto-remove completed/ready job from planned_jobs so it disappears from the planning sheet
+        await executeQuery(`DELETE FROM planned_jobs WHERE orderId = ? OR id = ?`, [linkedOrder.id, linkedOrder.id]).catch(() => {});
       }
       if (addLog) addLog(`Auto-completed Job [${jCardNo}]: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced - ${targetStatus})`);
     } else if (linkedOrder.status === 'Pending' && getDocRef) {
@@ -20044,22 +20055,28 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
     queueId: 'q_line1'
   });
 
-  // Filter orders strictly by activeUnitId if set
-  const filteredOrders = activeUnitId ? orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === activeUnitId) : orders;
+  // Filter orders strictly by activeUnitId if set and exclude deleted
+  const filteredOrders = (activeUnitId ? orders.filter(o => !o.companyId || o.companyId === 'all' || o.companyId === activeUnitId) : orders).filter(o => !o.deleted);
 
   // Set of valid currently existing queue IDs
   const validQueueIds = useMemo(() => new Set((queuesList || []).map(q => q.id)), [queuesList]);
 
-  // Helper to get jobs for a specific queue with automatic fallback for unmatched / orphaned jobs
+  // Helper to get jobs for a specific queue with automatic removal of ready / completed jobs
   const getJobsForQueue = useCallback((queueId) => {
     const isFirstQueue = queuesList[0]?.id === queueId;
     return (plannedJobs || []).filter(j => {
+      // Exclude jobs whose linked order is completed, ready for dispatch, or soft-deleted
+      const linked = orders.find(o => o.id === j.orderId || o.id === j.id);
+      if (linked) {
+        const st = (linked.status || '').toLowerCase();
+        if (linked.deleted || ['completed', 'ready for dispatch', 'ready', 'delivered'].includes(st)) return false;
+      }
+      if (['completed', 'ready for dispatch', 'ready'].includes((j.status || '').toLowerCase())) return false;
       if (j.queueId === queueId) return true;
-      // If the job's queueId is not in validQueueIds or missing, automatically display it in the first queue so it is never hidden
       if (isFirstQueue && (!j.queueId || !validQueueIds.has(j.queueId))) return true;
       return false;
     });
-  }, [queuesList, plannedJobs, validQueueIds]);
+  }, [queuesList, plannedJobs, validQueueIds, orders]);
 
   // AUTO SUBTRACT QUEUED/PLANNED JOB QUANTITY FROM PENDING ORDERS (SUPPORTS SET COMPONENTS)
   const getOrderPlannedQty = (orderId, componentKey = null) => {
@@ -20070,9 +20087,25 @@ function PlanningView({ orders = [], items = [], companies = [], customers = [],
     }).reduce((sum, j) => sum + (parseInt(j.plannedQty || 0)), 0);
   };
 
+  // Orders that genuinely need production planning (removes all Ready / Completed sheets & items)
   const activeOrders = filteredOrders.filter(o => {
-    if (o.isParentSetOrder || o.status === 'Completed') return false;
+    if (o.isParentSetOrder || o.deleted) return false;
+    const st = (o.status || '').toLowerCase();
+    if (['completed', 'ready for dispatch', 'ready', 'delivered'].includes(st)) return false;
+
     const itm = items.find(i => i.id === o.itemId || i.name === o.itemName || i.Item_Name === o.itemName);
+    const isSheet = isCorrugatedSheetItem(itm, o);
+
+    // If a sheet order is already produced / ready in Finished Goods, remove from planning sheet
+    if (isSheet) {
+      const orderQty = parseInt(o.orderQty || 0);
+      const openingFg = parseInt(o.openingFgQty || 0);
+      const prodLogs = production.filter(p => p.orderId === o.id);
+      const sumSheets = prodLogs.reduce((acc, p) => acc + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || o.plannedUps || 1)), 0);
+      const totalProduced = Math.max(openingFg, Math.round(sumSheets));
+      if (totalProduced >= orderQty && orderQty > 0) return false;
+    }
+
     const comps = getSetComponents(itm, items);
     if (comps && comps.length > 0) {
       return comps.some(comp => {
@@ -21437,6 +21470,7 @@ function OrdersView({ orders = [], production = [], items = [], companies = [], 
   };
 
   const filteredOrders = visibleOrders.filter(o => {
+    if (o.deleted) return false;
     const custName = customers.find(c => c.id === o.customerId)?.name || o.customerName || '';
     const itemName = o.itemName || o.Item_Name || '';
     const po = o.poNumber || o.poNo || '';
