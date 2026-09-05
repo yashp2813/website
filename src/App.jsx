@@ -19494,6 +19494,30 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
         const compName = compId === 'unassigned' ? 'Unassigned / Unknown Client' : (companies.find(c => c.id === compId)?.name || 'Unknown Company');
         const records = groupedProduction[compId].sort((a,b) => (new Date(b.date).getTime() || 0) - (new Date(a.date).getTime() || 0));
 
+        // Merge sequential batch runs (same deckleRunBatchId) into one display row
+        const displayRecords = [];
+        const seenBatchIds = new Set();
+        for (const record of records) {
+          if (record.deckleRunBatchId) {
+            if (seenBatchIds.has(record.deckleRunBatchId)) continue;
+            seenBatchIds.add(record.deckleRunBatchId);
+            const batchGroup = records.filter(r => r.deckleRunBatchId === record.deckleRunBatchId);
+            const combinedItems = [...new Set(batchGroup.map(r => r.usedForItem).filter(Boolean))].join(', ');
+            const totalSheets = batchGroup.reduce((s, r) => s + parseFloat(r.linerQty || 0), 0);
+            const totalKg = batchGroup.reduce((s, r) => s + parseFloat(r.useKg || 0), 0);
+            displayRecords.push({
+              ...record,
+              _isBatchGroup: true,
+              _batchGroup: batchGroup,
+              usedForItem: combinedItems,
+              linerQty: String(Math.round(totalSheets)),
+              useKg: totalKg.toFixed(1),
+            });
+          } else {
+            displayRecords.push(record);
+          }
+        }
+
         return (
           <div key={compId} className="mb-8">
             <h4 className="text-xl font-bold text-stone-800 mb-3 pl-3 border-l-4 border-stone-800">{compName}</h4>
@@ -19512,19 +19536,23 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200">
-                  {records.map(record => {
+                  {displayRecords.map(record => {
                     const itemObj = items.find(i => (i.name === record.usedForItem) || (i.Item_Name === record.usedForItem));
                     const isRecordPpc = itemObj?.itemType === 'PPC' || itemObj?.Item_Type === 'PPC';
                     let upsDisplay = `${record.numberOfUps || 1} Ups`;
                     if (isRecordPpc) upsDisplay = `Ups: ${record.commonUps || '-'}C / ${record.smallUps || '-'}S`;
 
                     return (
-                    <tr key={record.id} className={`hover:bg-stone-50 ${selectedIds.has(record.id) ? 'bg-red-50/30' : ''}`}>
+                    <tr key={record.id} className={`hover:bg-stone-50 ${selectedIds.has(record.id) ? 'bg-red-50/30' : ''} ${record._isBatchGroup ? 'bg-amber-50/20' : ''}`}>
                       <td className="p-4"><input type="checkbox" className="accent-stone-900 w-4 h-4 cursor-pointer" checked={selectedIds.has(record.id)} onChange={() => toggleSelection(record.id)} /></td>
                       <td className="p-4 whitespace-nowrap">{record.date}</td>
                       <td className="p-4">
                         <p className="font-bold text-stone-900">{record.usedForItem || '-'}</p>
-                        {record.orderId && (() => { const lj = orders.find(o => o.id === record.orderId); const jcNo = lj ? getJobCardNo(lj) : null; return jcNo ? <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold font-mono">Job: {jcNo}</span> : null; })()}
+                        {record._isBatchGroup ? (
+                          <span className="inline-block mt-1 bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-bold">⚡ Sequential Batch · {record._batchGroup.length} Jobs</span>
+                        ) : (
+                          record.orderId && (() => { const lj = orders.find(o => o.id === record.orderId); const jcNo = lj ? getJobCardNo(lj) : null; return jcNo ? <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold font-mono">Job: {jcNo}</span> : null; })()
+                        )}
                       </td>
                       <td className="p-4">
                         <p className="font-medium text-stone-800">{record.millName || ''}</p>
@@ -21987,6 +22015,9 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   const [editingOrderId, setEditingOrderId] = useState(null);
   const [editItemForm, setEditItemForm] = useState({ name: '', size: '', ply: '', weight: '', paperGsm: '', paperBf: '', paperColour: 'Kraft', rate: '' });
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [editingRecordId, setEditingRecordId] = useState(null);
+  const [editRecordForm, setEditRecordForm] = useState({ itemName: '', openingFgQty: '', rate: '', plannedUps: '', orderQty: '' });
+  const [showDeletedPanel, setShowDeletedPanel] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [unitFilter, setUnitFilter] = useState('all');
@@ -22257,16 +22288,68 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
   };
 
   const handleDeleteRecord = async (id, itemName) => {
-    if(window.confirm(`Delete the stock record for ${itemName}? This will completely remove it from the database.`)) {
+    if (currentUser?.role !== 'admin') return;
+    if (window.confirm(`Delete the stock record for ${itemName}?\n\nThis is a soft-delete — you can restore it from the "Recently Deleted" panel within 7 days.`)) {
       try {
-        await deleteDoc(getDocRef('orders', id));
+        await updateDoc(getDocRef('orders', id), {
+          deleted: true,
+          deletedAt: new Date().toISOString(),
+          deletedBy: currentUser?.displayName || currentUser?.name || 'Admin',
+          deletedItemName: itemName,
+        });
         addLog(`Deleted finished goods record: ${itemName}`);
       } catch (err) {
         console.error(err);
-        alert("Error deleting record.");
+        alert('Error deleting record.');
       }
     }
   };
+
+  const handleStartEditRecord = (order) => {
+    setEditingRecordId(order.id);
+    setEditRecordForm({
+      itemName: order.itemName || order.Item_Name || '',
+      openingFgQty: String(order.openingFgQty || 0),
+      rate: String(order.rate || 0),
+      plannedUps: String(order.plannedUps || 1),
+      orderQty: String(order.orderQty || 0),
+    });
+  };
+
+  const handleSaveRecord = async (e, orderId, originalName) => {
+    e.preventDefault();
+    try {
+      await updateDoc(getDocRef('orders', orderId), {
+        itemName: editRecordForm.itemName,
+        openingFgQty: parseInt(editRecordForm.openingFgQty) || 0,
+        rate: parseFloat(editRecordForm.rate) || 0,
+        plannedUps: editRecordForm.plannedUps,
+        orderQty: parseInt(editRecordForm.orderQty) || 0,
+      });
+      addLog(`Edited FG record: ${editRecordForm.itemName}${editRecordForm.itemName !== originalName ? ` (was: ${originalName})` : ''}`);
+      setEditingRecordId(null);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save changes: ' + err.message);
+    }
+  };
+
+  const handleRestoreRecord = async (id, itemName) => {
+    try {
+      await updateDoc(getDocRef('orders', id), {
+        deleted: false,
+        deletedAt: null,
+        deletedBy: null,
+        deletedItemName: null,
+      });
+      addLog(`Restored finished goods record: ${itemName}`);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to restore record: ' + err.message);
+    }
+  };
+
+
 
   // --- PDF DELIVERY CHALLAN GENERATOR ---
   const generatePDFChallan = async (order, dispatchQty, stockInfo, providedChallanNo = null) => {
@@ -22625,8 +22708,20 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
     reader.readAsText(file);
   };
 
+  // Exclude soft-deleted records from main view
+  const visibleOrdersActive = visibleOrders.filter(o => !o.deleted);
+
+  // Collect recently soft-deleted records (within 7 days) for the restore panel
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const deletedOrders = visibleOrders.filter(o => {
+    if (!o.deleted) return false;
+    if (!o.deletedAt) return true; // no timestamp = always show
+    return new Date(o.deletedAt).getTime() >= sevenDaysAgo;
+  });
+
   // 1. Get all active orders (produced > 0 or dispatched > 0)
-  const allActiveOrders = visibleOrders.map(order => {
+  const allActiveOrders = visibleOrdersActive.map(order => {
+
     const stock = getOrderStockDetails(order);
     return { order, stock };
   }).filter(item => item.stock.producedQty > 0 || item.stock.dispatchedQty > 0);
@@ -22851,8 +22946,11 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-200 text-xs">
-                    {activeOrders.map(({ order, stock }) => (
-                      <tr key={order.id} className={`hover:bg-stone-50/50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/30' : ''} ${selectedOrderIds.includes(order.id) ? 'bg-red-50/20' : ''}`}>
+                    {activeOrders.map(({ order, stock }) => {
+                      const origName = order.itemName || order.Item_Name;
+                      return (
+                      <React.Fragment key={order.id}>
+                      <tr className={`hover:bg-stone-50/50 ${dispatchForm.orderId === order.id ? 'bg-blue-50/30' : ''} ${selectedOrderIds.includes(order.id) ? 'bg-red-50/20' : ''}`}>
                         {currentUser?.role === 'admin' && (
                           <td className="p-3 w-10 text-center align-middle">
                             <input 
@@ -23030,9 +23128,18 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                               )}
                               
                               {currentUser?.role === 'admin' && (
-                                <button onClick={() => handleDeleteRecord(order.id, order.itemName || order.Item_Name)} className="ml-1 text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete Entire Record">
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => handleStartEditRecord(order)}
+                                    className="ml-1 text-blue-500 hover:bg-blue-50 p-1.5 rounded transition-colors"
+                                    title="Edit Record"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button onClick={() => handleDeleteRecord(order.id, order.itemName || order.Item_Name)} className="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete Record">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
                               )}
                             </div>
                             
@@ -23042,7 +23149,42 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      {/* Inline Edit Row — admin only */}
+                      {currentUser?.role === 'admin' && editingRecordId === order.id && (
+                        <tr className="bg-blue-50/60 border-t border-blue-200">
+                          <td colSpan={currentUser?.role === 'admin' ? 7 : 6} className="p-3">
+                            <form onSubmit={(e) => handleSaveRecord(e, order.id, origName)} className="flex flex-wrap gap-3 items-end">
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-blue-700 mb-0.5">Item Name</label>
+                                <input type="text" required className="p-1.5 border border-blue-300 rounded text-xs bg-white w-44 focus:outline-none focus:ring-1 focus:ring-blue-500" value={editRecordForm.itemName} onChange={e => setEditRecordForm({...editRecordForm, itemName: e.target.value})} />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-blue-700 mb-0.5">Opening FG Qty</label>
+                                <input type="number" min="0" className="p-1.5 border border-blue-300 rounded text-xs bg-white w-24 focus:outline-none focus:ring-1 focus:ring-blue-500" value={editRecordForm.openingFgQty} onChange={e => setEditRecordForm({...editRecordForm, openingFgQty: e.target.value})} />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-blue-700 mb-0.5">Rate (₹/box)</label>
+                                <input type="number" step="0.01" min="0" className="p-1.5 border border-blue-300 rounded text-xs bg-white w-24 focus:outline-none focus:ring-1 focus:ring-blue-500" value={editRecordForm.rate} onChange={e => setEditRecordForm({...editRecordForm, rate: e.target.value})} />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-blue-700 mb-0.5">Planned Ups</label>
+                                <input type="number" min="1" className="p-1.5 border border-blue-300 rounded text-xs bg-white w-20 focus:outline-none focus:ring-1 focus:ring-blue-500" value={editRecordForm.plannedUps} onChange={e => setEditRecordForm({...editRecordForm, plannedUps: e.target.value})} />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-blue-700 mb-0.5">Order Qty</label>
+                                <input type="number" min="0" className="p-1.5 border border-blue-300 rounded text-xs bg-white w-24 focus:outline-none focus:ring-1 focus:ring-blue-500" value={editRecordForm.orderQty} onChange={e => setEditRecordForm({...editRecordForm, orderQty: e.target.value})} />
+                              </div>
+                              <div className="flex gap-2 items-center ml-2">
+                                <button type="submit" className="bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-800">Save Changes</button>
+                                <button type="button" onClick={() => setEditingRecordId(null)} className="bg-stone-200 text-stone-700 px-3 py-1.5 rounded text-xs hover:bg-stone-300">Cancel</button>
+                              </div>
+                            </form>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -23054,6 +23196,61 @@ function FinishedGoodsView({ orders, production, items, companies, customers = [
       {combinedTotalStock === 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-8 text-center text-stone-500 text-sm">
           No finished goods currently in stock.
+        </div>
+      )}
+
+      {/* ── RECENTLY DELETED PANEL (Admin only) ── */}
+      {currentUser?.role === 'admin' && (
+        <div className="mt-8">
+          <button
+            type="button"
+            onClick={() => setShowDeletedPanel(v => !v)}
+            className="flex items-center gap-2 text-sm font-semibold text-stone-500 hover:text-red-600 transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            {showDeletedPanel ? '▲' : '▼'} Recently Deleted ({deletedOrders.length})
+            <span className="text-[10px] font-normal text-stone-400 ml-1">— restoreable within 7 days</span>
+          </button>
+
+          {showDeletedPanel && (
+            <div className="mt-3 bg-white rounded-xl border border-red-200 shadow-sm overflow-hidden">
+              {deletedOrders.length === 0 ? (
+                <p className="p-6 text-center text-stone-400 text-sm">No recently deleted records.</p>
+              ) : (
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-red-50 text-red-700 border-b border-red-200">
+                    <tr>
+                      <th className="p-3">Deleted At</th>
+                      <th className="p-3">Item Name</th>
+                      <th className="p-3">Deleted By</th>
+                      <th className="p-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-red-100">
+                    {deletedOrders.map(order => (
+                      <tr key={order.id} className="hover:bg-red-50/40">
+                        <td className="p-3 text-stone-500 whitespace-nowrap">
+                          {order.deletedAt ? new Date(order.deletedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'}
+                        </td>
+                        <td className="p-3 font-semibold text-stone-800">
+                          {order.deletedItemName || order.itemName || order.Item_Name || '—'}
+                        </td>
+                        <td className="p-3 text-stone-500">{order.deletedBy || '—'}</td>
+                        <td className="p-3 text-right">
+                          <button
+                            onClick={() => handleRestoreRecord(order.id, order.deletedItemName || order.itemName || order.Item_Name)}
+                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-[10px] font-bold transition-colors flex items-center gap-1 ml-auto"
+                          >
+                            ↩ Restore
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
