@@ -17526,7 +17526,7 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
         size: r.size || (size ? String(size) : ''),
         availKg: avail,
         matchedReel: matchedStock,
-        theoreticalUsedKg,
+        theoreticalUsedKg: theoreticalTotalUsedKg,
         computedUsedKg: effectiveUsedKg,
         computedNewBalKg
       };
