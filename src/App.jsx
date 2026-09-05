@@ -16368,11 +16368,53 @@ export const getItemDimensions = (item = {}) => {
   return { idL, idW, idH, odL, odW, odH, fluteType };
 };
 
-export const getFlutingFactor = (ply = 3, index = 0) => {
-  if (ply <= 2) return 1.0;
-  if (ply === 3) return index === 1 ? 1.4 : 1.0;
-  if (ply === 5) return (index === 1 || index === 3) ? 1.4 : 1.0;
-  return 1.0;
+export const getJobCutLengthMm = (job, item) => {
+  if (!job && !item) return 1000;
+  if (job?.cutLengthMm && parseFloat(job.cutLengthMm) > 0) return parseFloat(job.cutLengthMm);
+  if (job?.upsLength && parseFloat(job.upsLength) > 0) return parseFloat(job.upsLength);
+  if (item?.cutLengthMm && parseFloat(item.cutLengthMm) > 0) return parseFloat(item.cutLengthMm);
+  if (item?.upsLength && parseFloat(item.upsLength) > 0) return parseFloat(item.upsLength);
+
+  const it = item || {};
+  const dims = getItemDimensions(it);
+  const type = it.itemType || it.Item_Type || 'Box';
+  const upsL = parseFloat(job?.upsLength || 1);
+  const upsW = parseFloat(job?.upsWidth || 1);
+  const { cutLength } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, upsL, upsW);
+  return cutLength > 0 ? cutLength : 1000;
+};
+
+export const calculateTheoreticalReelKg = ({
+  cutLengthMm = 0,
+  sheetsProduced = 0,
+  reelDeckleCm = 0,
+  reelGsm = 0,
+  stand = 'Top',
+  fluteType = 'B',
+  wastagePct = 0
+}) => {
+  const cutM = parseFloat(cutLengthMm || 0) / 1000;
+  const sheets = parseFloat(sheetsProduced || 0);
+  const deckleM = parseFloat(reelDeckleCm || 0) / 100;
+  const gsm = parseFloat(reelGsm || 0);
+  if (cutM <= 0 || sheets <= 0 || deckleM <= 0 || gsm <= 0) return 0;
+
+  const runningMeters = sheets * cutM;
+
+  const standLower = String(stand || '').toLowerCase();
+  let takeUp = 1.0;
+  if (standLower.includes('flut') || standLower === 'medium') {
+    const fUpper = String(fluteType || 'B').toUpperCase();
+    if (fUpper === 'A') takeUp = 1.54;
+    else if (fUpper === 'C') takeUp = 1.42;
+    else if (fUpper === 'E') takeUp = 1.25;
+    else if (fUpper === 'F') takeUp = 1.15;
+    else takeUp = 1.35; // Default B Flute
+  }
+
+  const netPaperKg = runningMeters * deckleM * (gsm / 1000) * takeUp;
+  const wasteMultiplier = 1 + (Math.max(0, parseFloat(wastagePct) || 0) / 100);
+  return parseFloat((netPaperKg * wasteMultiplier).toFixed(1));
 };
 
 // --- PRODUCTION VIEW ---
@@ -16396,6 +16438,120 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
   const [consumedReels, setConsumedReels] = useState([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
   const [isBarcodeScanOpen, setIsBarcodeScanOpen] = useState(false);
   const [quickScanCode, setQuickScanCode] = useState('');
+  const [autoCalcNotice, setAutoCalcNotice] = useState(null);
+
+  // Production Mode Switcher: 'single' (standard single job card) | 'combined_deckle' (multi-job same deckle run)
+  const [productionMode, setProductionMode] = useState('single');
+
+  // Combined Deckle Run State
+  const [deckleRunDate, setDeckleRunDate] = useState(new Date().toISOString().split('T')[0]);
+  const [deckleRunCompanyId, setDeckleRunCompanyId] = useState(allowedCompanyId !== 'all' ? allowedCompanyId : '');
+  const [deckleRunDeckleCm, setDeckleRunDeckleCm] = useState('');
+  const [deckleRunFlute, setDeckleRunFlute] = useState('B');
+  const [deckleRunWasteKg, setDeckleRunWasteKg] = useState('');
+  const [deckleRunConsumptionMode, setDeckleRunConsumptionMode] = useState('formula'); // 'formula' | 'actual_weigh'
+
+  const [deckleRunReels, setDeckleRunReels] = useState([
+    { id: 'stand_1', stand: 'Top', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null },
+    { id: 'stand_2', stand: 'Fluting', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null },
+    { id: 'stand_3', stand: 'Bottom', reelNo: '', size: '', gsm: '', isCutReel: false, availKg: null, actualUsedKg: '', finalBalKg: '', matchedReel: null }
+  ]);
+
+  const [deckleRunJobs, setDeckleRunJobs] = useState([
+    { id: 'job_1', orderId: '', producedSheets: '', notes: '' }
+  ]);
+
+  const handleAddDeckleReel = () => {
+    setDeckleRunReels(prev => [
+      ...prev,
+      {
+        id: 'stand_' + Date.now(),
+        stand: prev.length === 3 ? 'Center' : `Layer ${prev.length + 1}`,
+        reelNo: '',
+        size: deckleRunDeckleCm || '',
+        gsm: '',
+        isCutReel: false,
+        availKg: null,
+        actualUsedKg: '',
+        finalBalKg: '',
+        matchedReel: null
+      }
+    ]);
+  };
+
+  const handleRemoveDeckleReel = (id) => {
+    if (deckleRunReels.length <= 1) return;
+    setDeckleRunReels(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleUpdateDeckleReel = (idx, updates) => {
+    setDeckleRunReels(prev => {
+      const copy = [...prev];
+      const cur = { ...copy[idx], ...updates };
+      if (updates.reelNo !== undefined && !cur.isCutReel) {
+        const clean = (updates.reelNo || '').trim();
+        const matched = clean ? findInventoryReel(inventory, clean) : null;
+        if (matched) {
+          cur.matchedReel = matched;
+          if (!cur.gsm || cur.gsm === '') cur.gsm = String(matched.gsm || '');
+          if (!cur.size || cur.size === '') cur.size = String(matched.size || deckleRunDeckleCm || '');
+          cur.availKg = parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0));
+        } else {
+          cur.matchedReel = null;
+        }
+      }
+      copy[idx] = cur;
+      return copy;
+    });
+  };
+
+  const handleAddDeckleJob = () => {
+    setDeckleRunJobs(prev => [
+      ...prev,
+      { id: 'job_' + Date.now(), orderId: '', producedSheets: '', notes: '' }
+    ]);
+  };
+
+  const handleRemoveDeckleJob = (id) => {
+    if (deckleRunJobs.length <= 1) return;
+    setDeckleRunJobs(prev => prev.filter(j => j.id !== id));
+  };
+
+  const handleUpdateDeckleJob = (idx, updates) => {
+    setDeckleRunJobs(prev => {
+      const copy = [...prev];
+      const cur = { ...copy[idx], ...updates };
+      if (updates.orderId !== undefined && updates.orderId) {
+        const j = activeProductionJobs.find(pj => pj.id === updates.orderId) || orders.find(o => o.id === updates.orderId);
+        if (j) {
+          if (!deckleRunCompanyId && j.companyId) {
+            setDeckleRunCompanyId(j.companyId);
+          }
+          if (!cur.producedSheets) {
+            const targetQty = parseInt(j.plannedQty || j.orderQty || 0);
+            const ups = parseInt(j.ups || j.plannedUps || 1);
+            const calcSheets = Math.ceil(targetQty / ups);
+            if (calcSheets > 0) cur.producedSheets = String(calcSheets);
+          }
+          if (!deckleRunDeckleCm) {
+            const linkedOrd = orders.find(o => o.id === j.orderId || o.id === j.id);
+            const itm = items.find(i => i.id === (j.itemId || linkedOrd?.itemId) || i.name === j.itemName || i.Item_Name === j.itemName);
+            const it = itm || {};
+            const dims = getItemDimensions(it);
+            const type = it.itemType || it.Item_Type || 'Box';
+            const upsL = parseFloat(j?.upsLength || 1);
+            const upsW = parseFloat(j?.upsWidth || 1);
+            const { deckle } = calculateSheetAndDeckle(type, dims.idL || dims.odL || 400, dims.idW || dims.odW || 250, dims.idH || dims.odH || 250, upsL, upsW);
+            if (deckle > 0) {
+              setDeckleRunDeckleCm(String(deckle));
+            }
+          }
+        }
+      }
+      copy[idx] = cur;
+      return copy;
+    });
+  };
 
   const PROD_DRAFT_KEY = `apex_prod_active_draft_${allowedCompanyId || 'all'}`;
 
@@ -16771,6 +16927,510 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
     setConsumedReels([{ isCutReel: false, reelNo: '', size: '', gsm: '', quality: '', stand: '', weight: '', customBalance: '', notes: '' }]);
   };
 
+  // ── WIP & FINISHED GOODS ADVANCEMENT HELPER ──
+  const advanceJobWipAndFg = async (targetOrderId, targetJobNo, targetItemName, producedSheets, upsCount, companyId) => {
+    if (!getColRef || !producedSheets || producedSheets <= 0) return;
+    const producedQtyPcs = Math.round(producedSheets * upsCount);
+    try {
+      const linkedOrder = orders.find(o => o.id === targetOrderId || o.orderNo === targetJobNo);
+      const matchedItem = items.find(i => i.id === linkedOrder?.itemId || i.name === targetItemName || i.Item_Name === targetItemName);
+      const isSheet = isCorrugatedSheetItem(matchedItem || targetItemName, linkedOrder);
+      const destinationStage = isSheet ? 'Bundling/Ready' : 'Printing';
+
+      // Find existing Corrugation WIP card by orderId, jobNo, or itemName
+      const existingCorrWip = (wipStages || []).find(w =>
+        (w.currentStage === 'Corrugation' || !w.currentStage) && (
+          (targetOrderId && w.orderId === targetOrderId) ||
+          (targetJobNo && w.jobNo === targetJobNo) ||
+          (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
+        )
+      );
+
+      if (existingCorrWip) {
+        const initialCorrQty = parseFloat(existingCorrWip.qty !== undefined ? existingCorrWip.qty : (existingCorrWip.orderQty || 0));
+        const balanceCorrQty = Math.max(0, initialCorrQty - producedQtyPcs);
+        const balanceCorrSheets = Math.ceil(balanceCorrQty / Math.max(1, upsCount));
+
+        if (balanceCorrQty > 0) {
+          await updateDoc(getDocRef('wip_stages', existingCorrWip.id), { 
+            qty: balanceCorrQty, 
+            sheets: balanceCorrSheets, 
+            updatedAt: new Date().toISOString() 
+          });
+          await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [balanceCorrQty, balanceCorrSheets, existingCorrWip.id]).catch(() => {});
+        } else {
+          await deleteDoc(getDocRef('wip_stages', existingCorrWip.id));
+          await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [existingCorrWip.id]).catch(() => {});
+        }
+      }
+
+      // Check if destination stage card already exists for this order/job
+      const existingDestWip = (wipStages || []).find(w =>
+        (w.currentStage === destinationStage || (isSheet && (w.currentStage === 'Bundling' || w.currentStage === 'Ready in FG'))) && (
+          (targetOrderId && w.orderId === targetOrderId) ||
+          (targetJobNo && w.jobNo === targetJobNo) ||
+          (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
+        )
+      );
+
+      if (existingDestWip) {
+        const newDestQty = parseFloat(existingDestWip.qty || 0) + producedQtyPcs;
+        const newDestSheets = parseFloat(existingDestWip.sheets || 0) + producedSheets;
+        await updateDoc(getDocRef('wip_stages', existingDestWip.id), { 
+          qty: newDestQty, 
+          sheets: newDestSheets, 
+          updatedAt: new Date().toISOString() 
+        });
+        await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newDestQty, newDestSheets, existingDestWip.id]).catch(() => {});
+      } else {
+        const wipPayload = {
+          orderId: targetOrderId || `job_${Date.now()}`,
+          companyId: companyId || allowedCompanyId || '',
+          jobNo: targetJobNo || 'JC-CORR',
+          itemName: targetItemName || 'Corrugated Board',
+          currentStage: destinationStage,
+          qty: producedQtyPcs,
+          sheets: Math.round(producedSheets),
+          ups: upsCount,
+          orderQty: existingCorrWip?.orderQty || producedQtyPcs,
+          operator: currentUser?.displayName || currentUser?.name || 'Corrugator Operator',
+          timeAgo: 'Just now'
+        };
+        await addDoc(getColRef('wip_stages'), wipPayload);
+      }
+
+      // If corrugated sheet, also auto-inward directly to Finished Goods on the order
+      if (isSheet && linkedOrder && getDocRef) {
+        try {
+          const currentFg = parseFloat(linkedOrder.openingFgQty || 0);
+          const newFg = currentFg + producedQtyPcs;
+          const targetOrderQty = parseFloat(linkedOrder.orderQty || 0);
+          const newStatus = (newFg >= targetOrderQty) ? 'Ready for Dispatch' : (linkedOrder.status || 'In Production');
+          await updateDoc(getDocRef('orders', linkedOrder.id), {
+            openingFgQty: newFg,
+            status: newStatus,
+            updatedAt: new Date().toISOString()
+          });
+          await executeQuery(`UPDATE orders SET openingFgQty = ?, status = ?, updatedAt = ? WHERE id = ?`, [
+            newFg, newStatus, new Date().toISOString(), linkedOrder.id
+          ]).catch(() => {});
+        } catch(e) {}
+      }
+
+      window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
+      if (addLog) {
+        if (isSheet) {
+          addLog(`✓ Corrugated Sheet produced: ${producedQtyPcs} sheets directly marked Ready in Finished Goods for Job [${targetJobNo || targetItemName}]`);
+        } else {
+          addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${targetJobNo || targetItemName}]`);
+        }
+      }
+    } catch(err) {
+      console.warn('WIP advance error:', err);
+    }
+  };
+
+  // ── ORDER STATUS SYNCHRONIZATION HELPER ──
+  const syncOrderStatusAfterProduction = async (targetOrderId, finalRecord) => {
+    if (!targetOrderId) return;
+    const linkedOrder = orders.find(o => o.id === targetOrderId);
+    if (!linkedOrder || linkedOrder.status === 'Completed') return;
+
+    const allPLogs = [...production, { ...finalRecord, id: '_new' }].filter(p => p.orderId === targetOrderId);
+    const item = items.find(i => i.id === linkedOrder.itemId);
+    const isPpc = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
+    const isSheet = isCorrugatedSheetItem(item, linkedOrder);
+    let producedQty = 0;
+
+    if (isSheet) {
+      const sumSheets = allPLogs.reduce((a, p) => a + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || linkedOrder.plannedUps || 1)), 0);
+      producedQty = Math.max(parseInt(linkedOrder.openingFgQty || 0), Math.round(sumSheets));
+    } else if (isPpc) {
+      const cPPS = Math.max(1, parseInt(linkedOrder.smallPerSet || 2) - 1);
+      const sPPS = Math.max(1, parseInt(linkedOrder.commonPerSet || 2) - 1);
+      let tc = 0, ts = 0;
+      allPLogs.forEach(p => { 
+        tc += parseFloat(p.linerQty || 0) * parseInt(p.commonUps || linkedOrder.commonUps || 0); 
+        ts += parseFloat(p.linerQty || 0) * parseInt(p.smallUps || linkedOrder.smallUps || 0); 
+      });
+      const prodLogsQty = Math.min(Math.floor(tc / cPPS), Math.floor(ts / sPPS));
+      const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
+      producedQty = Math.max(fgStockQty, isNaN(prodLogsQty) || prodLogsQty === Infinity ? 0 : prodLogsQty);
+    } else {
+      const sumBoard = allPLogs.filter(p => p.paperUsedFor === 'Board').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+      const sumLiner = allPLogs.filter(p => p.paperUsedFor === 'Liner').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+      const sumPaper = allPLogs.filter(p => p.paperUsedFor === 'Paper').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
+      let effBase = 0;
+      const ply = parseInt(item?.ply || item?.Ply || 3);
+      if (ply <= 2) effBase = sumBoard + sumPaper;
+      else if (ply === 3) effBase = sumBoard + Math.min(sumLiner, sumPaper);
+      else if (ply === 5) effBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
+      else if (ply === 7) effBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
+      else effBase = sumBoard + sumPaper;
+      const prodLogsQty = Math.floor(effBase * parseFloat(linkedOrder.plannedUps || 1));
+      const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
+      producedQty = Math.max(fgStockQty, prodLogsQty);
+    }
+
+    const orderQty = parseInt(linkedOrder.orderQty || 0);
+    const jCardNo = getJobCardNo(linkedOrder);
+    if (producedQty >= orderQty && orderQty > 0) {
+      const targetStatus = isSheet ? 'Ready for Dispatch' : 'Completed';
+      if (getDocRef) {
+        await updateDoc(getDocRef('orders', linkedOrder.id), { status: targetStatus, updatedAt: new Date().toISOString() });
+        await executeQuery(`UPDATE orders SET status = ?, updatedAt = ? WHERE id = ?`, [targetStatus, new Date().toISOString(), linkedOrder.id]).catch(() => {});
+      }
+      if (addLog) addLog(`Auto-completed Job [${jCardNo}]: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced - ${targetStatus})`);
+    } else if (linkedOrder.status === 'Pending' && getDocRef) {
+      await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'In Production', updatedAt: new Date().toISOString() });
+      await executeQuery(`UPDATE orders SET status = ?, updatedAt = ? WHERE id = ?`, ['In Production', new Date().toISOString(), linkedOrder.id]).catch(() => {});
+    }
+  };
+
+  // ── SINGLE JOB: AUTO-CALCULATE REEL CONSUMPTION & PROPORTIONAL WASTAGE ──
+  const handleAutoCalcSingleJobReels = (customWasteKg = null) => {
+    if (!newRecord.orderId) {
+      alert("⚠️ Please select an active Job Card first.");
+      return;
+    }
+    const producedSheets = parseFloat(newRecord.linerQty || suggestedSheets || 0);
+    if (producedSheets <= 0) {
+      alert("⚠️ Please enter the number of Good Sheets produced (Liner Qty) first.");
+      return;
+    }
+
+    const currentJob = activeProductionJobs.find(j => j.id === newRecord.orderId) || orders.find(o => o.id === newRecord.orderId);
+    const linkedOrd = orders.find(o => o.id === currentJob?.orderId || o.id === currentJob?.id);
+    const currentItem = items.find(i => i.id === (currentJob?.itemId || linkedOrd?.itemId) || i.name === currentJob?.itemName || i.Item_Name === currentJob?.itemName);
+    const cutLengthMm = getJobCutLengthMm(currentJob, currentItem);
+    const fluteType = currentItem?.fluteType || currentItem?.Flute_Type || currentJob?.flute || 'B';
+    const totalWasteKg = parseFloat(customWasteKg !== null ? customWasteKg : (newRecord.wasteSheetsKg || 0));
+
+    // First pass: calculate net theoretical paper for each reel
+    const netReelWeights = consumedReels.map((reel, idx) => {
+      let gsm = parseFloat(reel.gsm || 0);
+      let size = parseFloat(reel.size || 0);
+      let stand = reel.stand;
+
+      if (!reel.isCutReel && reel.reelNo) {
+        const matched = findInventoryReel(inventory, reel.reelNo);
+        if (matched) {
+          if (!gsm) gsm = parseFloat(matched.gsm || 0);
+          if (!size) size = parseFloat(matched.size || 0);
+        }
+      }
+      if (!size) size = parseFloat(recommendedDeckleCm || 120);
+      if (!gsm) gsm = 120;
+      if (!stand) {
+        stand = idx === 0 ? 'Top' : (idx === 1 ? 'Fluting' : 'Bottom');
+      }
+
+      const netKg = calculateTheoreticalReelKg({
+        cutLengthMm,
+        sheetsProduced: producedSheets,
+        reelDeckleCm: size,
+        reelGsm: gsm,
+        stand,
+        fluteType,
+        wastagePct: 0
+      });
+
+      return { gsm, size, stand, netKg };
+    });
+
+    const sumNetKg = netReelWeights.reduce((sum, r) => sum + r.netKg, 0);
+
+    // Second pass: distribute wasteSheetsKg proportionally across reels
+    const updated = consumedReels.map((reel, idx) => {
+      const { gsm, size, stand, netKg } = netReelWeights[idx];
+      const wasteShare = sumNetKg > 0 ? (totalWasteKg * (netKg / sumNetKg)) : 0;
+      const finalKg = (netKg + wasteShare).toFixed(1);
+
+      const matched = !reel.isCutReel && reel.reelNo ? findInventoryReel(inventory, reel.reelNo) : null;
+      const availKg = matched ? parseFloat(matched.balanceQty !== undefined ? matched.balanceQty : (matched.receivedQty || 0)) : null;
+      const newBal = availKg !== null ? Math.max(0, availKg - parseFloat(finalKg)).toFixed(1) : undefined;
+
+      return {
+        ...reel,
+        gsm: reel.gsm || String(gsm),
+        size: reel.size || String(size),
+        stand: reel.stand || stand,
+        weight: finalKg,
+        customBalance: newBal
+      };
+    });
+
+    setConsumedReels(updated);
+    const totalKg = updated.reduce((sum, r) => sum + (parseFloat(r.weight) || 0), 0);
+    const msg = `⚡ Auto-calculated paper consumption: ${totalKg.toFixed(1)} KG total (${sumNetKg.toFixed(1)} KG net + ${totalWasteKg.toFixed(1)} KG waste divided proportionally) for ${producedSheets} sheets`;
+    setAutoCalcNotice(msg);
+    setTimeout(() => setAutoCalcNotice(null), 7000);
+    if (addLog) addLog(msg);
+  };
+
+  // ── COMBINED DECKLE RUN REAL-TIME CALCULATIONS & PROPORTIONAL ALLOCATION ──
+  const deckleRunCalculations = useMemo(() => {
+    // 1. Gather all jobs with sheets > 0
+    const validJobs = deckleRunJobs.map(entry => {
+      if (!entry.orderId) return null;
+      const job = activeProductionJobs.find(j => j.id === entry.orderId) || orders.find(o => o.id === entry.orderId);
+      if (!job) return null;
+      const linkedOrd = orders.find(o => o.id === job.orderId || o.id === job.id);
+      const item = items.find(i => i.id === (job.itemId || linkedOrd?.itemId) || i.name === job.itemName || i.Item_Name === job.itemName);
+      const cutLengthMm = getJobCutLengthMm(job, item);
+      const sheets = parseFloat(entry.producedSheets || 0);
+      const runningMeters = sheets > 0 && cutLengthMm > 0 ? (sheets * cutLengthMm) / 1000 : 0;
+      const ups = parseFloat(job.ups || job.plannedUps || 1);
+
+      return {
+        entry,
+        job,
+        item,
+        linkedOrd,
+        cutLengthMm,
+        sheets,
+        runningMeters,
+        ups
+      };
+    }).filter(Boolean);
+
+    // 2. Compute theoretical paper per job per reel
+    const totalRunWasteKg = Math.max(0, parseFloat(deckleRunWasteKg) || 0);
+
+    const jobsWithPaper = validJobs.map(vj => {
+      let jobNetPaperKg = 0;
+      const reelBreakdown = deckleRunReels.map(r => {
+        let gsm = parseFloat(r.gsm || 0);
+        let size = parseFloat(r.size || 0);
+        if (!gsm && r.matchedReel) gsm = parseFloat(r.matchedReel.gsm || 0);
+        if (!size && r.matchedReel) size = parseFloat(r.matchedReel.size || 0);
+        if (!size) size = parseFloat(deckleRunDeckleCm || 120);
+        if (!gsm) gsm = 120;
+
+        const netKg = calculateTheoreticalReelKg({
+          cutLengthMm: vj.cutLengthMm,
+          sheetsProduced: vj.sheets,
+          reelDeckleCm: size,
+          reelGsm: gsm,
+          stand: r.stand,
+          fluteType: deckleRunFlute || 'B',
+          wastagePct: 0
+        });
+
+        jobNetPaperKg += netKg;
+        return { reelId: r.id, reelNo: r.reelNo, stand: r.stand, netKg };
+      });
+
+      return {
+        ...vj,
+        jobNetPaperKg,
+        reelBreakdown
+      };
+    });
+
+    const totalNetPaperKg = jobsWithPaper.reduce((sum, j) => sum + j.jobNetPaperKg, 0);
+
+    // 3. Proportional waste and paper allocation per job
+    const jobsAllocated = jobsWithPaper.map(j => {
+      const share = totalNetPaperKg > 0 ? (j.jobNetPaperKg / totalNetPaperKg) : (validJobs.length > 0 ? 1 / validJobs.length : 0);
+      const allocatedWasteKg = totalRunWasteKg * share;
+      const allocatedTotalKg = j.jobNetPaperKg + allocatedWasteKg;
+
+      return {
+        ...j,
+        sharePct: (share * 100).toFixed(1),
+        allocatedWasteKg,
+        allocatedTotalKg
+      };
+    });
+
+    // 4. Compute each reel's consumed weight and updated balance
+    const reelsSummary = deckleRunReels.map(r => {
+      let gsm = parseFloat(r.gsm || 0);
+      let size = parseFloat(r.size || 0);
+      if (!gsm && r.matchedReel) gsm = parseFloat(r.matchedReel.gsm || 0);
+      if (!size && r.matchedReel) size = parseFloat(r.matchedReel.size || 0);
+
+      const matchedStock = !r.isCutReel && r.reelNo ? findInventoryReel(inventory, r.reelNo) : null;
+      const avail = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : (r.availKg !== null && r.availKg !== undefined ? parseFloat(r.availKg) : 0);
+
+      let usedKg = 0;
+      if (deckleRunConsumptionMode === 'actual_weigh') {
+        if (r.actualUsedKg !== '' && !isNaN(parseFloat(r.actualUsedKg))) {
+          usedKg = parseFloat(r.actualUsedKg) || 0;
+        } else if (r.finalBalKg !== '' && !isNaN(parseFloat(r.finalBalKg))) {
+          usedKg = Math.max(0, avail - (parseFloat(r.finalBalKg) || 0));
+        }
+      } else {
+        // Mode A: Theoretical paper + proportional waste
+        const netReelAcrossJobs = jobsAllocated.reduce((sum, j) => {
+          const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
+          return sum + (matchedBreakdown?.netKg || 0);
+        }, 0);
+        const wasteShareForReel = totalNetPaperKg > 0 ? (totalRunWasteKg * (netReelAcrossJobs / totalNetPaperKg)) : 0;
+        usedKg = netReelAcrossJobs + wasteShareForReel;
+      }
+
+      const newBal = Math.max(0, avail - usedKg);
+      return {
+        ...r,
+        gsm,
+        size,
+        availKg: avail,
+        matchedReel: matchedStock || r.matchedReel,
+        computedUsedKg: usedKg,
+        computedNewBalKg: newBal
+      };
+    });
+
+    const totalReelsConsumedKg = reelsSummary.reduce((sum, r) => sum + r.computedUsedKg, 0);
+
+    return {
+      validJobs: jobsAllocated,
+      reelsSummary,
+      totalNetPaperKg,
+      totalRunWasteKg,
+      totalReelsConsumedKg,
+      totalSheetsProduced: jobsAllocated.reduce((sum, j) => sum + j.sheets, 0)
+    };
+  }, [deckleRunJobs, deckleRunReels, deckleRunWasteKg, deckleRunConsumptionMode, deckleRunDeckleCm, deckleRunFlute, activeProductionJobs, orders, items, inventory]);
+
+  // ── SAVE COMBINED DECKLE RUN (MULTI-JOB BATCH) ──
+  const handleSaveCombinedDeckleRun = async (e) => {
+    if (e) e.preventDefault();
+    const { validJobs, reelsSummary, totalNetPaperKg, totalRunWasteKg, totalReelsConsumedKg, totalSheetsProduced } = deckleRunCalculations;
+
+    if (validJobs.length === 0) {
+      alert("⚠️ Please add at least one job with sheets produced (> 0) to log the combined run.");
+      return;
+    }
+    const hasReels = reelsSummary.some(r => r.reelNo && r.reelNo.trim() !== '');
+    if (!hasReels) {
+      alert("⚠️ Please select or enter at least one mounted reel on the machine stands.");
+      return;
+    }
+    if (totalReelsConsumedKg <= 0) {
+      alert("⚠️ Total calculated or weighed reel consumption must be greater than 0 KG.");
+      return;
+    }
+
+    try {
+      const runDate = deckleRunDate || new Date().toISOString().split('T')[0];
+      const runCompId = deckleRunCompanyId || allowedCompanyId || '';
+      const runSummaryJobCards = validJobs.map(vj => vj.job.jobNo || getJobCardNo(vj.job)).join(', ');
+      const runBatchId = `DR-${Date.now().toString().slice(-6)}`;
+
+      // 1. Log each job's production record
+      const createdRecords = [];
+      for (const vj of validJobs) {
+        const jCardNo = vj.job.jobNo || getJobCardNo(vj.job);
+        const jItemName = vj.job.itemName || vj.item?.name || 'Corrugated Item';
+
+        // Build consumedReels for this specific job, with its exact allocated KG per mounted reel
+        const jobConsumedReels = reelsSummary.map((r, rIdx) => {
+          let allocatedReelKg = 0;
+          if (deckleRunConsumptionMode === 'actual_weigh') {
+            const totalReelTheoretical = validJobs.reduce((sum, j) => {
+              const matchedBreakdown = j.reelBreakdown.find(rb => rb.reelId === r.id);
+              return sum + (matchedBreakdown?.netKg || 0);
+            }, 0);
+            const myReelTheoretical = vj.reelBreakdown.find(rb => rb.reelId === r.id)?.netKg || 0;
+            allocatedReelKg = totalReelTheoretical > 0 ? (r.computedUsedKg * (myReelTheoretical / totalReelTheoretical)) : 0;
+          } else {
+            const myReelTheoretical = vj.reelBreakdown.find(rb => rb.reelId === r.id)?.netKg || 0;
+            const wasteShareForReel = totalNetPaperKg > 0 ? (totalRunWasteKg * (myReelTheoretical / totalNetPaperKg)) : 0;
+            allocatedReelKg = myReelTheoretical + wasteShareForReel;
+          }
+
+          const cleanReelNo = (r.reelNo || '').trim().toUpperCase();
+          return {
+            isCutReel: !!r.isCutReel,
+            reelNo: cleanReelNo || `DECKLE-REEL-${rIdx + 1}`,
+            weight: allocatedReelKg.toFixed(1),
+            size: String(r.size || ''),
+            gsm: String(r.gsm || ''),
+            quality: r.quality || '',
+            stand: r.stand || '',
+            notes: `Deckle Run [${deckleRunDeckleCm || ''}cm] - ${allocatedReelKg.toFixed(1)}kg share`
+          };
+        }).filter(r => parseFloat(r.weight) > 0);
+
+        const reelNosStr = jobConsumedReels.map(r => r.reelNo).join(', ');
+        const jobTotalUseKg = jobConsumedReels.reduce((sum, r) => sum + parseFloat(r.weight || 0), 0);
+
+        const prodRecord = {
+          date: runDate,
+          orderId: vj.job.id,
+          companyId: vj.job.companyId || runCompId,
+          millName: reelsSummary[0]?.matchedReel?.millName || 'Deckle Run Mill',
+          paperUsedFor: 'Board',
+          usedForItem: jItemName,
+          linerQty: String(vj.sheets),
+          wasteSheetsKg: vj.allocatedWasteKg.toFixed(1),
+          numberOfUps: String(vj.ups || 1),
+          commonUps: vj.job.commonUps || '',
+          smallUps: vj.job.smallUps || '',
+          consumedReels: jobConsumedReels,
+          useKg: jobTotalUseKg.toFixed(1),
+          reelNos: reelNosStr,
+          deckleRunBatchId: runBatchId,
+          tallySynced: false
+        };
+
+        await addDoc(getColRef('production'), prodRecord);
+        createdRecords.push(prodRecord);
+
+        // Advance WIP & Finished Goods
+        await advanceJobWipAndFg(vj.job.id, jCardNo, jItemName, vj.sheets, vj.ups, prodRecord.companyId);
+
+        // Sync order completion status
+        await syncOrderStatusAfterProduction(vj.job.id, prodRecord);
+      }
+
+      // 2. Auto-deplete inventory balances for mounted inventory reels (once per unique reel)
+      for (const r of reelsSummary) {
+        if (r.isCutReel || !r.reelNo) continue;
+        const totalUsedFromReel = r.computedUsedKg;
+        if (totalUsedFromReel <= 0) continue;
+
+        const matchedStock = findInventoryReel(inventory, r.reelNo);
+        if (matchedStock && getDocRef) {
+          const currentBal = parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0));
+          const newBal = Math.max(0, currentBal - totalUsedFromReel);
+          try {
+            await updateDoc(getDocRef('inventory', matchedStock.id), {
+              balanceQty: newBal,
+              lastUsedForItem: `Combined Run: ${runSummaryJobCards}`,
+              lastUsedDate: runDate,
+              lastUsedJobNo: `DECKLE-RUN-${runDate}`
+            });
+            if (addLog) {
+              addLog(`Auto-depleted ${totalUsedFromReel.toFixed(1)}kg from reel #${matchedStock.supplierReelNo || matchedStock.reelNo} for Combined Deckle Run (${validJobs.length} jobs, Remaining Bal: ${newBal.toFixed(1)}kg)`);
+            }
+          } catch(err) {}
+        }
+      }
+
+      // 3. Sync database inventory and log audit
+      const updatedProduction = [...(production || []), ...createdRecords];
+      reconcileDatabaseInventory(inventory, updatedProduction, orders).catch(() => {});
+
+      if (addLog) {
+        addLog(`🔗 Logged Combined Deckle Run [${runBatchId}]: ${validJobs.length} Jobs (${totalSheetsProduced} sheets, ${totalReelsConsumedKg.toFixed(1)}kg total paper consumed, ${totalRunWasteKg.toFixed(1)}kg waste divided proportionally across Job Cards: ${runSummaryJobCards})`);
+      }
+
+      alert(`🎉 Combined Deckle Run Logged Successfully!\n\n• Batch ID: ${runBatchId}\n• Jobs Logged: ${validJobs.length} (${runSummaryJobCards})\n• Total Good Sheets: ${totalSheetsProduced}\n• Total Paper Consumed: ${totalReelsConsumedKg.toFixed(1)} KG\n• Total Run Waste: ${totalRunWasteKg.toFixed(1)} KG (divided proportionally)\n\nAll Job Cards, WIP stages, and Reel Balances have been updated.`);
+
+      // Reset form
+      setDeckleRunWasteKg('');
+      setDeckleRunJobs([{ id: 'j_' + Date.now(), orderId: '', producedSheets: '', notes: '' }]);
+      setDeckleRunReels(prev => prev.map(r => ({ ...r, actualUsedKg: '', finalBalKg: '' })));
+    } catch(err) {
+      console.error('Error logging combined deckle run:', err);
+      alert('Error saving combined deckle run: ' + (err.message || 'Unknown error'));
+    }
+  };
+
   const handleAddOrUpdate = async (e) => {
     e.preventDefault();
     if (!newRecord.orderId) {
@@ -16867,160 +17527,13 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
         } catch(err) {}
       }
 
-      // 2. AUTO-ADVANCE WIP: If corrugated sheet -> directly Ready in Finished Goods (Bundling/Ready); if box -> advance to Printing stage
+      // 2. AUTO-ADVANCE WIP & FINISHED GOODS
       const producedSheets = parseFloat(finalRecord.linerQty || 0);
       const upsCount = parseFloat(finalRecord.numberOfUps || 1);
-      const producedQtyPcs = Math.round(producedSheets * upsCount);
+      await advanceJobWipAndFg(finalRecord.orderId, jCardNo, finalRecord.usedForItem, producedSheets, upsCount, finalRecord.companyId);
 
-      if (getColRef && producedSheets > 0) {
-        try {
-          const targetOrderId = finalRecord.orderId;
-          const targetJobNo = jCardNo;
-          const targetItemName = finalRecord.usedForItem;
-
-          const linkedOrder = orders.find(o => o.id === targetOrderId || o.orderNo === targetJobNo);
-          const matchedItem = items.find(i => i.id === linkedOrder?.itemId || i.name === targetItemName || i.Item_Name === targetItemName);
-          const isSheet = isCorrugatedSheetItem(matchedItem || targetItemName, linkedOrder);
-          const destinationStage = isSheet ? 'Bundling/Ready' : 'Printing';
-
-          // Find existing Corrugation WIP card by orderId, jobNo, or itemName
-          const existingCorrWip = (wipStages || []).find(w =>
-            (w.currentStage === 'Corrugation' || !w.currentStage) && (
-              (targetOrderId && w.orderId === targetOrderId) ||
-              (targetJobNo && w.jobNo === targetJobNo) ||
-              (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
-            )
-          );
-
-          if (existingCorrWip) {
-            const initialCorrQty = parseFloat(existingCorrWip.qty !== undefined ? existingCorrWip.qty : (existingCorrWip.orderQty || 0));
-            const balanceCorrQty = Math.max(0, initialCorrQty - producedQtyPcs);
-            const balanceCorrSheets = Math.ceil(balanceCorrQty / Math.max(1, upsCount));
-
-            if (balanceCorrQty > 0) {
-              await updateDoc(getDocRef('wip_stages', existingCorrWip.id), { 
-                qty: balanceCorrQty, 
-                sheets: balanceCorrSheets, 
-                updatedAt: new Date().toISOString() 
-              });
-              await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [balanceCorrQty, balanceCorrSheets, existingCorrWip.id]).catch(() => {});
-            } else {
-              await deleteDoc(getDocRef('wip_stages', existingCorrWip.id));
-              await executeQuery(`DELETE FROM wip_stages WHERE id = ?`, [existingCorrWip.id]).catch(() => {});
-            }
-          }
-
-          // Check if destination stage card already exists for this order/job
-          const existingDestWip = (wipStages || []).find(w =>
-            (w.currentStage === destinationStage || (isSheet && (w.currentStage === 'Bundling' || w.currentStage === 'Ready in FG'))) && (
-              (targetOrderId && w.orderId === targetOrderId) ||
-              (targetJobNo && w.jobNo === targetJobNo) ||
-              (targetItemName && (w.itemName === targetItemName || w.itemName?.toLowerCase() === targetItemName.toLowerCase()))
-            )
-          );
-
-          if (existingDestWip) {
-            const newDestQty = parseFloat(existingDestWip.qty || 0) + producedQtyPcs;
-            const newDestSheets = parseFloat(existingDestWip.sheets || 0) + producedSheets;
-            await updateDoc(getDocRef('wip_stages', existingDestWip.id), { 
-              qty: newDestQty, 
-              sheets: newDestSheets, 
-              updatedAt: new Date().toISOString() 
-            });
-            await executeQuery(`UPDATE wip_stages SET qty = ?, sheets = ? WHERE id = ?`, [newDestQty, newDestSheets, existingDestWip.id]).catch(() => {});
-          } else {
-            const wipPayload = {
-              orderId: targetOrderId || `job_${Date.now()}`,
-              companyId: finalRecord.companyId || allowedCompanyId || '',
-              jobNo: targetJobNo || 'JC-CORR',
-              itemName: targetItemName || 'Corrugated Board',
-              currentStage: destinationStage,
-              qty: producedQtyPcs,
-              sheets: Math.round(producedSheets),
-              ups: upsCount,
-              orderQty: existingCorrWip?.orderQty || producedQtyPcs,
-              operator: currentUser?.displayName || currentUser?.name || 'Corrugator Operator',
-              timeAgo: 'Just now'
-            };
-            await addDoc(getColRef('wip_stages'), wipPayload);
-          }
-
-          // If corrugated sheet, also auto-inward directly to Finished Goods on the order
-          if (isSheet && linkedOrder && getDocRef) {
-            try {
-              const currentFg = parseFloat(linkedOrder.openingFgQty || 0);
-              const newFg = currentFg + producedQtyPcs;
-              const targetOrderQty = parseFloat(linkedOrder.orderQty || 0);
-              const newStatus = (newFg >= targetOrderQty) ? 'Ready for Dispatch' : (linkedOrder.status || 'In Production');
-              await updateDoc(getDocRef('orders', linkedOrder.id), {
-                openingFgQty: newFg,
-                status: newStatus,
-                updatedAt: new Date().toISOString()
-              });
-              await executeQuery(`UPDATE orders SET openingFgQty = ?, status = ?, updatedAt = ? WHERE id = ?`, [
-                newFg, newStatus, new Date().toISOString(), linkedOrder.id
-              ]).catch(() => {});
-            } catch(e) {}
-          }
-
-          window.dispatchEvent(new CustomEvent('turso_db_change', { detail: { table: 'wip_stages', action: 'update' } }));
-          if (addLog) {
-            if (isSheet) {
-              addLog(`✓ Corrugated Sheet produced: ${producedQtyPcs} sheets directly marked Ready in Finished Goods for Job [${jCardNo || targetItemName}]`);
-            } else {
-              addLog(`Advanced ${producedQtyPcs} pcs (${producedSheets} sheets) from Corrugation to Printing for Job [${jCardNo || targetItemName}]`);
-            }
-          }
-        } catch(err) {
-          console.warn('WIP advance error:', err);
-        }
-      }
-
-      // Auto-advance job / order status
-      if (finalRecord.orderId) {
-        const linkedOrder = orders.find(o => o.id === finalRecord.orderId);
-        if (linkedOrder && linkedOrder.status !== 'Completed') {
-          const allPLogs = [...production, { ...finalRecord, id: '_new' }].filter(p => p.orderId === finalRecord.orderId);
-          const item = items.find(i => i.id === linkedOrder.itemId);
-          const isPpc = item?.itemType === 'PPC' || item?.Item_Type === 'PPC';
-          const isSheet = isCorrugatedSheetItem(item, linkedOrder);
-          let producedQty = 0;
-          if (isSheet) {
-            const sumSheets = allPLogs.reduce((a, p) => a + (parseFloat(p.linerQty || 0) * parseFloat(p.numberOfUps || linkedOrder.plannedUps || 1)), 0);
-            producedQty = Math.max(parseInt(linkedOrder.openingFgQty || 0), Math.round(sumSheets));
-          } else if (isPpc) {
-            const cPPS = Math.max(1, parseInt(linkedOrder.smallPerSet || 2) - 1);
-            const sPPS = Math.max(1, parseInt(linkedOrder.commonPerSet || 2) - 1);
-            let tc = 0, ts = 0;
-            allPLogs.forEach(p => { tc += parseFloat(p.linerQty || 0) * parseInt(p.commonUps || linkedOrder.commonUps || 0); ts += parseFloat(p.linerQty || 0) * parseInt(p.smallUps || linkedOrder.smallUps || 0); });
-            const prodLogsQty = Math.min(Math.floor(tc / cPPS), Math.floor(ts / sPPS));
-            const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
-            producedQty = Math.max(fgStockQty, isNaN(prodLogsQty) || prodLogsQty === Infinity ? 0 : prodLogsQty);
-          } else {
-            const ply = parseInt(item?.ply || item?.Ply || 3);
-            const sumBoard = allPLogs.filter(p => p.paperUsedFor === 'Board').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
-            const sumLiner = allPLogs.filter(p => p.paperUsedFor === 'Liner').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
-            const sumPaper = allPLogs.filter(p => p.paperUsedFor === 'Paper').reduce((a, p) => a + parseFloat(p.linerQty || 0), 0);
-            let effBase = 0;
-            if (ply <= 2) effBase = sumBoard + sumPaper;
-            else if (ply === 3) effBase = sumBoard + Math.min(sumLiner, sumPaper);
-            else if (ply === 5) effBase = sumBoard + Math.min(Math.floor(sumLiner / 2), sumPaper);
-            else if (ply === 7) effBase = sumBoard + Math.min(Math.floor(sumLiner / 3), sumPaper);
-            else effBase = sumBoard + sumPaper;
-            const prodLogsQty = Math.floor(effBase * parseFloat(linkedOrder.plannedUps || 1));
-            const fgStockQty = parseInt(linkedOrder.openingFgQty || 0);
-            producedQty = Math.max(fgStockQty, prodLogsQty);
-          }
-          const orderQty = parseInt(linkedOrder.orderQty || 0);
-          if (producedQty >= orderQty && orderQty > 0) {
-            const targetStatus = isSheet ? 'Ready for Dispatch' : 'Completed';
-            await updateDoc(getDocRef('orders', linkedOrder.id), { status: targetStatus });
-            addLog(`Auto-completed Job [${jCardNo}]: ${linkedOrder.itemName || linkedOrder.Item_Name} (${producedQty}/${orderQty} produced - ${targetStatus})`);
-          } else if (linkedOrder.status === 'Pending') {
-            await updateDoc(getDocRef('orders', linkedOrder.id), { status: 'In Production' });
-          }
-        }
-      }
+      // 3. AUTO-ADVANCE JOB / ORDER COMPLETION STATUS
+      await syncOrderStatusAfterProduction(finalRecord.orderId, finalRecord);
     }
 
     // Clear saved draft on successful submit
@@ -17217,7 +17730,39 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
       </div>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 mb-8">
-        <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
+        {!editingId && (
+          <div className="flex items-center gap-2 p-1.5 bg-stone-100 rounded-xl mb-6 border border-stone-200">
+            <button
+              type="button"
+              onClick={() => setProductionMode('single')}
+              className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                productionMode === 'single'
+                  ? 'bg-white text-stone-900 shadow-sm border border-stone-200'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              <span>📄</span> Single Job Card Mode
+            </button>
+            <button
+              type="button"
+              onClick={() => setProductionMode('combined_deckle')}
+              className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                productionMode === 'combined_deckle'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              <span>🔗</span> Combined Deckle Run (Multi-Job Batch)
+              <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded font-black ${
+                productionMode === 'combined_deckle' ? 'bg-blue-800 text-blue-100' : 'bg-blue-100 text-blue-800'
+              }`}>Zero Downtime</span>
+            </button>
+          </div>
+        )}
+
+        {productionMode === 'single' && (
+          <>
+            <h3 className="font-bold mb-4">{editingId ? 'Edit Production Record' : 'Add Production Record'}</h3>
         
         {/* TARGET JOB SELECTOR CARD */}
         <div className="bg-gradient-to-r from-blue-900 via-slate-900 to-slate-800 text-white p-5 rounded-xl border border-blue-500/40 shadow-sm mb-6">
@@ -17380,6 +17925,14 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                 <p className="text-xs text-slate-300 mt-0.5">Reels are auto-identified by Reel Number or Camera Scan</p>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAutoCalcSingleJobReels()}
+                  className="flex items-center gap-1.5 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-300 px-3 py-1.5 rounded-lg transition shadow-sm"
+                  title="Auto-calculate paper consumed on each mounted reel from sheet counts, cut length and GSM formulas without weighing"
+                >
+                  ⚡ Auto-Calculate Reel KG
+                </button>
                 <div className="flex items-center bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1">
                   <span className="text-xs font-bold text-slate-400 mr-1.5">📷 Scan:</span>
                   <input
@@ -17408,6 +17961,26 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
                 </button>
               </div>
             </div>
+
+            {/* Auto-Calculate Toast/Notice Banner */}
+            {autoCalcNotice && (
+              <div className="mb-3.5 bg-amber-950/80 border border-amber-500/60 rounded-lg p-3 flex items-start justify-between gap-3 text-xs text-amber-200 animate-fadeIn">
+                <div className="flex items-start gap-2">
+                  <span className="text-base">⚡</span>
+                  <div>
+                    <span className="font-extrabold text-amber-300 block">Auto-Calculated Reel Weights &amp; Wastage</span>
+                    <span className="text-slate-200 mt-0.5 block">{autoCalcNotice}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoCalcNotice(null)}
+                  className="text-amber-400 hover:text-white font-black text-sm px-1.5"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Attached Reels Active Banner with Quick Reload Option */}
             {newRecord.orderId && (() => {
@@ -17993,7 +18566,627 @@ function ProductionView({ inventory = [], production = [], orders = [], items = 
             {editingId && <button type="button" onClick={cancelEdit} className="bg-stone-200 text-stone-800 py-3 px-6 rounded-xl hover:bg-stone-300 font-bold text-sm transition">Cancel</button>}
           </div>
         </form>
-      </div>
+      </>
+    )}
+
+    {productionMode === 'combined_deckle' && !editingId && (
+      <form onSubmit={handleSaveCombinedDeckleRun} className="space-y-6">
+        {/* HEADER EXPLANATION BANNER */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-xl border border-indigo-500/40 shadow-sm">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🔗</span>
+                <h3 className="text-lg font-extrabold text-white">Combined Deckle Run — Multi-Job Sequential Batch</h3>
+                <span className="bg-amber-500 text-slate-950 text-[11px] font-black uppercase px-2 py-0.5 rounded">Efficiency Mode</span>
+              </div>
+              <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                Run multiple sequential jobs sharing the same reel deckle without stopping the corrugator to dismount and weigh reels.
+                Paper consumption and run wastage are <strong>automatically divided proportionally</strong> across all jobs.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 bg-indigo-900/60 border border-indigo-400/40 px-3 py-2 rounded-lg text-xs">
+              <span className="text-amber-400 font-bold">⚡ Zero Downtime:</span>
+              <span className="text-slate-200">Mount reels once → Run all jobs → Save batch in 1-click</span>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 1: RUN SPECIFICATIONS & PARAMETERS */}
+        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="text-xs font-black uppercase tracking-wider text-stone-500 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+            Step 1: Deckle Run Setup &amp; Common Parameters
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
+            <div>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Run Date *</label>
+              <input
+                required
+                type="date"
+                className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                value={deckleRunDate}
+                onChange={e => setDeckleRunDate(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Company / Unit *</label>
+              <select
+                required
+                className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                value={deckleRunCompanyId}
+                onChange={e => setDeckleRunCompanyId(e.target.value)}
+              >
+                <option value="">-- Select Unit --</option>
+                {[...visibleCompanies].sort((a,b) => (a?.name || '').localeCompare(b?.name || '')).map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1 flex items-center justify-between">
+                <span>Machine Deckle (cm) *</span>
+              </label>
+              <input
+                required
+                type="number"
+                step="0.1"
+                placeholder="e.g. 112 or 120"
+                className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-mono font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                value={deckleRunDeckleCm}
+                onChange={e => {
+                  const val = e.target.value;
+                  setDeckleRunDeckleCm(val);
+                  if (val) {
+                    setDeckleRunReels(prev => prev.map(r => (!r.size || r.size === deckleRunDeckleCm) ? { ...r, size: val } : r));
+                  }
+                }}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1">Flute Profile</label>
+              <select
+                className="w-full p-2.5 border border-stone-300 bg-white rounded-lg text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
+                value={deckleRunFlute}
+                onChange={e => setDeckleRunFlute(e.target.value)}
+              >
+                <option value="B">B Flute (1.35x Take-up)</option>
+                <option value="C">C Flute (1.42x Take-up)</option>
+                <option value="E">E Flute (1.25x Take-up)</option>
+                <option value="A">A Flute (1.54x Take-up)</option>
+                <option value="F">F Flute (1.15x Take-up)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-amber-700 uppercase mb-1 flex items-center justify-between">
+                <span>Total Run Scrap (KG)</span>
+                <span className="text-[10px] text-amber-600 font-normal">Proportional</span>
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="e.g. 15.0"
+                className="w-full p-2.5 border border-amber-300 bg-amber-50/50 rounded-lg text-sm font-mono font-bold text-amber-900 focus:ring-2 focus:ring-amber-500 outline-none"
+                value={deckleRunWasteKg}
+                onChange={e => setDeckleRunWasteKg(e.target.value)}
+                title="Total scrap generated across the whole deckle run (trim + tail + rejects). Will be divided proportionally according to each job's production volume."
+              />
+            </div>
+          </div>
+          {parseFloat(deckleRunWasteKg || 0) > 0 && (
+            <div className="mt-2.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-center gap-2">
+              <span>⚖️</span>
+              <span>
+                <strong>{parseFloat(deckleRunWasteKg).toFixed(1)} KG total scrap</strong> will be automatically divided across all jobs proportionally based on each job's paper consumption.
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* SECTION 2: MOUNTED REELS ON CORRUGATOR STANDS */}
+        <div className="bg-slate-900 text-white p-5 rounded-xl border border-slate-700 shadow-md">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-2 border-b border-slate-700/80 pb-3">
+            <div>
+              <h4 className="text-sm font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                🧲 Step 2: Mounted Paper Reels on Machine Stands
+              </h4>
+              <p className="text-xs text-slate-300 mt-0.5">Mount these reels once on the corrugator stands; they feed all sequential jobs in this run</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleAddDeckleReel}
+                className="text-xs font-extrabold bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-sm"
+              >
+                <span>+</span> Add Stand / Layer
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {deckleRunReels.map((reel, idx) => {
+              const matchedStock = !reel.isCutReel && reel.reelNo ? findInventoryReel(inventory, reel.reelNo) : null;
+              const availKg = matchedStock ? parseFloat(matchedStock.balanceQty !== undefined ? matchedStock.balanceQty : (matchedStock.receivedQty || 0)) : null;
+              const reelSummary = deckleRunCalculations.reelsSummary.find(r => r.id === reel.id) || {};
+              const computedUsed = reelSummary.computedUsedKg || 0;
+              const computedBal = reelSummary.computedNewBalKg !== undefined ? reelSummary.computedNewBalKg : (availKg !== null ? Math.max(0, availKg - computedUsed) : null);
+
+              return (
+                <div key={reel.id || idx} className={`p-3.5 rounded-lg border space-y-2.5 transition-all ${reel.isCutReel ? 'bg-amber-950/30 border-amber-500/50' : 'bg-slate-800/90 border-slate-700'}`}>
+                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-700/60 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black uppercase text-amber-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-700">
+                        Stand {idx + 1}: {reel.stand || 'Layer'}
+                      </span>
+                      <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-700">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: false })}
+                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold transition-all ${!reel.isCutReel ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          📦 Stock Reel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateDeckleReel(idx, { isCutReel: true, size: reel.size || deckleRunDeckleCm || '' })}
+                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold transition-all ${reel.isCutReel ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-amber-300'}`}
+                        >
+                          ✂️ Cut / Floor Roll
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={reel.stand || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { stand: e.target.value })}
+                        className="bg-slate-900 border border-slate-700 text-slate-300 rounded px-2 py-1 text-xs font-semibold outline-none focus:border-amber-400"
+                      >
+                        <option value="Top">Top Liner</option>
+                        <option value="Fluting">Fluting Medium</option>
+                        <option value="Bottom">Bottom Liner</option>
+                        <option value="Center">Center Liner</option>
+                      </select>
+
+                      {deckleRunReels.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDeckleReel(reel.id)}
+                          className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 rounded transition"
+                          title="Remove Stand"
+                        >
+                          <Trash2 className="w-3.5 h-3.5"/>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Reel Inputs Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end">
+                    {/* 1. Identifier */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1 truncate">
+                        {reel.isCutReel ? 'Reel Label / Tag' : 'Reel No / Barcode *'}
+                      </label>
+                      <input
+                        required={!reel.isCutReel}
+                        type="text"
+                        list={`deckle-reels-list-${idx}`}
+                        placeholder={reel.isCutReel ? 'e.g. CUT-ROLL-1' : 'Enter / Scan Reel No'}
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs uppercase font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.reelNo}
+                        onChange={e => handleUpdateDeckleReel(idx, { reelNo: e.target.value })}
+                      />
+                      {!reel.isCutReel && (
+                        <datalist id={`deckle-reels-list-${idx}`}>
+                          {inventory
+                            .filter(i => (!deckleRunCompanyId || i.companyId === deckleRunCompanyId) && parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0)) > 0)
+                            .slice(0, 30)
+                            .map(i => {
+                              const printed = i.supplierReelNo || i.reelNo || i.id;
+                              const bal = parseFloat(i.balanceQty !== undefined ? i.balanceQty : (i.receivedQty || 0));
+                              return (
+                                <option key={i.id} value={printed}>
+                                  {printed} - {i.millName || ''} {i.gsm}G {i.size}cm ({bal.toFixed(1)}kg)
+                                </option>
+                              );
+                            })}
+                        </datalist>
+                      )}
+                    </div>
+
+                    {/* 2. Deckle Size (cm) */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                        Reel Deckle (cm) *
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        step="0.1"
+                        placeholder={deckleRunDeckleCm || '120'}
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.size || deckleRunDeckleCm || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { size: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 3. GSM */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                        GSM *
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        placeholder="120"
+                        className="w-full p-2 border border-slate-600 bg-slate-900 text-white rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                        value={reel.gsm || ''}
+                        onChange={e => handleUpdateDeckleReel(idx, { gsm: e.target.value })}
+                      />
+                    </div>
+
+                    {/* 4. Avail Stock */}
+                    <div className="min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                        Avail Stock (KG)
+                      </label>
+                      <div className={`w-full p-2 border rounded text-xs font-mono font-bold text-center ${availKg !== null && availKg <= 0 ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-slate-700 bg-slate-900/80 text-slate-300'}`}>
+                        {availKg !== null ? `${availKg.toFixed(1)} KG` : (reel.isCutReel ? 'Floor Stock' : '—')}
+                      </div>
+                    </div>
+
+                    {/* 5. Mode 2 Input or Mode 1 Computed Display */}
+                    <div className="min-w-0">
+                      {deckleRunConsumptionMode === 'actual_weigh' ? (
+                        <>
+                          <label className="block text-[10px] font-bold text-amber-300 uppercase mb-1 truncate">
+                            Single End Weigh (KG) *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            placeholder="Actual used KG"
+                            className="w-full p-2 border border-amber-500/80 bg-amber-500/10 text-amber-300 rounded text-xs font-mono font-bold outline-none focus:border-amber-400"
+                            value={reel.actualUsedKg || ''}
+                            onChange={e => handleUpdateDeckleReel(idx, { actualUsedKg: e.target.value })}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <label className="block text-[10px] font-bold text-emerald-300 uppercase mb-1 truncate">
+                            ⚡ Auto-Computed KG
+                          </label>
+                          <div className="w-full p-2 border border-emerald-500/60 bg-emerald-500/10 text-emerald-300 rounded text-xs font-mono font-black text-center">
+                            {computedUsed.toFixed(1)} KG
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Matched Reel Live Spec Badge */}
+                  {matchedStock && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded font-medium">
+                      <span className="font-bold text-emerald-400">✓ In Stock:</span>
+                      <span className="text-white">{matchedStock.millName || 'Stock Mill'}</span>
+                      <span className="text-slate-300">• {matchedStock.gsm} GSM</span>
+                      <span className="text-slate-300">• {matchedStock.size} cm</span>
+                      <span className="text-slate-300">• {matchedStock.bf || 18} BF</span>
+                      <div className="ml-auto text-xs font-mono">
+                        <span className="text-slate-400">Bal after run: </span>
+                        <strong className={computedBal !== null && computedBal <= 0 ? 'text-red-400' : 'text-emerald-400'}>
+                          {computedBal !== null ? `${computedBal.toFixed(1)} KG` : '—'}
+                        </strong>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SECTION 3: SEQUENTIAL JOBS RUN ON THIS DECKLE */}
+        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+            <div>
+              <div className="text-xs font-black uppercase tracking-wider text-stone-500 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                Step 3: Sequential Jobs Run on this Deckle Setup
+              </div>
+              <p className="text-xs text-stone-600 mt-0.5">
+                Add all jobs produced sequentially on this same deckle width without unmounting the paper reels
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddDeckleJob}
+              className="text-xs font-extrabold bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-xs"
+            >
+              <span>+</span> Add Another Job Card
+            </button>
+          </div>
+
+          <div className="space-y-3.5">
+            {deckleRunJobs.map((jobEntry, jIdx) => {
+              const matchedJob = activeProductionJobs.find(pj => pj.id === jobEntry.orderId) || orders.find(o => o.id === jobEntry.orderId);
+              const jCardNo = matchedJob ? (matchedJob.jobNo || getJobCardNo(matchedJob)) : '';
+              const linkedOrd = orders.find(o => o.id === matchedJob?.orderId || o.id === matchedJob?.id);
+              const matchedItem = items.find(i => i.id === (matchedJob?.itemId || linkedOrd?.itemId) || i.name === matchedJob?.itemName || i.Item_Name === matchedJob?.itemName);
+              const cutLengthMm = matchedJob ? getJobCutLengthMm(matchedJob, matchedItem) : 0;
+              const targetQty = matchedJob ? parseInt(matchedJob.plannedQty || matchedJob.orderQty || 0) : 0;
+              const ups = matchedJob ? parseInt(matchedJob.ups || matchedJob.plannedUps || 1) : 1;
+              const targetSheets = Math.ceil(targetQty / ups);
+
+              const calcJob = deckleRunCalculations.validJobs.find(vj => vj.entry.id === jobEntry.id);
+              const runningMeters = calcJob?.runningMeters || 0;
+              const sharePct = calcJob?.sharePct || '0.0';
+              const netPaperKg = calcJob?.jobNetPaperKg || 0;
+              const allocatedWasteKg = calcJob?.allocatedWasteKg || 0;
+              const allocatedTotalKg = calcJob?.allocatedTotalKg || 0;
+
+              return (
+                <div key={jobEntry.id || jIdx} className="p-4 rounded-xl border border-stone-200 bg-stone-50/60 hover:bg-stone-50 transition space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap pb-2 border-b border-stone-200">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-blue-900 text-white text-xs font-black flex items-center justify-center font-mono">
+                        {jIdx + 1}
+                      </span>
+                      <span className="text-xs font-bold text-stone-700 uppercase tracking-wider">
+                        Sequential Job Card #{jIdx + 1}
+                      </span>
+                      {jCardNo && (
+                        <span className="bg-blue-100 text-blue-900 text-xs font-mono font-black px-2 py-0.5 rounded">
+                          {jCardNo}
+                        </span>
+                      )}
+                    </div>
+
+                    {deckleRunJobs.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveDeckleJob(jobEntry.id)}
+                        className="text-xs text-red-600 hover:text-red-800 font-bold flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5"/> Remove Job
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr] gap-3 items-start">
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 uppercase mb-1">
+                        Select Active Job Card *
+                      </label>
+                      <select
+                        required
+                        className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={jobEntry.orderId || ''}
+                        onChange={e => handleUpdateDeckleJob(jIdx, { orderId: e.target.value })}
+                      >
+                        <option value="">-- Choose Job Card --</option>
+                        {activeProductionJobs
+                          .filter(j => !deckleRunCompanyId || j.companyId === deckleRunCompanyId)
+                          .map(job => {
+                            const comp = job.companyName || companies.find(c => c.id === job.companyId)?.name || 'Unit';
+                            const no = job.jobNo || getJobCardNo(job);
+                            const qty = parseInt(job.plannedQty || job.orderQty || 0);
+                            const jUps = parseInt(job.ups || job.plannedUps || 1);
+                            return (
+                              <option key={job.id} value={job.id}>
+                                [{no}] {job.itemName} ({qty.toLocaleString()} pcs · {jUps} Ups) · {comp}
+                              </option>
+                            );
+                          })}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 uppercase mb-1 flex items-center justify-between">
+                        <span>Good Sheets Produced *</span>
+                        {targetSheets > 0 && !jobEntry.producedSheets && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateDeckleJob(jIdx, { producedSheets: String(targetSheets) })}
+                            className="text-[10px] text-blue-600 hover:underline font-bold"
+                          >
+                            Target: {targetSheets}
+                          </button>
+                        )}
+                      </label>
+                      <input
+                        required
+                        type="number"
+                        step="0.1"
+                        min="1"
+                        placeholder={targetSheets ? `Target: ${targetSheets}` : 'e.g. 1500'}
+                        className="w-full p-2.5 border border-stone-300 rounded-lg text-sm bg-white font-mono font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={jobEntry.producedSheets || ''}
+                        onChange={e => handleUpdateDeckleJob(jIdx, { producedSheets: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Calculation Pill for this Job */}
+                  {matchedJob && (
+                    <div className="bg-white border border-stone-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <div>
+                          <span className="text-[10px] text-stone-500 uppercase font-bold block">Item / Specs</span>
+                          <span className="font-bold text-stone-900">{matchedJob.itemName}</span>
+                          <span className="text-stone-500 ml-1">({cutLengthMm} mm cut length · {ups} Ups)</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-wrap bg-stone-50 px-3 py-1.5 rounded-lg border border-stone-200">
+                        <div>
+                          <span className="text-[10px] text-stone-500 uppercase font-bold block">Running Meters</span>
+                          <span className="font-mono font-bold text-blue-700">{runningMeters.toFixed(1)} m</span>
+                        </div>
+                        <div className="h-6 w-px bg-stone-200"></div>
+                        <div>
+                          <span className="text-[10px] text-stone-500 uppercase font-bold block">Run Share</span>
+                          <span className="font-mono font-bold text-indigo-700">{sharePct}%</span>
+                        </div>
+                        <div className="h-6 w-px bg-stone-200"></div>
+                        <div>
+                          <span className="text-[10px] text-stone-500 uppercase font-bold block">Net Paper</span>
+                          <span className="font-mono font-bold text-stone-800">{netPaperKg.toFixed(1)} kg</span>
+                        </div>
+                        {allocatedWasteKg > 0 && (
+                          <>
+                            <div className="h-6 w-px bg-stone-200"></div>
+                            <div>
+                              <span className="text-[10px] text-amber-700 uppercase font-bold block">Allocated Waste</span>
+                              <span className="font-mono font-bold text-amber-800">+{allocatedWasteKg.toFixed(1)} kg</span>
+                            </div>
+                          </>
+                        )}
+                        <div className="h-6 w-px bg-stone-200"></div>
+                        <div>
+                          <span className="text-[10px] text-emerald-700 uppercase font-bold block">Total Paper Charged</span>
+                          <span className="font-mono font-extrabold text-emerald-800">{allocatedTotalKg.toFixed(1)} kg</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SECTION 4: CONSUMPTION & WEIGHING MODE SELECTION */}
+        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="text-xs font-black uppercase tracking-wider text-stone-500 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+            Step 4: Choose Consumption Calculation Mode
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label
+              onClick={() => setDeckleRunConsumptionMode('formula')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
+                deckleRunConsumptionMode === 'formula'
+                  ? 'border-blue-600 bg-blue-50/60 shadow-sm'
+                  : 'border-stone-200 hover:border-stone-300 bg-white'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  name="deckleRunMode"
+                  checked={deckleRunConsumptionMode === 'formula'}
+                  onChange={() => setDeckleRunConsumptionMode('formula')}
+                  className="mt-1"
+                />
+                <div>
+                  <div className="font-extrabold text-sm text-stone-900 flex items-center gap-2">
+                    <span>⚡ Mode 1: Mathematical Formula (Zero Weighing)</span>
+                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2 py-0.5 rounded">Recommended</span>
+                  </div>
+                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                    Reel consumption is mathematically calculated directly from blank cut length, produced sheets, GSM, and flute take-up factors.
+                    <strong> Operators never need to unmount or weigh the reels.</strong> Run wastage is added proportionally.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 text-[11px] font-bold text-blue-700 bg-blue-100/60 px-2.5 py-1 rounded">
+                ✓ Maximum machine efficiency · Zero crane/labor downtime
+              </div>
+            </label>
+
+            <label
+              onClick={() => setDeckleRunConsumptionMode('actual_weigh')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
+                deckleRunConsumptionMode === 'actual_weigh'
+                  ? 'border-amber-600 bg-amber-50/60 shadow-sm'
+                  : 'border-stone-200 hover:border-stone-300 bg-white'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  name="deckleRunMode"
+                  checked={deckleRunConsumptionMode === 'actual_weigh'}
+                  onChange={() => setDeckleRunConsumptionMode('actual_weigh')}
+                  className="mt-1"
+                />
+                <div>
+                  <div className="font-extrabold text-sm text-stone-900 flex items-center gap-2">
+                    <span>⚖️ Mode 2: Single End-of-Run Weighing</span>
+                  </div>
+                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                    Run all jobs first. At the end of the entire batch, weigh each mounted reel once on the scale (or enter remaining balance).
+                    The ERP <strong>divides the actual weighed consumption across all jobs in proportion</strong> to their paper share.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 text-[11px] font-bold text-amber-800 bg-amber-100/60 px-2.5 py-1 rounded">
+                ✓ 100% scale weight accuracy with only one final weighing
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {/* SECTION 5: LIVE BATCH SUMMARY & ONE-CLICK LOGGING */}
+        <div className="bg-gradient-to-br from-stone-900 via-slate-900 to-stone-950 text-white p-5 rounded-2xl border border-stone-800 shadow-lg">
+          <div className="flex items-center justify-between pb-3 mb-4 border-b border-stone-800 flex-wrap gap-2">
+            <div>
+              <h4 className="text-base font-extrabold text-white flex items-center gap-2">
+                <span>📊</span> Deckle Run Batch Summary
+              </h4>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Review live allocation before logging entries into Production, WIP, and Inventory
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40 px-3 py-1 rounded-full">
+                {deckleRunCalculations.validJobs.length} Valid Job(s)
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mb-5">
+            <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700/60">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Total Good Sheets</span>
+              <span className="text-2xl font-black text-white font-mono">{deckleRunCalculations.totalSheetsProduced.toLocaleString()}</span>
+            </div>
+
+            <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700/60">
+              <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider block mb-1">Total Net Paper</span>
+              <span className="text-2xl font-black text-sky-300 font-mono">{deckleRunCalculations.totalNetPaperKg.toFixed(1)} <span className="text-xs">KG</span></span>
+            </div>
+
+            <div className="bg-slate-800/80 p-3.5 rounded-xl border border-amber-500/40">
+              <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block mb-1">Total Run Scrap</span>
+              <span className="text-2xl font-black text-amber-400 font-mono">{deckleRunCalculations.totalRunWasteKg.toFixed(1)} <span className="text-xs">KG</span></span>
+              <span className="text-[10px] text-amber-300/80 block mt-0.5">Divided proportionally</span>
+            </div>
+
+            <div className="bg-slate-800/80 p-3.5 rounded-xl border border-emerald-500/40">
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block mb-1">Total Consumed Paper</span>
+              <span className="text-2xl font-black text-emerald-300 font-mono">{deckleRunCalculations.totalReelsConsumedKg.toFixed(1)} <span className="text-xs">KG</span></span>
+              <span className="text-[10px] text-emerald-300/80 block mt-0.5">Deducted from reels</span>
+            </div>
+          </div>
+
+          {/* Action Submit Button */}
+          <button
+            type="submit"
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 font-extrabold text-base shadow-lg transition-all"
+          >
+            <span>🚀</span> Save &amp; Log Combined Deckle Run ({deckleRunCalculations.validJobs.length} Jobs)
+          </button>
+        </div>
+      </form>
+    )}
+  </div>
 
       {/* MONTHLY PRODUCTION & MATERIAL SOURCE OVERVIEW BANNER */}
       {visibleProduction.length > 0 && (
