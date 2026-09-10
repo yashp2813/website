@@ -351,6 +351,12 @@ export const calculateSkuCost = (sku = {}) => {
     targetQty = 1000,
     pocketsLength = 3,
     pocketsWidth = 2,
+    commonPerSet = 5,
+    smallPerSet = 4,
+    baseCommonUps = 2,
+    baseSmallUps = 6,
+    plannedUpsCommon = 7,
+    plannedUpsSmall = 7,
     manualOverrideWeightKg = '',
     calcMode = 'auto'
   } = sku;
@@ -363,7 +369,40 @@ export const calculateSkuCost = (sku = {}) => {
   let boardAreaSqM = 0;
 
   if (L_mm > 0 && W_mm > 0) {
-    if (itemType === 'Partition') {
+    if (itemType === 'PPC') {
+      const cPerSet = parseInt(smallPerSet !== undefined ? smallPerSet : 4, 10);
+      const sPerSet = parseInt(commonPerSet !== undefined ? commonPerSet : 5, 10);
+      const targetQtyNum = parseInt(targetQty, 10) || 1;
+      const cNeeded = Math.max(1, cPerSet - 1) * targetQtyNum;
+      const sNeeded = Math.max(1, sPerSet - 1) * targetQtyNum;
+      const baseC = parseInt(baseCommonUps, 10) || 2;
+      const baseS = parseInt(baseSmallUps, 10) || 6;
+      const pUpsC = parseInt(plannedUpsCommon, 10) || 7;
+      const pUpsS = parseInt(plannedUpsSmall, 10) || 7;
+
+      const commonPiecesPerCommonSheet = baseC * pUpsC;
+      const smallPiecesPerCommonSheet = baseC * pUpsC; 
+      const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
+
+      const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
+      const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+      const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
+      const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+
+      const H_eff = H_mm > 0 ? H_mm : 90;
+      const boardWidthCommon = Math.round(H_eff * baseC);
+      const boardLengthCommon = Math.round((L_mm + W_mm) * pUpsC);
+      const boardWidthSmall = boardWidthCommon; 
+      const boardLengthSmall = Math.round(W_mm * 2 * pUpsS);
+
+      // User's explicit formula: Area = H * (L * (Pc - 1) + W * (Ps - 1))
+      // Where Pc = Small Pockets (cPerSet), Ps = Common Pockets (sPerSet)
+      const nCommonPieces = Math.max(0, cPerSet - 1);
+      const nSmallPieces = Math.max(0, sPerSet - 1);
+      boardAreaSqM = (H_eff * (L_mm * nCommonPieces + W_mm * nSmallPieces)) / 1000000;
+      blankCutLengthMm = boardLengthCommon;
+      blankDeckleMm = boardWidthCommon;
+    } else if (itemType === 'Partition') {
       const pL = parseInt(pocketsLength, 10) || 1;
       const pW = parseInt(pocketsWidth, 10) || 1;
       const latPieces = Math.max(0, pL - 1);
@@ -1515,7 +1554,7 @@ export function GlobalVoiceAssistant({
       const matchedReel = findInventoryReel(inventory, queryCode);
 
       if (matchedReel) {
-        const sysId = matchedReel.systemReelId || matchedReel.uniqueReelId || `RL-${matchedReel.reelNo}`;
+        const sysId = formatSystemReelId(matchedReel, inventory);
         const balKg = (parseFloat(matchedReel.balanceQty !== undefined ? matchedReel.balanceQty : matchedReel.receivedQty) || 0).toFixed(0);
         const loc = matchedReel.location || 'Warehouse Rack-A';
         const gsm = matchedReel.gsm || '-';
@@ -2940,29 +2979,36 @@ function normalizeClientType(type) {
   return type;
 }
 
-// --- PRINTABLE BARCODE LABEL MODAL ---
-// Ultra-Fast O(1) Cached System Reel ID Formatter (Series RL-00001, RL-00002, ...)
+// --- PRINTABLE BARCODE LABEL MODAL & REEL NUMBERING ENGINE ---
+// Strictly Sequential, Permanent, and Immutable System Reel ID Engine (RL-00001, RL-00002, ... / RL-JW-00001, ...)
 let _lastInventoryRef = null;
 let _lastInventoryMap = new Map();
 
-function buildInventoryIdMap(inventory) {
+export function buildInventoryIdMap(inventory) {
   if (inventory === _lastInventoryRef && _lastInventoryMap.size > 0) {
     return _lastInventoryMap;
   }
   const map = new Map();
   if (Array.isArray(inventory) && inventory.length > 0) {
-    const sorted = [...inventory].sort((a, b) => {
-      const tA = (a.date || a.createdAt || '');
-      const tB = (b.date || b.createdAt || '');
-      if (tA !== tB) return tA < tB ? -1 : 1;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
-    sorted.forEach((item, idx) => {
-      const prefix = item.stockType === 'job_work' ? 'RL-JW' : 'RL';
-      const formatted = `${prefix}-${String(idx + 1).padStart(5, '0')}`;
-      if (item.id) map.set(item.id, formatted);
-      if (item.reelNo) map.set(String(item.reelNo), formatted);
-      if (item.supplierReelNo) map.set(String(item.supplierReelNo), formatted);
+    inventory.forEach((item) => {
+      if (!item) return;
+      let formatted = null;
+      const candidate = item.systemReelId || item.uniqueReelId;
+      if (candidate && typeof candidate === 'string') {
+        const clean = candidate.trim();
+        if (/^RL-JW-\d+$/i.test(clean)) {
+          const num = parseInt(clean.replace(/^RL-JW-/i, ''), 10);
+          formatted = `RL-JW-${String(num).padStart(5, '0')}`;
+        } else if (/^RL-\d+$/i.test(clean)) {
+          const num = parseInt(clean.replace(/^RL-/i, ''), 10);
+          formatted = `RL-${String(num).padStart(5, '0')}`;
+        }
+      }
+      if (formatted) {
+        if (item.id) map.set(item.id, formatted);
+        if (item.reelNo) map.set(String(item.reelNo), formatted);
+        if (item.supplierReelNo) map.set(String(item.supplierReelNo), formatted);
+      }
     });
   }
   _lastInventoryRef = inventory;
@@ -2970,27 +3016,49 @@ function buildInventoryIdMap(inventory) {
   return map;
 }
 
-function formatSystemReelId(r, allInventory = []) {
+export function getNextSequentialReelId(inventory = [], stockType = 'factory', offset = 0) {
+  const prefix = stockType === 'job_work' ? 'RL-JW' : 'RL';
+  const existingMax = (inventory || []).reduce((max, cur) => {
+    if (!cur) return max;
+    const fid = String(cur.systemReelId || cur.uniqueReelId || '').trim();
+    if (prefix === 'RL-JW' && fid.startsWith('RL-JW-')) {
+      const n = parseInt(fid.replace('RL-JW-', ''), 10);
+      return !isNaN(n) && n > max ? n : max;
+    } else if (prefix === 'RL' && fid.startsWith('RL-') && !fid.startsWith('RL-JW-')) {
+      const n = parseInt(fid.replace('RL-', ''), 10);
+      return !isNaN(n) && n > max ? n : max;
+    }
+    return max;
+  }, 0);
+  return `${prefix}-${String(existingMax + 1 + offset).padStart(5, '0')}`;
+}
+
+export function formatSystemReelId(r, allInventory = []) {
   if (!r) return 'RL-00001';
 
-  // 1a. Explicit clean sequential ID pattern RL-JW-XXXXX (Job Work reels — MUST be checked before RL-XXXXX)
-  if (r.uniqueReelId && /^RL-JW-\d{5}$/.test(r.uniqueReelId)) {
-    return r.uniqueReelId;
-  }
-
-  // 1b. Explicit clean sequential ID pattern RL-XXXXX (Own / Factory reels)
-  if (r.uniqueReelId && /^RL-\d{5}$/.test(r.uniqueReelId)) {
-    return r.uniqueReelId;
+  // 1. Direct check on systemReelId or uniqueReelId (guarantees immutability)
+  const candidate = r.systemReelId || r.uniqueReelId;
+  if (candidate && typeof candidate === 'string') {
+    const clean = candidate.trim();
+    if (/^RL-JW-\d+$/i.test(clean)) {
+      const num = parseInt(clean.replace(/^RL-JW-/i, ''), 10);
+      return `RL-JW-${String(num).padStart(5, '0')}`;
+    }
+    if (/^RL-\d+$/i.test(clean)) {
+      const num = parseInt(clean.replace(/^RL-/i, ''), 10);
+      return `RL-${String(num).padStart(5, '0')}`;
+    }
   }
 
   // 2. Numeric sequence number or pure digits
+  const isJobWork = r.stockType === 'job_work' || (typeof candidate === 'string' && candidate.startsWith('RL-JW'));
+  const prefix = isJobWork ? 'RL-JW' : 'RL';
+
   if (r.seqNo && !isNaN(r.seqNo)) {
-    const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
     return `${prefix}-${String(r.seqNo).padStart(5, '0')}`;
   }
-  if (r.uniqueReelId && /^\d+$/.test(r.uniqueReelId)) {
-    const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
-    return `${prefix}-${String(r.uniqueReelId).padStart(5, '0')}`;
+  if (candidate && /^\d+$/.test(String(candidate).trim())) {
+    return `${prefix}-${String(candidate).trim().padStart(5, '0')}`;
   }
 
   // 3. Fast O(1) Cached Map Lookup
@@ -3001,27 +3069,21 @@ function formatSystemReelId(r, allInventory = []) {
     if (r.supplierReelNo && map.has(String(r.supplierReelNo))) return map.get(String(r.supplierReelNo));
   }
 
-  // 4. If uniqueReelId contains numbers, extract last 5 digits — preserve JW prefix if job work
-  if (r.uniqueReelId && typeof r.uniqueReelId === 'string') {
-    const digits = r.uniqueReelId.replace(/\D/g, '');
-    if (digits) {
-      const num = parseInt(digits.slice(-5), 10);
-      if (!isNaN(num) && num > 0) {
-        const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
-        return `${prefix}-${String(num).padStart(5, '0')}`;
-      }
+  // 4. Fallback: Deterministic rank in stably-sorted full inventory (never randomized!)
+  if (allInventory && Array.isArray(allInventory) && allInventory.length > 0 && r.id) {
+    const sorted = [...allInventory].sort((a, b) => {
+      const tA = (a.date || a.createdAt || '');
+      const tB = (b.date || b.createdAt || '');
+      if (tA !== tB) return tA < tB ? -1 : 1;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+    const idx = sorted.findIndex(x => x.id === r.id);
+    if (idx !== -1) {
+      return `${prefix}-${String(idx + 1).padStart(5, '0')}`;
     }
   }
 
-  // 5. Deterministic sequence fallback from reel index/hash
-  let hash = 0;
-  const str = String(r.id || r.reelNo || '1');
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash * 31 + str.charCodeAt(i)) % 99999;
-  }
-  const cleanNum = (Math.abs(hash) % 1000) + 1;
-  const prefix = r.stockType === 'job_work' ? 'RL-JW' : 'RL';
-  return `${prefix}-${String(cleanNum).padStart(5, '0')}`;
+  return `${prefix}-00001`;
 }
 
 // Global High-Precision Reel Finder: Resolves ANY printed barcode (e.g. RL-00255, RL-01245, RL-00920),
@@ -3404,17 +3466,7 @@ function PrintBarcodeLabelModal({ isOpen, onClose, type = 'reel', data = {}, all
           if (!item) {
             return `<div class="cell cell-blank"></div>`;
           }
-          const sysId = item.systemReelId || (() => {
-            const inventoryRef = allInventory.length > 0 ? allInventory : baseItems;
-            const sorted = [...inventoryRef].sort((a, b) => {
-              const tA = new Date(a.date || a.createdAt || 0).getTime();
-              const tB = new Date(b.date || b.createdAt || 0).getTime();
-              if (tA !== tB) return tA - tB;
-              return String(a.id || '').localeCompare(String(b.id || ''));
-            });
-            const idx = sorted.findIndex(x => x.id === item.id || x.reelNo === item.reelNo);
-            return idx !== -1 ? `RL-${String(idx + 1).padStart(5, '0')}` : 'RL-00001';
-          })();
+          const sysId = item.systemReelId || item.uniqueReelId || formatSystemReelId(item, allInventory);
           const supNo = String(item.supplierReelNo || item.reelNo || '-').trim();
           const colour = item.colour || item.color || 'Kraft';
           const millName = item.millName || 'Mill';
@@ -7618,7 +7670,7 @@ function ExcelStockInventory({ inventory = [], companies = [], orders = [], role
 
                   {/* Col E: System Reel ID */}
                   <td style={{ border: '1px solid #cbd5e1', padding: 0, color: '#2563eb', fontWeight: 800 }}>
-                    {renderCell('systemReelId', r.systemReelId || r.uniqueReelId || r.supplierReelNo || r.reelNo || '-', 'E', 'System Reel ID', 'text', 'left')}
+                    {renderCell('systemReelId', formatSystemReelId(r, inventory), 'E', 'System Reel ID', 'text', 'left')}
                   </td>
 
                   {/* Col F: Supplier Reel No. */}
@@ -10099,15 +10151,15 @@ function CalculatorView({ companies, items, addLog, currentUser, activeUnitId })
       targetSheets = commonSheetsNeeded + smallSheetsNeeded;
 
       boardWidthCommon = H * baseC;
-      boardLengthCommon = ((L + W) * pUpsC) + 10;
+      boardLengthCommon = (L + W) * pUpsC;
       
       boardWidthSmall = boardWidthCommon; 
-      boardLengthSmall = (W * 2 * pUpsS) + 10;
+      boardLengthSmall = W * 2 * pUpsS;
       
-      const areaCommon = (boardWidthCommon * boardLengthCommon) / 1000000;
-      const areaSmall = (boardWidthSmall * boardLengthSmall) / 1000000;
-      totalSqMeters = (commonSheetsNeeded * areaCommon) + (smallSheetsNeeded * areaSmall);
-      unitArea = qty > 0 ? totalSqMeters / qty : 0;
+      const nCommonPieces = Math.max(0, parseInt(smallPerSet || 0) - 1);
+      const nSmallPieces = Math.max(0, parseInt(commonPerSet || 0) - 1);
+      unitArea = (H * (L * nCommonPieces + W * nSmallPieces)) / 1000000;
+      totalSqMeters = unitArea * qty;
     } else {
       switch (type) {
         case 'Box':
@@ -11154,9 +11206,14 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       useGlobalSpec: true,
       calcMode: 'auto', // 'auto' or 'manual'
       manualWeight: '',
-      manualRate: '',
       pocketsLength: 3,
       pocketsWidth: 2,
+      commonPerSet: 5,
+      smallPerSet: 4,
+      baseCommonUps: 2,
+      baseSmallUps: 6,
+      plannedUpsCommon: 7,
+      plannedUpsSmall: 7,
       wastagePercent: 0,
       conversionCost: 2.5,
       marginPercent: 12,
@@ -11185,6 +11242,12 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
         manualRate: '',
         pocketsLength: 3,
         pocketsWidth: 2,
+        commonPerSet: 5,
+        smallPerSet: 4,
+        baseCommonUps: 2,
+        baseSmallUps: 6,
+        plannedUpsCommon: 7,
+        plannedUpsSmall: 7,
         wastagePercent: globalSpec.wastagePercent || 0,
         conversionCost: globalSpec.conversionCostPerPc,
         marginPercent: globalSpec.marginPercent,
@@ -11277,9 +11340,68 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
       let blankCutLengthMm = 0;
       let blankDeckleMm = 0;
       let boardAreaSqM = 0;
+      let isPpc = part.itemType === 'PPC';
+      let ppcData = null;
 
       if (L_mm > 0 && W_mm > 0) {
-        if (part.itemType === 'Partition') {
+        if (part.itemType === 'PPC') {
+          isPpc = true;
+          const cPerSet = parseInt(part.smallPerSet !== undefined ? part.smallPerSet : 4, 10);
+          const sPerSet = parseInt(part.commonPerSet !== undefined ? part.commonPerSet : 5, 10);
+          const cNeeded = Math.max(1, cPerSet - 1) * qty;
+          const sNeeded = Math.max(1, sPerSet - 1) * qty;
+
+          const baseC = parseInt(part.baseCommonUps, 10) || 2;
+          const baseS = parseInt(part.baseSmallUps, 10) || 6;
+          const pUpsC = parseInt(part.plannedUpsCommon, 10) || 7;
+          const pUpsS = parseInt(part.plannedUpsSmall, 10) || 7;
+
+          const commonPiecesPerCommonSheet = baseC * pUpsC;
+          const smallPiecesPerCommonSheet = baseC * pUpsC;
+          const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
+
+          const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
+          const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+          const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
+          const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+
+          const targetSheets = commonSheetsNeeded + smallSheetsNeeded;
+
+          const H_eff = H_mm > 0 ? H_mm : 90;
+          const boardWidthCommon = Math.round(H_eff * baseC);
+          const boardLengthCommon = Math.round((L_mm + W_mm) * pUpsC);
+
+          const boardWidthSmall = boardWidthCommon;
+          const boardLengthSmall = Math.round(W_mm * 2 * pUpsS);
+
+          const areaCommon = (boardWidthCommon * boardLengthCommon) / 1000000;
+          const areaSmall = (boardWidthSmall * boardLengthSmall) / 1000000;
+          const nCommonPieces = Math.max(0, cPerSet - 1);
+          const nSmallPieces = Math.max(0, sPerSet - 1);
+          boardAreaSqM = (H_eff * (L_mm * nCommonPieces + W_mm * nSmallPieces)) / 1000000;
+          const totalSqMeters = boardAreaSqM * qty;
+          blankCutLengthMm = boardLengthCommon;
+          blankDeckleMm = boardWidthCommon;
+
+          ppcData = {
+            cNeeded,
+            sNeeded,
+            commonPerSet: sPerSet,
+            smallPerSet: cPerSet,
+            commonPiecesPerSet: Math.max(1, cPerSet - 1),
+            smallPiecesPerSet: Math.max(1, sPerSet - 1),
+            commonSheetsNeeded,
+            smallSheetsNeeded,
+            targetSheets,
+            boardWidthCommon,
+            boardLengthCommon,
+            boardWidthSmall,
+            boardLengthSmall,
+            areaCommon: Math.round(areaCommon * 10000) / 10000,
+            areaSmall: Math.round(areaSmall * 10000) / 10000,
+            totalSqMeters: Math.round(totalSqMeters * 100) / 100
+          };
+        } else if (part.itemType === 'Partition') {
           const pL = parseInt(part.pocketsLength, 10) || 1;
           const pW = parseInt(part.pocketsWidth, 10) || 1;
           const latPieces = Math.max(0, pL - 1);
@@ -11402,6 +11524,8 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
         totalWeightKg: Math.round(totalWeightKg * 100) / 100,
         totalCost: Math.round(totalCost * 100) / 100,
         totalQuotedValue: Math.round(totalQuotedValue * 100) / 100,
+        isPpc,
+        ppcData,
         effectivePlies: calculatedPlies
       };
     });
@@ -11522,6 +11646,33 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
           if (L_mm > 0 && W_mm > 0) {
             if (type === 'Tray' || type === 'Lid') { boardAreaSqM = ((L_mm + 2 * H_mm + 15) * (W_mm + 2 * H_mm + 15)) / 1e6; }
             else if (type === 'Sheet' || type === 'Plate') { boardAreaSqM = (L_mm * W_mm) / 1e6; }
+            else if (type === 'PPC') {
+              const cPerSet = parseInt(get(row, 'smallperset', 'smallpockets', 'small') || 4, 10);
+              const sPerSet = parseInt(get(row, 'commonperset', 'commonpockets', 'common') || 5, 10);
+              const cNeeded = Math.max(1, cPerSet - 1) * qty;
+              const sNeeded = Math.max(1, sPerSet - 1) * qty;
+              const baseC = parseInt(get(row, 'basecommonups', 'basec') || 2, 10);
+              const baseS = parseInt(get(row, 'basesmallups', 'bases') || 6, 10);
+              const pUpsC = parseInt(get(row, 'plannedupscommon', 'pupsc') || 7, 10);
+              const pUpsS = parseInt(get(row, 'plannedupssmall', 'pupss') || 7, 10);
+              const commonPiecesPerCommonSheet = baseC * pUpsC;
+              const smallPiecesPerCommonSheet = baseC * pUpsC;
+              const smallPiecesPerDedicatedSheet = baseS * pUpsS * 2;
+              const commonSheetsNeeded = Math.ceil(cNeeded / commonPiecesPerCommonSheet);
+              const smallPiecesAcquired = commonSheetsNeeded * smallPiecesPerCommonSheet;
+              const remainingSmallNeeded = Math.max(0, sNeeded - smallPiecesAcquired);
+              const smallSheetsNeeded = Math.ceil(remainingSmallNeeded / smallPiecesPerDedicatedSheet);
+              const H_eff = H_mm > 0 ? H_mm : 90;
+              const boardWidthCommon = Math.round(H_eff * baseC);
+              const boardLengthCommon = Math.round((L_mm + W_mm) * pUpsC);
+              const boardWidthSmall = boardWidthCommon;
+              const boardLengthSmall = Math.round(W_mm * 2 * pUpsS);
+              const areaCommon = (boardWidthCommon * boardLengthCommon) / 1e6;
+              const areaSmall = (boardWidthSmall * boardLengthSmall) / 1e6;
+              const nCommonPieces = Math.max(0, cPerSet - 1);
+              const nSmallPieces = Math.max(0, sPerSet - 1);
+              boardAreaSqM = (H_eff * (L_mm * nCommonPieces + W_mm * nSmallPieces)) / 1e6;
+            }
             else { boardAreaSqM = (((2 * L_mm) + (2 * W_mm) + 50) * (W_mm + H_mm + 20)) / 1e6; }
           }
 
@@ -11963,7 +12114,8 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         <option value="Sheet">Corrugated Sheet / Board (Deckle × Cutting)</option>
                         <option value="Box">Standard Box (RSC - L × W × H)</option>
                         <option value="Tray">Tray / Lid (L × W × H)</option>
-                        <option value="Partition">Partition (Divider)</option>
+                        <option value="PPC">🧩 PPC Partition Matrix (Common &amp; Small Pieces)</option>
+                        <option value="Partition">Partition (Simple Divider)</option>
                       </select>
                     </div>
 
@@ -11971,7 +12123,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                     <div className="md:col-span-2">
                       <div className="flex justify-between items-center mb-1">
                         <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
-                          {part.itemType === 'Sheet' ? `Sheet Dimensions (Deckle × Cutting) in ${part.unit || globalUnit}` : `Dimensions (L × W × H) in ${part.unit || globalUnit}`}
+                          {part.itemType === 'PPC' ? `PPC Box/Pocket Size (L × W × H) in ${part.unit || globalUnit}` : (part.itemType === 'Sheet' ? `Sheet Dimensions (Deckle × Cutting) in ${part.unit || globalUnit}` : `Dimensions (L × W × H) in ${part.unit || globalUnit}`)}
                         </label>
                         <span className="text-[10px] font-bold text-amber-700 font-mono">
                           {dimSecondary}
@@ -11981,7 +12133,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                         <input
                           type="text"
                           className="w-full p-2 border-2 border-amber-400 rounded-xl text-sm font-mono font-bold bg-amber-50/70 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none text-stone-900"
-                          placeholder={part.itemType === 'Sheet' ? (part.unit === 'inch' ? 'e.g. 52x36 (Deckle x Cutting in)' : 'e.g. 1320x915 (Deckle x Cutting mm)') : (part.unit === 'inch' ? 'e.g. 12x8x6 or 12.5x8.25x6.5' : 'e.g. 300x200x150')}
+                          placeholder={part.itemType === 'PPC' ? (part.unit === 'inch' ? 'e.g. 14x10x4' : 'e.g. 350x250x90') : (part.itemType === 'Sheet' ? (part.unit === 'inch' ? 'e.g. 52x36 (Deckle x Cutting in)' : 'e.g. 1320x915 (Deckle x Cutting mm)') : (part.unit === 'inch' ? 'e.g. 12x8x6 or 12.5x8.25x6.5' : 'e.g. 300x200x150'))}
                           value={part.size}
                           onChange={e => handlePartChange(part.id, 'size', e.target.value)}
                         />
@@ -11999,7 +12151,7 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
                     {/* 3. Order Quantity */}
                     <div>
                       <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
-                        {part.itemType === 'Sheet' ? 'Sheet Qty (Pcs)' : 'Order Qty (Pcs)'}
+                        {part.itemType === 'PPC' ? 'Order Qty (Sets)' : (part.itemType === 'Sheet' ? 'Sheet Qty (Pcs)' : 'Order Qty (Pcs)')}
                       </label>
                       <input
                         type="number"
@@ -12012,23 +12164,124 @@ function CostingView({ items = [], companies = [], customers = [], getColRef, ad
 
                     {/* 4. Calculated Blank & Board Area */}
                     <div className="bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-[11px] font-mono">
-                      <div className="flex justify-between">
-                        <span className="text-stone-500">{part.itemType === 'Sheet' ? 'Sheet Size:' : 'Blank:'}</span>
-                        <strong className="text-stone-900">
-                          {part.blankDeckleMm} × {part.blankCutLengthMm} mm
-                        </strong>
-                      </div>
-                      <div className="flex justify-between mt-0.5">
-                        <span className="text-stone-500">Inches:</span>
-                        <span className="text-stone-700">{part.blankDeckleIn}" × {part.blankCutLengthIn}"</span>
-                      </div>
-                      <div className="flex justify-between mt-0.5 pt-0.5 border-t border-stone-200 font-bold">
-                        <span className="text-stone-500">Area:</span>
-                        <span className="text-blue-700">{part.boardAreaSqM} m² ({part.boardAreaSqFt} sq.ft)</span>
-                      </div>
+                      {part.itemType === 'PPC' && part.ppcData ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-stone-500">Common Sht:</span>
+                            <strong className="text-stone-900">
+                              {part.ppcData.boardWidthCommon} × {part.ppcData.boardLengthCommon} mm ({part.ppcData.commonSheetsNeeded} s)
+                            </strong>
+                          </div>
+                          <div className="flex justify-between mt-0.5">
+                            <span className="text-stone-500">Small Sht:</span>
+                            <strong className="text-stone-900">
+                              {part.ppcData.boardWidthSmall} × {part.ppcData.boardLengthSmall} mm ({part.ppcData.smallSheetsNeeded} s)
+                            </strong>
+                          </div>
+                          <div className="flex justify-between mt-0.5 pt-0.5 border-t border-stone-200 font-bold">
+                            <span className="text-stone-500">Area/Set:</span>
+                            <span className="text-blue-700">{part.boardAreaSqM} m² ({part.boardAreaSqFt} sq.ft)</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-stone-500">{part.itemType === 'Sheet' ? 'Sheet Size:' : 'Blank:'}</span>
+                            <strong className="text-stone-900">
+                              {part.blankDeckleMm} × {part.blankCutLengthMm} mm
+                            </strong>
+                          </div>
+                          <div className="flex justify-between mt-0.5">
+                            <span className="text-stone-500">Inches:</span>
+                            <span className="text-stone-700">{part.blankDeckleIn}" × {part.blankCutLengthIn}"</span>
+                          </div>
+                          <div className="flex justify-between mt-0.5 pt-0.5 border-t border-stone-200 font-bold">
+                            <span className="text-stone-500">Area:</span>
+                            <span className="text-blue-700">{part.boardAreaSqM} m² ({part.boardAreaSqFt} sq.ft)</span>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                   </div>
+
+                  {/* PPC Configuration Panel (Common & Small Pieces with Die Ups) */}
+                  {part.itemType === 'PPC' && (
+                    <div className="px-5 py-3.5 bg-blue-50/90 border-t border-blue-200">
+                      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <span className="text-[11px] font-black text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <span>🧩</span> PPC Die &amp; Set Requirements (Material Calculator Formula)
+                        </span>
+                        {part.ppcData && (
+                          <span className="text-[11px] font-bold font-mono text-blue-800 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-300">
+                            Pieces: {part.ppcData.cNeeded} Common ({part.ppcData.commonPiecesPerSet}/set) · {part.ppcData.sNeeded} Small ({part.ppcData.smallPiecesPerSet}/set) | Sheets: {part.ppcData.commonSheetsNeeded} Common + {part.ppcData.smallSheetsNeeded} Small ({part.ppcData.targetSheets} total)
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-900 mb-1">Common Pockets/Set</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-300 rounded-lg text-xs font-mono font-bold bg-white text-blue-950 focus:ring-2 focus:ring-blue-500"
+                            value={part.commonPerSet !== undefined ? part.commonPerSet : 5}
+                            onChange={e => handlePartChange(part.id, 'commonPerSet', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-900 mb-1">Small Pockets/Set</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-300 rounded-lg text-xs font-mono font-bold bg-white text-blue-950 focus:ring-2 focus:ring-blue-500"
+                            value={part.smallPerSet !== undefined ? part.smallPerSet : 4}
+                            onChange={e => handlePartChange(part.id, 'smallPerSet', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-800 mb-1">Base Common Ups</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-200 rounded-lg text-xs font-mono bg-white text-stone-800"
+                            value={part.baseCommonUps !== undefined ? part.baseCommonUps : 2}
+                            onChange={e => handlePartChange(part.id, 'baseCommonUps', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-800 mb-1">Base Small Ups</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-200 rounded-lg text-xs font-mono bg-white text-stone-800"
+                            value={part.baseSmallUps !== undefined ? part.baseSmallUps : 6}
+                            onChange={e => handlePartChange(part.id, 'baseSmallUps', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-800 mb-1">Planned Ups (Common)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-200 rounded-lg text-xs font-mono bg-white text-stone-800"
+                            value={part.plannedUpsCommon !== undefined ? part.plannedUpsCommon : 7}
+                            onChange={e => handlePartChange(part.id, 'plannedUpsCommon', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-blue-800 mb-1">Planned Ups (Small)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 border border-blue-200 rounded-lg text-xs font-mono bg-white text-stone-800"
+                            value={part.plannedUpsSmall !== undefined ? part.plannedUpsSmall : 7}
+                            onChange={e => handlePartChange(part.id, 'plannedUpsSmall', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* EXPANDED CUSTOM OVERRIDES */}
                   {part.expanded && (
@@ -13341,9 +13594,9 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
           }));
 
           const newRows = parsed.reels.map((r, rIdx) => ({
-            uniqueReelId: '',
-            supplierReelNo: String(r.supplierReelNo || `RL-${rIdx + 1}`),
-            reelNo: String(r.supplierReelNo || `RL-${rIdx + 1}`),
+            uniqueReelId: getNextSequentialReelId(inventory, commonData.stockType, rIdx),
+            supplierReelNo: String(r.supplierReelNo || ''),
+            reelNo: String(r.supplierReelNo || ''),
             size: String(r.size || '900'),
             gsm: String(r.gsm || '140'),
             bf: String(r.bf || '18'),
@@ -13444,8 +13697,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       }));
 
       if (data.lineItems && data.lineItems.length > 0) {
-        setReelsInput(data.lineItems.map(item => ({
-          uniqueReelId: '',
+        setReelsInput(data.lineItems.map((item, idx) => ({
+          uniqueReelId: getNextSequentialReelId(inventory, commonData.stockType, idx),
           supplierReelNo: item.reelNo || '',
           reelNo: item.reelNo || '',
           size: String(item.size || '').replace(/[^0-9.]/g, ''),
@@ -13527,21 +13780,9 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
           const supNo = (reel.supplierReelNo || reel.reelNo || '').trim();
           if (!supNo && !reel.size && !reel.gsm && !reel.receivedQty) continue;
 
-          const prefix = commonData.stockType === 'job_work' ? 'RL-JW' : 'RL';
-          const existingMax = (inventory || []).reduce((max, cur) => {
-            const fid = String(cur.systemReelId || cur.uniqueReelId || '');
-            if (prefix === 'RL-JW' && fid.startsWith('RL-JW-')) {
-              const n = parseInt(fid.replace('RL-JW-', ''), 10);
-              return !isNaN(n) && n > max ? n : max;
-            } else if (prefix === 'RL' && fid.startsWith('RL-') && !fid.startsWith('RL-JW-')) {
-              const n = parseInt(fid.replace('RL-', ''), 10);
-              return !isNaN(n) && n > max ? n : max;
-            }
-            return max;
-          }, 0);
-          const autoReelId = (reel.uniqueReelId && reel.uniqueReelId.trim())
+          const autoReelId = (reel.uniqueReelId && reel.uniqueReelId.trim() && !reel.uniqueReelId.includes('NaN'))
             ? reel.uniqueReelId.trim()
-            : `${prefix}-${String(existingMax + idx + 1).padStart(5, '0')}`;
+            : getNextSequentialReelId(inventory, commonData.stockType, idx);
           const finalSupNo = supNo || autoReelId;
 
           // Duplicate protection check
@@ -13601,7 +13842,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
         if(addLog) addLog(`Inwarded ${count} ${commonData.stockType === 'job_work' ? `Job Work reels for ${resolvedClientName}` : 'factory inventory reels'} (${reelSummaries}${count > 5 ? '...' : ''})`);
         
         alert(`✓ Successfully added ${count} new reel(s) to stock inventory!`);
-        setReelsInput([{...emptyReel}]); 
+        setReelsInput([{ ...emptyReel, uniqueReelId: getNextSequentialReelId(inventory, commonData.stockType, 0) }]); 
 
         if (shouldPrintBarcodes && createdReelsList.length > 0) {
           setPrintTagData({ type: 'reel', data: createdReelsList });
@@ -13652,11 +13893,15 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
   
   const cancelEdit = () => { 
     setEditingId(null); 
-    setCommonData({ date: new Date().toISOString().split('T')[0], companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', vendorId: '', millName: '', invoiceNo: '', vehicleNo: '', paymentStatus: 'Unpaid', amountPaid: '' });
-    setReelsInput([{...emptyReel}]);
+    setCommonData({ date: new Date().toISOString().split('T')[0], stockType: 'factory', companyId: allowedCompanyId !== 'all' ? allowedCompanyId : '', vendorId: '', millName: '', invoiceNo: '', vehicleNo: '', paymentStatus: 'Unpaid', amountPaid: '' });
+    const nextId = getNextSequentialReelId(inventory, 'factory', 0);
+    setReelsInput([{ ...emptyReel, uniqueReelId: nextId }]);
   };
 
-  const addReelRow = () => setReelsInput([...reelsInput, {...emptyReel}]);
+  const addReelRow = () => {
+    const nextId = getNextSequentialReelId(inventory, commonData.stockType, reelsInput.length);
+    setReelsInput([...reelsInput, { ...emptyReel, uniqueReelId: nextId }]);
+  };
   const removeReelRow = (idx) => setReelsInput(reelsInput.filter((_, i) => i !== idx));
   const handleReelChange = (idx, field, val) => {
     const updated = [...reelsInput];
@@ -14360,7 +14605,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                           type="text"
                           placeholder="Auto (RL-...)"
                           className="w-full p-1.5 border border-stone-300 bg-stone-100 rounded font-mono text-xs text-stone-600 font-bold"
-                          value={reel.uniqueReelId || `${commonData.stockType === 'job_work' ? 'RL-JW' : 'RL'}-${(Date.now() + idx).toString().slice(-6)}`}
+                          value={reel.uniqueReelId || getNextSequentialReelId(inventory, commonData.stockType, idx)}
                           onChange={e => handleReelChange(idx, 'uniqueReelId', e.target.value)}
                         />
                       </td>
@@ -16863,8 +17108,7 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
     
     if (matchedReel) {
       const availKg = parseFloat(matchedReel.balanceQty !== undefined ? matchedReel.balanceQty : (matchedReel.receivedQty || 0));
-      const idMap = buildInventoryIdMap(inventory);
-      const printedId = idMap.get(matchedReel.id) || matchedReel.systemReelId || matchedReel.supplierReelNo || matchedReel.reelNo || code.trim().toUpperCase();
+      const printedId = formatSystemReelId(matchedReel, inventory);
       setConsumedReels(prev => {
         const emptyIdx = prev.findIndex(r => !r.reelNo && !r.weight);
         if (emptyIdx !== -1) {
@@ -18372,8 +18616,7 @@ function ProductionView({ inventory = [], production = [], allProduction = [], o
               } : undefined}
               onSelectReel={(scannedReel) => {
                 if (scannedReel) {
-                  const idMap = buildInventoryIdMap(inventory);
-                  const printedId = idMap.get(scannedReel.id) || scannedReel.systemReelId || scannedReel.supplierReelNo || scannedReel.reelNo || scannedReel.id || '';
+                  const printedId = formatSystemReelId(scannedReel, inventory);
                   const availKg = parseFloat(scannedReel.balanceQty !== undefined ? scannedReel.balanceQty : (scannedReel.receivedQty || 0));
                   setConsumedReels(prev => [...prev.filter(r => r.reelNo.trim() !== ''), { reelNo: printedId, weight: '' }]);
                   if (scannedReel.millName && !newRecord.millName) setNewRecord(r => ({ ...r, millName: scannedReel.millName }));
@@ -26913,7 +27156,7 @@ function ClientJobWorkPortalModal({
         const reel = inwardReels[idx];
         if (!reel.size || !reel.gsm || !reel.receivedQty) continue;
         const newId = generateId();
-        const autoReelId = reel.uniqueReelId || `RL-JW-${Date.now().toString().slice(-5)}-${idx + 1}`;
+        const autoReelId = reel.uniqueReelId || getNextSequentialReelId(inventory, 'job_work', idx);
         const newDoc = {
           id: newId,
           companyId: client.unitId || companies[0]?.id || '',
@@ -27243,7 +27486,7 @@ function ClientJobWorkPortalModal({
                             <tr key={rIdx} style={{ borderBottom: '1px solid #e2e8f0' }}>
                               <td style={{ padding: '4px 8px', color: '#94a3b8' }}>{rIdx + 1}</td>
                               <td style={{ padding: 4 }}>
-                                <input type="text" placeholder={`RL-${rIdx + 1}`} className="apex-input" value={r.supplierReelNo} onChange={e => {
+                                <input type="text" placeholder={getNextSequentialReelId(inventory, 'job_work', rIdx)} className="apex-input" value={r.supplierReelNo} onChange={e => {
                                   const updated = [...inwardReels]; updated[rIdx].supplierReelNo = e.target.value; setInwardReels(updated);
                                 }} style={{ padding: '4px 8px', fontSize: 12, fontFamily: 'var(--font-mono)' }} />
                               </td>
@@ -27332,7 +27575,7 @@ function ClientJobWorkPortalModal({
                         <tr key={r.id || rIdx} style={{ borderBottom: '1px solid #e2e8f0', background: rIdx % 2 === 0 ? '#fff' : '#f8fafc' }}>
                           <td style={{ padding: '8px 10px', color: '#94a3b8' }}>{rIdx + 1}</td>
                           <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#4f46e5' }}>
-                            {r.systemReelId || r.uniqueReelId || `RL-JW-${rIdx + 1}`}
+                            {formatSystemReelId(r, inventory)}
                           </td>
                           <td style={{ padding: '8px 10px', fontWeight: 700, color: '#0f172a' }}>
                             {r.supplierReelNo || r.reelNo || '—'}
