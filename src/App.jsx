@@ -13413,6 +13413,110 @@ function InventoryWeightFilterDropdown({
 }
 
 // --- INVENTORY VIEW ---
+
+function LegacyExcelInventoryView({ pagedInventory = [], fullInventory = [], companies = [] }) {
+  const totalRecvKg = fullInventory.reduce((acc, r) => acc + parseFloat(r.receivedQty || 0), 0);
+  const totalIssueKg = fullInventory.reduce((acc, r) => acc + parseFloat(r.issuedQty || 0), 0);
+  const totalBalKg = fullInventory.reduce((acc, r) => acc + parseFloat(r.balanceQty || 0), 0);
+  const totalValue = fullInventory.reduce((acc, r) => acc + parseFloat(r.value || 0), 0);
+  
+  const totalReels = fullInventory.length;
+  const closingReels = fullInventory.filter(r => (parseFloat(r.balanceQty) || 0) > 0).length;
+  const usedReels = totalReels - closingReels;
+
+  const thStyle = { border: '1px solid #8ea9db', padding: '2px 4px', whiteSpace: 'nowrap', backgroundColor: '#5b9bd5', color: '#fff', fontWeight: 'bold' };
+  const tdStyle = { border: '1px solid #8ea9db', padding: '2px 4px', whiteSpace: 'nowrap' };
+
+  return (
+    <div style={{ padding: '10px 0', fontFamily: 'Calibri, sans-serif', fontSize: 12, color: '#000', overflowX: 'auto', backgroundColor: '#fff', minHeight: '600px' }}>
+      <table style={{ borderCollapse: 'collapse', backgroundColor: '#fff', width: 'max-content' }}>
+        <tbody>
+          <tr style={{ height: 18 }}><td colSpan="19"></td></tr>
+          <tr style={{ height: 18 }}><td colSpan="19"></td></tr>
+          
+          <tr style={{ height: 18 }}>
+            <td colSpan="6"></td>
+            <td colSpan="3" style={{ border: '1px solid #000', textAlign: 'center', fontWeight: 'bold' }}>RECEIVED</td>
+            <td style={{ border: '1px solid #000', textAlign: 'center', fontWeight: 'bold' }}>USED</td>
+            <td style={{ border: '1px solid #000', textAlign: 'center', fontWeight: 'bold', borderRight: '2px solid #000' }}>Closing</td>
+            <td></td>
+            <td colSpan="2" style={{ border: '1px solid #000', backgroundColor: '#b4c6e7', textAlign: 'center', fontWeight: 'bold' }}>Value</td>
+            <td colSpan="5"></td>
+          </tr>
+          
+          <tr style={{ height: 18 }}>
+            <td colSpan="4" style={{ textAlign: 'center', fontWeight: 'bold' }}>RM Stock {companies[0]?.name || 'MIPL MH'}</td>
+            <td colSpan="2"></td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#b4c6e7', fontWeight: 'bold' }}>Weight</td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#d9e1f2', textAlign: 'right' }}>{Math.round(totalRecvKg)}</td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#d9e1f2', textAlign: 'right' }}>{Math.round(totalIssueKg)}</td>
+            <td style={{ border: '1px solid #000', fontWeight: 'bold', textAlign: 'right', borderRight: '2px solid #000' }}>{Math.round(totalBalKg)}</td>
+            <td></td>
+            <td colSpan="2" style={{ border: '1px solid #000', backgroundColor: '#d9e1f2', textAlign: 'right' }}>{totalValue.toFixed(2)}</td>
+            <td colSpan="5"></td>
+          </tr>
+          
+          <tr style={{ height: 18 }}>
+            <td colSpan="4" style={{ textAlign: 'center', fontWeight: 'bold', backgroundColor: '#ffff00', border: '1px solid #000' }}>1st Jan 2026 Stock</td>
+            <td colSpan="2"></td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#b4c6e7', fontWeight: 'bold' }}>No. of Reel</td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#d9e1f2', textAlign: 'right' }}>{totalReels}</td>
+            <td style={{ border: '1px solid #000', backgroundColor: '#d9e1f2', textAlign: 'right' }}>{usedReels}</td>
+            <td style={{ border: '1px solid #000', fontWeight: 'bold', textAlign: 'right', borderRight: '2px solid #000' }}>{closingReels}</td>
+            <td colSpan="9"></td>
+          </tr>
+
+          <tr style={{ height: 18 }}><td colSpan="19"></td></tr>
+
+          <tr>
+            {['Party Name', 'Date', 'Invoice No', 'Vehicle No', 'Reel No', 'Size', 'GSM', 'BF', 'Type', 'Received Qty', 'Issue Qty', 'Bal Qty', 'Machine', 'Issue Date', 'Issue Date2', 'Material Used fo', 'Rate/Kg', 'Value', 'Colur'].map((h, i) => (
+              <td key={i} style={thStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  {h} <span style={{ fontSize: 9 }}>▼</span>
+                </div>
+              </td>
+            ))}
+          </tr>
+
+          {pagedInventory.map((r, idx) => {
+            const bg = idx % 2 === 0 ? '#fff' : '#d9e1f2';
+            const compName = companies.find(c => c.id === r.companyId)?.name || 'Swastik';
+            const rate = parseFloat(r.ratePerKg || 0);
+            const rQty = parseFloat(r.receivedQty || 0);
+            const val = r.value !== undefined ? parseFloat(r.value) : (rate * parseFloat(r.balanceQty !== undefined ? r.balanceQty : rQty));
+            const issueQty = parseFloat(r.issuedQty || 0);
+            const balQty = parseFloat(r.balanceQty || 0);
+
+            return (
+              <tr key={r.id || idx} style={{ backgroundColor: bg }}>
+                <td style={tdStyle}>{r.millName || r.clientName || compName}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{r.date}</td>
+                <td style={tdStyle}>{r.invoiceNo}</td>
+                <td style={tdStyle}>{r.vehicleNo}</td>
+                <td style={tdStyle}>{r.reelNo || r.supplierReelNo || r.uniqueReelId}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{r.size}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{r.gsm}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{r.bf}</td>
+                <td style={tdStyle}>{r.colour || 'Natural'}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{Math.round(rQty)}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{issueQty > 0 ? Math.round(issueQty) : ''}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{Math.round(balQty)}</td>
+                <td style={tdStyle}></td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{(r.usageLog && r.usageLog[0]) ? r.usageLog[0].date : ''}</td>
+                <td style={tdStyle}>{(r.usageLog && r.usageLog[0]) ? '.' : ''}</td>
+                <td style={tdStyle}>{(r.utilisedForItems && r.utilisedForItems[0]) || r.lastUsedForItem || ''}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{rate.toFixed(2)}</td>
+                <td style={{...tdStyle, textAlign: 'right'}}>{val.toFixed(2)}</td>
+                <td style={tdStyle}>{r.colour}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function InventoryView({ inventory = [], production = [], orders = [], addLog, role, getColRef, getDocRef, currentUser, companies = [], vendors = [], purchaseOrders = [], customers = [], activeUnitId, autoSetUnit, onOpenCsvImport }) {
   const allowedCompanyId = activeUnitId || 'all';
   const visibleCompanies = allowedCompanyId === 'all' ? companies : companies.filter(c => c.id === allowedCompanyId);
@@ -14036,8 +14140,9 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
 
     for (let i = 0; i < baseAvailableInventory.length; i++) {
       const r = baseAvailableInventory[i];
-      if (r.millName) {
-        const m = String(r.millName);
+      const party = r.millName || r.clientName;
+      if (party) {
+        const m = String(party);
         millsSet.add(m);
         mCounts[m] = (mCounts[m] || 0) + 1;
       }
@@ -14098,8 +14203,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
 
       // Multi-Select Mills Filter
       if (filters.mills && filters.mills.length > 0) {
-        if (!filters.mills.includes(String(reel.millName))) return false;
-      } else if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) {
+        if (!filters.mills.includes(String(reel.millName || reel.clientName))) return false;
+      } else if (filters.millName && !String(reel.millName || reel.clientName || '').toLowerCase().includes(filters.millName.toLowerCase())) {
         return false;
       }
 
@@ -14428,6 +14533,14 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
             >
               📋 Classic Table
             </button>
+                  <button
+                    type="button"
+                    onClick={() => setInventoryMode('legacy_report')}
+                    style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11.5, fontWeight: 700, border: 'none', cursor: 'pointer', background: inventoryMode === 'legacy_report' ? '#2563eb' : 'transparent', color: inventoryMode === 'legacy_report' ? '#fff' : '#475569' }}
+                  >
+                    📈 Internal Report
+                  </button>
+  
           </div>
         )}
       </div>
@@ -14934,7 +15047,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
               {/* Multi-Select Mills / Parties */}
               <div style={{ flex: '1 1 120px', minWidth: 110 }}>
                 <InventoryMultiSelectDropdown
-                  label="Mills"
+                  label="Parties"
                   icon="🏭"
                   options={uniqueMills}
                   selected={filters.mills || []}
@@ -15204,7 +15317,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                 {/* Multi-Select Mills Chips */}
                 {(filters.mills || []).map(m => (
                   <span key={`chip-mill-${m}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    🏭 {m}
+                    🤝 {m}
                     <button type="button" onClick={() => setFilters(f => ({ ...f, mills: (f.mills || []).filter(item => item !== m) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
                 ))}
