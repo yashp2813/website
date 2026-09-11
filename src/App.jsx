@@ -14099,7 +14099,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
     return inventoryWithUsage.filter(reel => {
       if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
       if (filters.stockType === 'factory' && reel.stockType === 'job_work') return false;
-      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work') return false;
+      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work' && !filters.clientId) return false;
       if (filters.clientId) {
         const selectedCustomer = customers.find(c => c.id === filters.clientId);
         const matchId = reel.clientId === filters.clientId;
