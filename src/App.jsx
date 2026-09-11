@@ -14101,8 +14101,9 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       if (filters.stockType === 'factory' && reel.stockType === 'job_work') return false;
       if (filters.stockType === 'job_work' && reel.stockType !== 'job_work') return false;
       if (filters.clientId) {
+        const selectedCustomer = customers.find(c => c.id === filters.clientId);
         const matchId = reel.clientId === filters.clientId;
-        const matchName = String(reel.clientName || '').toLowerCase() === filters.clientId.toLowerCase();
+        const matchName = selectedCustomer ? String(reel.clientName || '').toLowerCase() === selectedCustomer.name.toLowerCase() : false;
         if (!matchId && !matchName) return false;
       }
       if (filters.status === 'Available') return (reel.balanceQty || 0) > 0;
@@ -14110,7 +14111,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       if (filters.status === 'Low') return (reel.balanceQty || 0) > 0 && (reel.balanceQty || 0) < lowStockThreshold;
       return (reel.balanceQty || 0) > 0; // Default to active stock
     });
-  }, [inventoryWithUsage, allowedCompanyId, filters.stockType, filters.clientId, filters.status, lowStockThreshold]);
+  }, [inventoryWithUsage, allowedCompanyId, filters.stockType, filters.clientId, filters.status, lowStockThreshold, customers]);
 
   // Single-pass extraction of all unique parameter values and counts for instant responsiveness
   const {
@@ -14140,9 +14141,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
 
     for (let i = 0; i < baseAvailableInventory.length; i++) {
       const r = baseAvailableInventory[i];
-      const party = r.millName || r.clientName;
-      if (party) {
-        const m = String(party);
+      if (r.millName) {
+        const m = String(r.millName);
         millsSet.add(m);
         mCounts[m] = (mCounts[m] || 0) + 1;
       }
@@ -14203,8 +14203,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
 
       // Multi-Select Mills Filter
       if (filters.mills && filters.mills.length > 0) {
-        if (!filters.mills.includes(String(reel.millName || reel.clientName))) return false;
-      } else if (filters.millName && !String(reel.millName || reel.clientName || '').toLowerCase().includes(filters.millName.toLowerCase())) {
+        if (!filters.mills.includes(String(reel.millName))) return false;
+      } else if (filters.millName && !String(reel.millName || '').toLowerCase().includes(filters.millName.toLowerCase())) {
         return false;
       }
 
@@ -15047,8 +15047,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
               {/* Multi-Select Mills / Parties */}
               <div style={{ flex: '1 1 120px', minWidth: 110 }}>
                 <InventoryMultiSelectDropdown
-                  label={filters.stockType === 'job_work' ? 'Clients' : (filters.stockType === 'factory' ? 'Mills' : 'Mills/Clients')}
-                  icon={filters.stockType === 'job_work' ? '🤝' : '🏭'}
+                  label="Mills"
+                  icon="🏭"
                   options={uniqueMills}
                   selected={filters.mills || []}
                   onChange={vals => setFilters(f => ({ ...f, mills: vals }))}
@@ -15317,7 +15317,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                 {/* Multi-Select Mills Chips */}
                 {(filters.mills || []).map(m => (
                   <span key={`chip-mill-${m}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    {filters.stockType === 'job_work' ? '🤝' : '🏭'} {m}
+                    🏭 {m}
                     <button type="button" onClick={() => setFilters(f => ({ ...f, mills: (f.mills || []).filter(item => item !== m) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
                 ))}
