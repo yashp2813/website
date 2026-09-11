@@ -14103,7 +14103,14 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       if (filters.clientId) {
         const selectedCustomer = customers.find(c => c.id === filters.clientId);
         const matchId = reel.clientId === filters.clientId;
-        const matchName = selectedCustomer ? String(reel.clientName || '').toLowerCase() === selectedCustomer.name.toLowerCase() : false;
+        let matchName = false;
+        if (selectedCustomer) {
+          const cName = selectedCustomer.name.toLowerCase().trim();
+          const rName = String(reel.clientName || '').toLowerCase().trim();
+          if (cName && rName && rName.length > 2) {
+            matchName = cName.includes(rName) || rName.includes(cName);
+          }
+        }
         if (!matchId && !matchName) return false;
       }
       if (filters.status === 'Available') return (reel.balanceQty || 0) > 0;
