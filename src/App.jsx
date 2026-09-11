@@ -15047,8 +15047,8 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
               {/* Multi-Select Mills / Parties */}
               <div style={{ flex: '1 1 120px', minWidth: 110 }}>
                 <InventoryMultiSelectDropdown
-                  label="Parties"
-                  icon="🏭"
+                  label={filters.stockType === 'job_work' ? 'Clients' : (filters.stockType === 'factory' ? 'Mills' : 'Mills/Clients')}
+                  icon={filters.stockType === 'job_work' ? '🤝' : '🏭'}
                   options={uniqueMills}
                   selected={filters.mills || []}
                   onChange={vals => setFilters(f => ({ ...f, mills: vals }))}
@@ -15317,7 +15317,7 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                 {/* Multi-Select Mills Chips */}
                 {(filters.mills || []).map(m => (
                   <span key={`chip-mill-${m}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                    🤝 {m}
+                    {filters.stockType === 'job_work' ? '🤝' : '🏭'} {m}
                     <button type="button" onClick={() => setFilters(f => ({ ...f, mills: (f.mills || []).filter(item => item !== m) }))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563eb', fontWeight: 800 }}>✕</button>
                   </span>
                 ))}
