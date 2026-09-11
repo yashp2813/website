@@ -14206,10 +14206,23 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
       if (allowedCompanyId !== 'all' && reel.companyId !== allowedCompanyId) return false;
       if (filters.company && !(companies.find(c => c.id === reel.companyId)?.name || '').toLowerCase().includes(filters.company.toLowerCase())) return false;
       if (filters.stockType === 'factory' && reel.stockType === 'job_work') return false;
-      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work') return false;
+      if (filters.stockType === 'job_work' && reel.stockType !== 'job_work' && !filters.clientId) return false;
       if (filters.clientId) {
+        const selectedCustomer = customers.find(c => c.id === filters.clientId);
         const matchId = reel.clientId === filters.clientId;
-        const matchName = String(reel.clientName || '').toLowerCase() === filters.clientId.toLowerCase();
+        let matchName = false;
+        if (selectedCustomer) {
+          const cName = selectedCustomer.name.toLowerCase().trim();
+          const rClientName = String(reel.clientName || '').toLowerCase().trim();
+          const rMillName = String(reel.millName || '').toLowerCase().trim();
+          
+          if (cName && rClientName && rClientName.length > 2) {
+            if (cName.includes(rClientName) || rClientName.includes(cName)) matchName = true;
+          }
+          if (!matchName && cName && rMillName && rMillName.length > 2) {
+            if (cName.includes(rMillName) || rMillName.includes(cName)) matchName = true;
+          }
+        }
         if (!matchId && !matchName) return false;
       }
 
