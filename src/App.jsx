@@ -14106,9 +14106,14 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
         let matchName = false;
         if (selectedCustomer) {
           const cName = selectedCustomer.name.toLowerCase().trim();
-          const rName = String(reel.clientName || '').toLowerCase().trim();
-          if (cName && rName && rName.length > 2) {
-            matchName = cName.includes(rName) || rName.includes(cName);
+          const rClientName = String(reel.clientName || '').toLowerCase().trim();
+          const rMillName = String(reel.millName || '').toLowerCase().trim();
+          
+          if (cName && rClientName && rClientName.length > 2) {
+            if (cName.includes(rClientName) || rClientName.includes(cName)) matchName = true;
+          }
+          if (!matchName && cName && rMillName && rMillName.length > 2) {
+            if (cName.includes(rMillName) || rMillName.includes(cName)) matchName = true;
           }
         }
         if (!matchId && !matchName) return false;
