@@ -13450,6 +13450,55 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
 
   const emptyReel = { uniqueReelId: '', supplierReelNo: '', reelNo: '', size: '', gsm: '', bf: '', colour: 'Kraft', receivedQty: '', initialIssuedQty: '', ratePerKg: '', remarks: '' };
   const [reelsInput, setReelsInput] = useState([{...emptyReel}]);
+
+  const INWARD_COLS = ['uniqueReelId', 'supplierReelNo', 'size', 'gsm', 'bf', 'colour', 'receivedQty', 'initialIssuedQty', 'ratePerKg', 'remarks'];
+
+  const handleExcelPaste = (e, rowIdx, colName) => {
+    const pasteData = e.clipboardData.getData('Text');
+    if (!pasteData || (!pasteData.includes('\t') && !pasteData.includes('\n'))) return;
+    
+    e.preventDefault();
+    const startColIdx = INWARD_COLS.indexOf(colName);
+    if (startColIdx === -1) return;
+
+    const rows = pasteData.split(/\r?\n/).filter(row => row.trim() !== '');
+    
+    setReelsInput(prev => {
+      const newReels = [...prev];
+      rows.forEach((rowStr, i) => {
+        const targetRowIdx = rowIdx + i;
+        if (targetRowIdx >= newReels.length) {
+          const nextId = getNextSequentialReelId(inventory, commonData.stockType, targetRowIdx);
+          newReels.push({ ...emptyReel, uniqueReelId: nextId });
+        }
+        const cells = rowStr.split('\t');
+        cells.forEach((cellVal, j) => {
+          const targetColIdx = startColIdx + j;
+          if (targetColIdx < INWARD_COLS.length) {
+            const field = INWARD_COLS[targetColIdx];
+            newReels[targetRowIdx][field] = cellVal.trim();
+            if (field === 'supplierReelNo') newReels[targetRowIdx]['reelNo'] = cellVal.trim();
+          }
+        });
+      });
+      return newReels;
+    });
+  };
+
+  const handleExcelKeyDown = (e, rowIdx, colName) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      e.preventDefault();
+      if (rowIdx > 0) {
+        setReelsInput(prev => {
+          const newReels = [...prev];
+          const valAbove = newReels[rowIdx - 1][colName];
+          newReels[rowIdx][colName] = valAbove;
+          if (colName === 'supplierReelNo') newReels[rowIdx]['reelNo'] = valAbove;
+          return newReels;
+        });
+      }
+    }
+  };
   const defaultFilters = { 
     company: '', 
     stockType: 'All', 
@@ -14602,19 +14651,21 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                       <td className="p-2 text-center font-bold text-stone-500">{idx + 1}</td>
                       <td className="p-1.5">
                         <input
+                          onPaste={e => handleExcelPaste(e, idx, 'uniqueReelId')} onKeyDown={e => handleExcelKeyDown(e, idx, 'uniqueReelId')}
                           type="text"
                           placeholder="Auto (RL-...)"
-                          className="w-full p-1.5 border border-stone-300 bg-stone-100 rounded font-mono text-xs text-stone-600 font-bold"
+                          className="w-full p-1.5 border border-stone-300 bg-stone-100 rounded font-mono text-xs text-stone-600 font-bold focus:ring-2 focus:ring-blue-400 outline-none transition-all"
                           value={reel.uniqueReelId || getNextSequentialReelId(inventory, commonData.stockType, idx)}
                           onChange={e => handleReelChange(idx, 'uniqueReelId', e.target.value)}
                         />
                       </td>
                       <td className="p-1.5">
                         <input
+                          onPaste={e => handleExcelPaste(e, idx, 'supplierReelNo')} onKeyDown={e => handleExcelKeyDown(e, idx, 'supplierReelNo')}
                           required
                           type="text"
                           placeholder="e.g. 22406 / Mill No"
-                          className="w-full p-1.5 border border-blue-400 bg-blue-50/50 rounded font-mono font-bold text-xs"
+                          className="w-full p-1.5 border border-blue-400 bg-blue-50/50 rounded font-mono font-bold text-xs focus:ring-2 focus:ring-blue-400 outline-none transition-all"
                           value={reel.supplierReelNo || reel.reelNo}
                           onChange={e => {
                             handleReelChange(idx, 'supplierReelNo', e.target.value);
@@ -14623,16 +14674,16 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                         />
                       </td>
                       <td className="p-1.5">
-                        <input required type="text" placeholder="110" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'size')} onKeyDown={e => handleExcelKeyDown(e, idx, 'size')} required type="text" placeholder="110" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold focus:ring-2 focus:ring-blue-400 outline-none transition-all" value={reel.size} onChange={e => handleReelChange(idx, 'size', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <input required type="number" step="0.1" placeholder="140" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'gsm')} onKeyDown={e => handleExcelKeyDown(e, idx, 'gsm')} required type="number" step="0.1" placeholder="140" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold focus:ring-2 focus:ring-blue-400 outline-none transition-all" value={reel.gsm} onChange={e => handleReelChange(idx, 'gsm', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <input required type="number" step="0.1" placeholder="18" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'bf')} onKeyDown={e => handleExcelKeyDown(e, idx, 'bf')} required type="number" step="0.1" placeholder="18" className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold focus:ring-2 focus:ring-blue-400 outline-none transition-all" value={reel.bf} onChange={e => handleReelChange(idx, 'bf', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <select required className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}>
+                        <select onPaste={e => handleExcelPaste(e, idx, 'colour')} onKeyDown={e => handleExcelKeyDown(e, idx, 'colour')} required className="w-full p-1.5 border border-stone-300 rounded text-xs font-semibold focus:ring-2 focus:ring-blue-400 outline-none transition-all" value={reel.colour} onChange={e => handleReelChange(idx, 'colour', e.target.value)}>
                           <option value="Kraft">Kraft</option>
                           <option value="Golden">Golden</option>
                           <option value="Duplex">Duplex</option>
@@ -14641,19 +14692,20 @@ function InventoryView({ inventory = [], production = [], orders = [], addLog, r
                         </select>
                       </td>
                       <td className="p-1.5">
-                        <input required type="number" step="0.1" placeholder="650" className="w-full p-1.5 border border-stone-300 bg-green-50/50 rounded text-xs font-bold font-mono" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'receivedQty')} onKeyDown={e => handleExcelKeyDown(e, idx, 'receivedQty')} required type="number" step="0.1" placeholder="650" className="w-full p-1.5 border border-stone-300 bg-green-50/50 rounded text-xs font-bold font-mono focus:ring-2 focus:ring-green-400 outline-none transition-all" value={reel.receivedQty} onChange={e => handleReelChange(idx, 'receivedQty', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <input type="number" step="0.1" placeholder="0" className="w-full p-1.5 border border-stone-300 bg-orange-50/50 rounded text-xs font-mono" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'initialIssuedQty')} onKeyDown={e => handleExcelKeyDown(e, idx, 'initialIssuedQty')} type="number" step="0.1" placeholder="0" className="w-full p-1.5 border border-stone-300 bg-orange-50/50 rounded text-xs font-mono focus:ring-2 focus:ring-orange-400 outline-none transition-all" value={reel.initialIssuedQty} onChange={e => handleReelChange(idx, 'initialIssuedQty', e.target.value)} />
                       </td>
                       <td className="p-1.5">
-                        <input required type="number" step="0.01" placeholder="₹" className="w-full p-1.5 border border-stone-300 rounded text-xs font-bold font-mono" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} />
+                        <input onPaste={e => handleExcelPaste(e, idx, 'ratePerKg')} onKeyDown={e => handleExcelKeyDown(e, idx, 'ratePerKg')} required type="number" step="0.01" placeholder="₹" className="w-full p-1.5 border border-stone-300 rounded text-xs font-bold font-mono focus:ring-2 focus:ring-blue-400 outline-none transition-all" value={reel.ratePerKg} onChange={e => handleReelChange(idx, 'ratePerKg', e.target.value)} />
                       </td>
                       <td className="p-1.5">
                         <input
+                          onPaste={e => handleExcelPaste(e, idx, 'remarks')} onKeyDown={e => handleExcelKeyDown(e, idx, 'remarks')}
                           type="text"
                           placeholder="e.g. Returned reel, damaged core..."
-                          className="w-full p-1.5 border border-amber-300 bg-amber-50/40 rounded text-xs"
+                          className="w-full p-1.5 border border-amber-300 bg-amber-50/40 rounded text-xs focus:ring-2 focus:ring-amber-400 outline-none transition-all"
                           value={reel.remarks || ''}
                           onChange={e => handleReelChange(idx, 'remarks', e.target.value)}
                         />
