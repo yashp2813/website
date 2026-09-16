@@ -10,6 +10,7 @@ import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
 import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import Barcode from 'react-barcode';
+import * as XLSX from 'xlsx';
 
 // ==========================================
 // 1. TURSO DATABASE SETUP & GEMINI AI SERVICE
@@ -5349,18 +5350,23 @@ function UniversalCsvImportModal({
     let newReelIndex = 0;
 
     return rawRows.map((r) => {
-      const date = parseDateStr(findVal(r, 'date', 'inwarddate', 'receiptdate', 'invoicedate', 'dcdate'));
+      const date = parseDateStr(findVal(r, 'date', 'inwarddate', 'receiptdate', 'invoicedate', 'dcdate', 'recdate'));
       const size = parseSizeCm(findVal(r, 'size', 'sizecm', 'deckle', 'decklecm', 'width', 'sizeinch'));
       const gsm = String(parseNum(findVal(r, 'gsm', 'grammage')) || '');
       const bf = String(parseNum(findVal(r, 'bf', 'burstfactor')) || '18');
       const colour = parseColour(findVal(r, 'colour', 'color', 'shade', 'paperquality', 'quality', 'type'));
       const weight = parseNum(findVal(r, 'receivedqty', 'weight', 'netweight', 'qty', 'weightkg', 'quantity', 'netwt', 'weightinkg', 'recqty'));
       const issuedQty = parseNum(findVal(r, 'issueqty', 'issuedqty', 'issued', 'consumed', 'consumedqty', 'usedqty', 'used', 'issue', 'issuedwt'));
-      const balanceQty = Math.max(0, weight - issuedQty);
+      // Prefer explicit Bal Wt. from sheet if present, otherwise compute from weight - issuedQty
+      const rawBalWt = findVal(r, 'balwt', 'balanceqty', 'balqty', 'closingwt', 'closing', 'balance', 'balwt');
+      const balanceQty = rawBalWt !== '' ? Math.max(0, parseNum(rawBalWt)) : Math.max(0, weight - issuedQty);
       const vehicleNo = findVal(r, 'vehicleno', 'truckno', 'vehicle', 'lorryno');
       const invoiceNo = findVal(r, 'invoiceno', 'invoicenumber', 'billno', 'challanno', 'dcno', 'dcnumber', 'refno');
       const rate = parseNum(findVal(r, 'rate', 'rateperkg', 'ratepkg', 'price', 'ratekg'));
       const rawSupplierReelNo = (findVal(r, 'supplierreelno', 'millreelno', 'reelno', 'reelnumber', 'reel#', 'rollno', 'paperrn', 'reel') || '').replace(/[`'"]/g, '').trim();
+      const useFor = findVal(r, 'usefor', 'usedfor', 'utilisedfor', 'purpose', 'lastusedforitem', 'usedforitem');
+
+
 
       if (currentMode === 'own_stock') {
         const millName = findVal(r, 'millname', 'mill', 'supplier', 'partyname', 'vendor', 'party', 'papermill') || 'Paper Mill';
@@ -5415,6 +5421,7 @@ function UniversalCsvImportModal({
           ratePerKg: rate,
           invoiceNo,
           vehicleNo,
+          lastUsedForItem: useFor || '',
           stockType: 'regular',
           category: 'Paper',
           tallySynced: false,
@@ -5536,21 +5543,111 @@ function UniversalCsvImportModal({
     const file = e.target.files[0];
     if (!file) return;
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target.result;
-      const { headers, rows } = parseCSVText(text);
-      if (rows.length === 0) {
-        alert("CSV file appears empty or formatted improperly.");
-        return;
-      }
-      setRawHeaders(headers);
-      rawRowsRef.current = rows;
-      const processed = processRawRows(rows, mode);
-      setParsedRows(processed);
-    };
-    reader.readAsText(file);
+
+    const isXlsx = file.name.match(/\.xlsx?$/i);
+
+    if (isXlsx) {
+      // Use xlsx library to parse binary Excel files
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = new Uint8Array(event.target.result);
+          const wb = XLSX.read(data, { type: 'array', cellDates: false });
+
+          // Pick the first sheet that looks like inventory (has a "Reel No" column)
+          let sheetData = null;
+          let headerRowIdx = -1;
+
+          for (const sheetName of wb.SheetNames) {
+            const ws = wb.Sheets[sheetName];
+            const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+            // Find the header row (look for "Reel No" or "Reel No." in first 5 rows)
+            for (let i = 0; i < Math.min(5, raw.length); i++) {
+              const rowStr = raw[i].map(c => String(c).toLowerCase().replace(/[\s.]/g, '')).join('|');
+              if (rowStr.includes('reelno') || rowStr.includes('reelno') || rowStr.includes('millname')) {
+                headerRowIdx = i;
+                sheetData = raw;
+                break;
+              }
+            }
+            if (sheetData) break;
+          }
+
+          if (!sheetData || headerRowIdx < 0) {
+            alert('Could not detect the header row in this Excel file. Please ensure it has columns like "Reel No", "Mill Name", "Size", "GSM" etc.');
+            return;
+          }
+
+          const headers = sheetData[headerRowIdx].map(h => String(h).trim());
+
+          // Convert Excel serial date numbers to YYYY-MM-DD strings
+          const excelSerialToDate = (serial) => {
+            if (!serial || isNaN(serial)) return '';
+            const num = Number(serial);
+            if (num < 1000) return ''; // Not a date
+            // Excel dates: day 1 = Jan 1 1900, but Excel incorrectly counts 1900 as leap year
+            const date = new Date((num - 25569) * 86400 * 1000);
+            if (isNaN(date.getTime())) return '';
+            return date.toISOString().split('T')[0];
+          };
+
+          // Build row objects from header row index + 1 onwards
+          const rows = [];
+          for (let i = headerRowIdx + 1; i < sheetData.length; i++) {
+            const cols = sheetData[i];
+            // Skip totally empty rows
+            if (!cols || cols.every(c => c === '' || c === null || c === undefined)) continue;
+            // Skip rows where Reel No column is blank (summary/total rows)
+            const reelNoIdx = headers.findIndex(h => h.toLowerCase().replace(/[\s.]/g, '') === 'reelno');
+            if (reelNoIdx >= 0 && !cols[reelNoIdx]) continue;
+
+            const rowObj = {};
+            headers.forEach((h, idx) => {
+              if (!h || h === 'Sr No.' || h === 'Sr No') return; // skip serial number
+              let val = cols[idx];
+              // Convert Excel date serials to date strings for the date column
+              if ((h.toLowerCase().includes('date') || h.toLowerCase().includes('rec')) && typeof val === 'number' && val > 1000) {
+                val = excelSerialToDate(val);
+              }
+              rowObj[h] = val !== undefined && val !== null ? String(val).trim() : '';
+            });
+            rows.push(rowObj);
+          }
+
+          if (rows.length === 0) {
+            alert('No data rows found in this Excel file.');
+            return;
+          }
+
+          setRawHeaders(headers.filter(h => h && h !== 'Sr No.' && h !== 'Sr No'));
+          rawRowsRef.current = rows;
+          const processed = processRawRows(rows, mode);
+          setParsedRows(processed);
+        } catch (err) {
+          console.error('Excel parse error:', err);
+          alert('Failed to parse Excel file: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // CSV / text fallback
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target.result;
+        const { headers, rows } = parseCSVText(text);
+        if (rows.length === 0) {
+          alert("CSV file appears empty or formatted improperly.");
+          return;
+        }
+        setRawHeaders(headers);
+        rawRowsRef.current = rows;
+        const processed = processRawRows(rows, mode);
+        setParsedRows(processed);
+      };
+      reader.readAsText(file);
+    }
   };
+
 
   const handleProcessPasteText = () => {
     if (!pasteText.trim()) return alert("Please paste text from Excel or CSV first.");
