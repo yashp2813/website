@@ -6063,7 +6063,7 @@ function UniversalCsvImportModal({
                     <div style={{ border: '2px dashed #cbd5e1', borderRadius: 8, padding: '24px 16px', textAlign: 'center', background: '#f8fafc' }}>
                       <input
                         type="file"
-                        accept=".csv,.txt,.tsv"
+                        accept=".csv,.txt,.tsv,.xlsx,.xls"
                         id="csv-file-input"
                         style={{ display: 'none' }}
                         onChange={handleFileChange}
